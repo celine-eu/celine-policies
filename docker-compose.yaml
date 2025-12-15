@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  opa:
+    image: openpolicyagent/opa:latest
+    command:
+      - "run"
+      - "--server"
+      - "--watch"
+      - "/policies"
+    ports:
+      - "8181:8181"
+    volumes:
+      - .:/policies:ro

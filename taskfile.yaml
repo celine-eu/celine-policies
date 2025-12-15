@@ -1,0 +1,33 @@
+version: "3"
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  opa:run:
+    desc: Run OPA locally (docker-compose)
+    cmds:
+      - docker compose up --remove-orphans
+
+  opa:down:
+    desc: Stop OPA
+    cmds:
+      - docker compose down
+
+  test:
+    desc: Run OPA unit tests
+    cmds:
+      - docker run --rm -v "$PWD:/policies" openpolicyagent/opa:latest test /policies -v
+
+  fmt:
+    desc: Format Rego files
+    cmds:
+      - docker run --rm -v "$PWD:/policies" openpolicyagent/opa:latest fmt -w /policies
+
+  check:
+    desc: Format + test
+    cmds:
+      - task: fmt
+      - task: test
