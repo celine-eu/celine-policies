@@ -31,3 +31,7 @@ tasks:
     cmds:
       - task: fmt
       - task: test
+
+  dump-source:
+    cmds:
+      - python3 scripts/dump_source.py

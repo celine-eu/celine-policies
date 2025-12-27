@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   opa:
     image: openpolicyagent/opa:latest
@@ -11,4 +9,4 @@ services:
     ports:
       - "8181:8181"
     volumes:
-      - .:/policies:ro
+      - ./policies:/policies:ro

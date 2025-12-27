@@ -2,10 +2,10 @@ package celine.dataset.access_test
 
 import data.celine.dataset.access.allow
 
-test_internal_allows_manager {
+test_internal_allows_manager if {
     allow with input as {
         "dataset": {
-            "disclosure_level": "internal"
+            "access_level": "internal"
         },
         "user": {
             "sub": "u1",
@@ -14,10 +14,10 @@ test_internal_allows_manager {
     }
 }
 
-test_internal_denies_viewer {
+test_internal_denies_viewer if {
     not allow with input as {
         "dataset": {
-            "disclosure_level": "internal"
+            "access_level": "internal"
         },
         "user": {
             "sub": "u1",
@@ -26,10 +26,10 @@ test_internal_denies_viewer {
     }
 }
 
-test_restricted_allows_owner {
+test_restricted_allows_owner if {
     allow with input as {
         "dataset": {
-            "disclosure_level": "restricted",
+            "access_level": "restricted",
             "governance": { "owner": "u1" }
         },
         "user": {
@@ -39,10 +39,10 @@ test_restricted_allows_owner {
     }
 }
 
-test_restricted_allows_admin {
+test_restricted_allows_admin if {
     allow with input as {
         "dataset": {
-            "disclosure_level": "restricted",
+            "access_level": "restricted",
             "governance": { "owner": "u2" }
         },
         "user": {

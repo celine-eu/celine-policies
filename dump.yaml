@@ -1,0 +1,9 @@
+contents:
+  - policies
+  - scripts
+  - README.md
+  - docker-compose.yaml
+  - Dockerfile
+  - pyproject.toml
+
+output: sources.txt

@@ -29,7 +29,7 @@ curl -X POST http://localhost:8181/v1/data/celine/dataset/access \
   -d '{
     "input": {
       "dataset": {
-        "disclosure_level": "internal"
+        "access_level": "internal"
       },
       "user": {
         "sub": "alice",
@@ -45,7 +45,7 @@ curl -X POST http://localhost:8181/v1/data/celine/dataset/access \
   -d '{
     "input": {
       "dataset": {
-        "disclosure_level": "restricted",
+        "access_level": "restricted",
         "governance": {
           "owner": "alice"
         }
