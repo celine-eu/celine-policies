@@ -19,7 +19,7 @@ tasks:
   test:
     desc: Run OPA unit tests
     cmds:
-      - docker run --rm -v "$PWD:/policies" openpolicyagent/opa:latest test /policies -v
+      - docker compose run --rm -v "$PWD:/policies:ro" opa test /policies -v
 
   fmt:
     desc: Format Rego files

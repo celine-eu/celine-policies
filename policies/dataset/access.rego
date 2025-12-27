@@ -1,38 +1,77 @@
 package celine.dataset.access
 
-import data.celine.common.groups
-
 default allow = false
 
-#
-# INTERNAL datasets
-# - managers, editors, admins
-#
+# -------------------------------------------------
+# OPEN — evaluated without subject
+# -------------------------------------------------
+
 allow if {
-    input.dataset.access_level == "internal"
-    groups.is_manager
+  input.dataset.access_level == "open"
+}
+
+# -------------------------------------------------
+# Guards
+# -------------------------------------------------
+
+has_subject if {
+  input.subject != null
+}
+
+has_scope(s) if {
+  has_subject
+  input.subject.scopes[_] == s
+}
+
+has_role(r) if {
+  has_subject
+  input.subject.roles[_] == r
+}
+
+is_service if {
+  has_subject
+  count(input.subject.scopes) > 0
+}
+
+is_human if {
+  has_subject
+  not is_service
+}
+
+# -------------------------------------------------
+# INTERNAL
+# -------------------------------------------------
+
+allow if {
+  input.dataset.access_level == "internal"
+  is_service
+  has_scope("dataset.query")
 }
 
 allow if {
-    input.dataset.access_level == "internal"
-    groups.is_editor
+  input.dataset.access_level == "internal"
+  is_human
+  has_role("manager")
 }
 
 allow if {
-    input.dataset.access_level == "internal"
-    groups.is_admin
+  input.dataset.access_level == "internal"
+  is_human
+  has_role("operator")
 }
 
-#
-# RESTRICTED datasets
-# - owner OR admin
-#
+# -------------------------------------------------
+# RESTRICTED
+# -------------------------------------------------
+
 allow if {
-    input.dataset.access_level == "restricted"
-    input.user.sub == input.dataset.governance.owner
+  input.dataset.access_level == "restricted"
+  is_service
+  has_scope("dataset.admin")
 }
 
 allow if {
-    input.dataset.access_level == "restricted"
-    groups.is_admin
+  input.dataset.access_level == "restricted"
+  is_human
+  has_role("admin")
 }

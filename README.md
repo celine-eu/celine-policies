@@ -1,17 +1,71 @@
 # CELINE OPA Policies
 
-Centralized Open Policy Agent (OPA) policies for the CELINE platform.
+Centralized Open Policy Agent (OPA) authorization policies for the CELINE platform.
+
+This repository contains **authorization logic only**.
+Authentication, token validation, and request normalization are handled by the calling services.
+
+---
 
 ## Scope
 
-This repository defines **authorization policies only**.
-Authentication and coarse disclosure rules live in service code.
+- Dataset access authorization
+- Shared policy logic across services
+- Explicit, auditable access decisions
 
-## Services using these policies
+Out of scope:
+- Authentication
+- Identity provisioning
+- Token issuance (Keycloak, etc.)
 
-- Dataset API
-- (future) Ingestion pipelines
-- (future) Admin APIs
+---
+
+## Policy model (high level)
+
+Dataset access is governed by **two orthogonal dimensions**:
+
+### 1. Dataset access level
+
+| Level | Meaning |
+|------|--------|
+| `open` | Publicly accessible |
+| `internal` | Limited to trusted operators |
+| `restricted` | Highly sensitive, admin-level access only |
+
+### 2. Subject access model
+
+Access is evaluated differently depending on **how the caller authenticates**:
+
+- **Human users** → role-based
+- **Service clients** → scope-based
+
+See [docs/policy_model.md](docs/policy_model.md) for full details.
+
+---
+
+## OPA input contract
+
+```json
+{
+  "dataset": {
+    "id": "dataset_id",
+    "access_level": "open | internal | restricted"
+  },
+  "subject": {
+    "id": "principal-id",
+    "roles": ["manager", "operator", "admin"],
+    "groups": [],
+    "scopes": ["dataset.query", "dataset.admin"]
+  }
+}
+```
+
+Notes:
+- `subject` may be `null` for anonymous access
+- `roles` apply to human users
+- `scopes` apply to service clients
+
+---
 
 ## Quick start
 
@@ -19,44 +73,25 @@ Authentication and coarse disclosure rules live in service code.
 task opa:run
 ```
 
-Test policy manually:
-
-
-
 ```bash
-curl -X POST http://localhost:8181/v1/data/celine/dataset/access \
+curl -X POST http://localhost:8181/v1/data/celine/dataset/access/allow \
   -H "Content-Type: application/json" \
   -d '{
     "input": {
       "dataset": {
         "access_level": "internal"
       },
-      "user": {
-        "sub": "alice",
-        "group_names": ["managers"]
+      "subject": {
+        "id": "dt-forecast-engine",
+        "scopes": ["dataset.query"],
+        "roles": [],
+        "groups": []
       }
     }
   }'
 ```
 
-```
-curl -X POST http://localhost:8181/v1/data/celine/dataset/access \
-  -H "Content-Type: application/json" \
-  -d '{
-    "input": {
-      "dataset": {
-        "access_level": "restricted",
-        "governance": {
-          "owner": "alice"
-        }
-      },
-      "user": {
-        "sub": "alice",
-        "group_names": ["viewers"]
-      }
-    }
-  }'
-```
+---
 
 ## Run tests
 
@@ -64,15 +99,12 @@ curl -X POST http://localhost:8181/v1/data/celine/dataset/access \
 task test
 ```
 
-## Format policies
-
-```bash
-task fmt
-```
+---
 
 ## Philosophy
 
-- Policies are **pure logic**
-- No service-specific hacks
+- Policies are pure logic
+- OAuth/OIDC-aligned
+- Fail-closed by default
 - Strong test coverage
 - Versioned and auditable
