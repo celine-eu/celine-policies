@@ -31,7 +31,10 @@ Moderately sensitive datasets.
 
 Allowed if:
 - **Service clients** have `dataset.query`
-- **Human users** have role `manager` or `operator`
+- **Human users** belong to one of the following groups:
+  - `operators`
+  - `managers`
+  - `admins`
 
 ---
 
@@ -41,30 +44,29 @@ Highly sensitive datasets.
 
 Allowed if:
 - **Service clients** have `dataset.admin`
-- **Human users** have role `admin`
+- **Human users** belong to the `admins` group
 
 ---
 
 ## Access models
 
-### Human users (role-based)
+### Human users (group-based)
 
-- Interactive login
-- Roles only (no scopes)
-- Optional groups (unused by dataset policy)
+- Authenticate via interactive login
+- Authorization based on group membership
+- No OAuth scopes are evaluated for humans
 
-Role hierarchy (implicit):
+Group hierarchy (implicit):
 
-admin > manager > operator
+admins > managers > operators
 
 ---
 
 ### Service clients (scope-based)
 
-- OAuth2 Client Credentials
-- No groups
-- No human roles
-- Capabilities expressed via scopes
+- Authenticate using OAuth2 Client Credentials
+- No group membership
+- Capabilities expressed via OAuth scopes
 
 Supported scopes:
 
