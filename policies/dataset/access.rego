@@ -3,7 +3,7 @@ package celine.dataset.access
 default allow = false
 
 # -------------------------------------------------
-# OPEN — evaluated without subject
+# OPEN — anonymous allowed
 # -------------------------------------------------
 
 allow if {
@@ -18,14 +18,14 @@ has_subject if {
   input.subject != null
 }
 
-has_scope(s) if {
+has_scope(scope) if {
   has_subject
-  input.subject.scopes[_] == s
+  input.subject.scopes[_] == scope
 }
 
-has_role(r) if {
+has_group(group) if {
   has_subject
-  input.subject.roles[_] == r
+  input.subject.groups[_] == group
 }
 
 is_service if {
@@ -42,36 +42,46 @@ is_human if {
 # INTERNAL
 # -------------------------------------------------
 
+# Services with query capability
 allow if {
   input.dataset.access_level == "internal"
   is_service
   has_scope("dataset.query")
 }
 
+# Humans: operators, managers, admins
 allow if {
   input.dataset.access_level == "internal"
   is_human
-  has_role("manager")
+  has_group("operators")
 }
 
 allow if {
   input.dataset.access_level == "internal"
   is_human
-  has_role("operator")
+  has_group("managers")
+}
+
+allow if {
+  input.dataset.access_level == "internal"
+  is_human
+  has_group("admins")
 }
 
 # -------------------------------------------------
 # RESTRICTED
 # -------------------------------------------------
 
+# Services with admin capability
 allow if {
   input.dataset.access_level == "restricted"
   is_service
   has_scope("dataset.admin")
 }
 
+# Humans: admins only
 allow if {
   input.dataset.access_level == "restricted"
   is_human
-  has_role("admin")
+  has_group("admins")
 }

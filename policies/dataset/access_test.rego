@@ -18,7 +18,6 @@ test_open_allows_service := true if {
     "dataset": {"access_level": "open"},
     "subject": {
       "scopes": ["dataset.query"],
-      "roles": [],
       "groups": []
     }
   }
@@ -29,8 +28,7 @@ test_open_allows_human := true if {
     "dataset": {"access_level": "open"},
     "subject": {
       "scopes": [],
-      "roles": ["viewer"],
-      "groups": []
+      "groups": ["operators"]
     }
   }
 }
@@ -44,7 +42,6 @@ test_internal_service_with_query_scope := true if {
     "dataset": {"access_level": "internal"},
     "subject": {
       "scopes": ["dataset.query"],
-      "roles": [],
       "groups": []
     }
   }
@@ -55,7 +52,6 @@ test_internal_service_without_query_scope_denied := true if {
     "dataset": {"access_level": "internal"},
     "subject": {
       "scopes": ["dataset.read"],
-      "roles": [],
       "groups": []
     }
   }
@@ -65,24 +61,32 @@ test_internal_service_without_query_scope_denied := true if {
 # INTERNAL — humans
 # -------------------------------------------------
 
-test_internal_human_manager := true if {
-  allow with input as {
-    "dataset": {"access_level": "internal"},
-    "subject": {
-      "scopes": [],
-      "roles": ["manager"],
-      "groups": []
-    }
-  }
-}
-
 test_internal_human_operator := true if {
   allow with input as {
     "dataset": {"access_level": "internal"},
     "subject": {
       "scopes": [],
-      "roles": ["operator"],
-      "groups": []
+      "groups": ["operators"]
+    }
+  }
+}
+
+test_internal_human_manager := true if {
+  allow with input as {
+    "dataset": {"access_level": "internal"},
+    "subject": {
+      "scopes": [],
+      "groups": ["managers"]
+    }
+  }
+}
+
+test_internal_human_admin := true if {
+  allow with input as {
+    "dataset": {"access_level": "internal"},
+    "subject": {
+      "scopes": [],
+      "groups": ["admins"]
     }
   }
 }
@@ -92,8 +96,7 @@ test_internal_human_viewer_denied := true if {
     "dataset": {"access_level": "internal"},
     "subject": {
       "scopes": [],
-      "roles": ["viewer"],
-      "groups": []
+      "groups": ["viewers"]
     }
   }
 }
@@ -107,7 +110,6 @@ test_restricted_service_with_admin_scope := true if {
     "dataset": {"access_level": "restricted"},
     "subject": {
       "scopes": ["dataset.admin"],
-      "roles": [],
       "groups": []
     }
   }
@@ -118,7 +120,6 @@ test_restricted_service_with_query_scope_denied := true if {
     "dataset": {"access_level": "restricted"},
     "subject": {
       "scopes": ["dataset.query"],
-      "roles": [],
       "groups": []
     }
   }
@@ -133,8 +134,7 @@ test_restricted_human_admin := true if {
     "dataset": {"access_level": "restricted"},
     "subject": {
       "scopes": [],
-      "roles": ["admin"],
-      "groups": []
+      "groups": ["admins"]
     }
   }
 }
@@ -144,8 +144,7 @@ test_restricted_human_operator_denied := true if {
     "dataset": {"access_level": "restricted"},
     "subject": {
       "scopes": [],
-      "roles": ["operator"],
-      "groups": []
+      "groups": ["operators"]
     }
   }
 }
@@ -159,8 +158,7 @@ test_unknown_access_level_denied := true if {
     "dataset": {"access_level": "classified"},
     "subject": {
       "scopes": ["dataset.admin"],
-      "roles": ["admin"],
-      "groups": []
+      "groups": ["admins"]
     }
   }
 }
