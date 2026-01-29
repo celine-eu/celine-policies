@@ -1,8 +1,44 @@
 services:
-  opa:
-    image: openpolicyagent/opa:1.12.1
-    command: run --server --watch --log-level debug --addr=0.0.0.0:8181 /policies
+  policy-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "8181:8181"
+      - "8000:8000"
+    environment:
+      - CELINE_ENVIRONMENT=development
+      - CELINE_LOG_LEVEL=DEBUG
+      - CELINE_OIDC_ISSUER=http://keycloak:8080/realms/celine
+      - CELINE_POLICIES_DIR=/app/policies
+      - CELINE_DATA_DIR=/app/data
+      - CELINE_DECISION_CACHE_ENABLED=true
+      - CELINE_DECISION_CACHE_TTL_SECONDS=60
     volumes:
-      - ./policies:/policies:ro
+      # Mount policies for hot-reload during development
+      - ./policies:/app/policies:ro
+      - ./data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - celine
+
+  # Keycloak for local testing
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev --import-realm
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./realm-celine.json:/opt/keycloak/data/import/realm-celine.json:ro
+    networks:
+      - celine
+
+networks:
+  celine:
+    driver: bridge

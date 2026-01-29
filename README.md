@@ -1,110 +1,250 @@
-# CELINE OPA Policies
+# CELINE Policy Service
 
-Centralized Open Policy Agent (OPA) authorization policies for the CELINE platform.
+Centralized authorization service for the CELINE platform using embedded OPA (regorus).
 
-This repository contains **authorization logic only**.
-Authentication, token validation, and request normalization are handled by the calling services.
+## Overview
 
----
+This service provides policy-based authorization for:
+- **Dataset API** - Access control and row-level filtering
+- **Pipeline Events** - State transition validation
+- **Digital Twin** - API access and event emission
+- **MQTT Broker** - Topic-based ACLs (mosquitto-go-auth compatible)
+- **User Data** - Own-data access and delegation
 
-## Scope
+## Architecture
 
-- Dataset access authorization
-- Shared policy logic across services
-- Explicit, auditable access decisions
-
-Out of scope:
-- Authentication
-- Identity provisioning
-- Token issuance (Keycloak, etc.)
-
----
-
-## Policy model (high level)
-
-Dataset access is governed by **two orthogonal dimensions**:
-
-### 1. Dataset access level
-
-| Level | Meaning |
-|------|--------|
-| `open` | Publicly accessible |
-| `internal` | Limited to trusted operators |
-| `restricted` | Highly sensitive, admin-level access only |
-
-### 2. Subject access model
-
-Access is evaluated differently depending on **how the caller authenticates**:
-
-- **Human users** → role-based
-- **Service clients** → scope-based
-
-See [docs/policy_model.md](docs/policy_model.md) for full details.
-
----
-
-## OPA input contract
-
-```json
-{
-  "dataset": {
-    "id": "dataset_id",
-    "access_level": "open | internal | restricted"
-  },
-  "subject": {
-    "id": "principal-id",
-    "roles": ["manager", "operator", "admin"],
-    "groups": [],
-    "scopes": ["dataset.query", "dataset.admin"]
-  }
-}
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    FastAPI Policy Service                        │
+│                                                                  │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  Routes: /authorize, /dataset/*, /pipeline/*, /mqtt/*     │  │
+│  └─────────────────────────┬─────────────────────────────────┘  │
+│                            │                                     │
+│  ┌─────────────────────────▼─────────────────────────────────┐  │
+│  │  Policy Engine (regorus - embedded Rego)                  │  │
+│  │  └── Decision Cache (LRU + TTL)                           │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │  JWT Validator  │  │  Subject Extract │  │  Audit Logger   │  │
+│  │  (JWKS cached)  │  │  (Keycloak)      │  │  (structured)   │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-Notes:
-- `subject` may be `null` for anonymous access
-- `roles` apply to human users
-- `scopes` apply to service clients
+## Quick Start
 
----
-
-## Quick start
+### Using Docker Compose
 
 ```bash
-task opa:run
-```
+# Start service with Keycloak
+docker compose up -d
 
-```bash
-curl -X POST http://localhost:8181/v1/data/celine/dataset/access/allow \
+# Test health
+curl http://localhost:8000/health
+
+# Test authorization
+curl -X POST http://localhost:8000/dataset/access \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-jwt>" \
   -d '{
-    "input": {
-      "dataset": {
-        "access_level": "internal"
-      },
-      "subject": {
-        "id": "dt-forecast-engine",
-        "scopes": ["dataset.query"],
-        "roles": [],
-        "groups": []
-      }
-    }
+    "dataset_id": "ds-123",
+    "access_level": "internal",
+    "action": "read"
   }'
 ```
 
----
-
-## Run tests
+### Local Development
 
 ```bash
-task test
+# Install dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run OPA tests
+opa test policies/ -v
+
+# Start server
+uvicorn celine_policies.main:app --reload
 ```
 
----
+## Authorization Model
 
-## Philosophy
+### Subject Types
 
-- Policies are pure logic
-- OAuth/OIDC-aligned
-- Fail-closed by default
-- Strong test coverage
-- Versioned and auditable
+| Type | Identified By | Authorization Via |
+|------|---------------|-------------------|
+| User | JWT `sub` claim | Group membership (`groups` claim) |
+| Service | JWT `client_id` claim | OAuth scopes (`scope` claim) |
+| Anonymous | No JWT | Limited to open resources |
+
+### Group Hierarchy
+
+```
+admins (level 4) > managers (level 3) > editors (level 2) > viewers (level 1)
+```
+
+### Dataset Access Levels
+
+| Level | Anonymous | Viewers | Editors | Managers | Admins |
+|-------|-----------|---------|---------|----------|--------|
+| open | read | read | read | read | read/write |
+| internal | ❌ | read | read/write | read/write | read/write |
+| restricted | ❌ | ❌ | ❌ | ❌ | read/write |
+
+### Service Scopes
+
+| Scope | Permissions |
+|-------|-------------|
+| `dataset.query` | Read internal datasets |
+| `dataset.admin` | Read/write all datasets |
+| `pipeline.execute` | Execute pipeline transitions |
+| `twin.read` | Read twin data |
+| `twin.write` | Write twin data |
+| `mqtt.admin` | Full MQTT access |
+
+## API Endpoints
+
+### Generic Authorization
+
+```
+POST /authorize
+```
+
+Evaluates any policy based on resource type.
+
+### Dataset
+
+```
+POST /dataset/access   - Check dataset access
+POST /dataset/filter   - Get row-level filters
+```
+
+### Pipeline
+
+```
+POST /pipeline/transition  - Validate state transition
+GET  /pipeline/states      - List valid states
+```
+
+### MQTT (mosquitto-go-auth)
+
+```
+POST /mqtt/auth      - Authenticate user
+POST /mqtt/acl       - Check topic ACL
+POST /mqtt/superuser - Check superuser status
+```
+
+### Health
+
+```
+GET /health   - Liveness check
+GET /ready    - Readiness check
+POST /reload  - Reload policies
+```
+
+## Configuration
+
+Environment variables (prefix: `CELINE_`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENVIRONMENT` | development | Environment name |
+| `LOG_LEVEL` | INFO | Logging level |
+| `OIDC_ISSUER` | http://keycloak.../realms/celine | JWT issuer |
+| `POLICIES_DIR` | policies | Rego policies directory |
+| `DATA_DIR` | data | Policy data directory |
+| `DECISION_CACHE_ENABLED` | true | Enable decision caching |
+| `DECISION_CACHE_TTL_SECONDS` | 300 | Cache TTL |
+
+## Policy Structure
+
+```
+policies/
+└── celine/
+    ├── common/           # Shared helpers
+    │   ├── subject.rego  # Subject type detection
+    │   └── access_levels.rego
+    ├── dataset/
+    │   ├── access.rego   # Dataset access rules
+    │   ├── row_filter.rego
+    │   └── access_test.rego
+    ├── pipeline/
+    │   └── state.rego    # State machine
+    ├── twin/
+    │   └── access.rego
+    ├── mqtt/
+    │   └── acl.rego
+    └── userdata/
+        └── access.rego
+```
+
+## Testing
+
+### Python Tests
+
+```bash
+pytest tests/python -v
+```
+
+### Rego Policy Tests
+
+```bash
+opa test policies/ -v
+```
+
+### Integration Tests
+
+```bash
+# Start services
+docker compose up -d
+
+# Run integration tests
+pytest tests/integration -v
+```
+
+## Audit Logging
+
+All decisions are logged with:
+
+```json
+{
+  "event": "policy_decision",
+  "request_id": "uuid",
+  "allowed": true,
+  "policy": "celine.dataset.access",
+  "subject_id": "user-123",
+  "subject_type": "user",
+  "resource_type": "dataset",
+  "resource_id": "ds-456",
+  "action": "read",
+  "latency_ms": 0.5,
+  "cached": false
+}
+```
+
+## Performance
+
+- **Embedded OPA**: ~0.1-0.5ms per evaluation
+- **Decision Cache**: Configurable LRU + TTL
+- **JWKS Cache**: 1 hour TTL with refresh on failure
+
+## MQTT Integration
+
+Configure mosquitto-go-auth:
+
+```
+auth_opt_backends http
+auth_opt_http_host policy-service
+auth_opt_http_port 8000
+auth_opt_http_getuser_uri /mqtt/auth
+auth_opt_http_aclcheck_uri /mqtt/acl
+auth_opt_http_superuser_uri /mqtt/superuser
+```
+
+## License
+
+Internal use only.

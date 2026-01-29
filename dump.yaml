@@ -6,4 +6,3 @@ contents:
   - Dockerfile
   - pyproject.toml
 
-output: sources.txt

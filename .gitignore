@@ -3,3 +3,5 @@
 .vscode
 /tmp
 sources.txt
+# Dumpster output
+.dumpster

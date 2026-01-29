@@ -34,4 +34,8 @@ tasks:
 
   dump-source:
     cmds:
-      - python3 scripts/dump_source.py
+      - uv run dumpster-cli
+
+  run:
+    cmds:
+      - uv run python3 src/celine/policies/main.py
