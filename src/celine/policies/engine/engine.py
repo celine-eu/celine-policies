@@ -122,7 +122,7 @@ class PolicyEngine:
         with self._lock:
             try:
                 # Set input data
-                self._engine.set_input(json.dumps(input_data))
+                self._engine.set_input(input_data)
 
                 # Evaluate rule
                 result = self._engine.eval_rule(rule)

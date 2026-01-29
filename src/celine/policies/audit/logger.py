@@ -1,7 +1,7 @@
 """Structured audit logging for policy decisions."""
 
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import logging
@@ -89,7 +89,7 @@ class AuditLogger:
             AuditRecord for the logged decision
         """
         record = AuditRecord(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             request_id=request_id,
             decision=decision,
             input=policy_input,
