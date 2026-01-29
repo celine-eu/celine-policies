@@ -4,48 +4,44 @@ import sys
 from datetime import datetime
 from typing import Any
 
+import logging
 import structlog
 
 from celine.policies.models import AuditRecord, Decision, PolicyInput
 
 
-def configure_logging(
-    log_level: str = "INFO",
-    json_format: bool = True,
-    service_name: str = "celine-policies",
+def configure_audit_logging(
+    *,
+    log_level: str | int,
+    json_format: bool,
+    service_name: str,
 ) -> None:
-    """Configure structured logging.
+    # Resolve log level via stdlib logging (NOT structlog)
+    if isinstance(log_level, str):
+        level = getattr(logging, log_level.upper(), logging.INFO)
+    else:
+        level = int(log_level)
 
-    Args:
-        log_level: Minimum log level
-        json_format: Use JSON output (recommended for production)
-        service_name: Service name to include in logs
-    """
-    processors: list[Any] = [
-        structlog.contextvars.merge_contextvars,
+    logging.basicConfig(level=level)
+
+    processors = [
         structlog.processors.add_log_level,
-        structlog.processors.StackInfoRenderer(),
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.CallsiteParameterAdder(
-            parameters=[
-                structlog.processors.CallsiteParameter.MODULE,
-                structlog.processors.CallsiteParameter.FUNC_NAME,
-            ]
-        ),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
     ]
 
     if json_format:
         processors.append(structlog.processors.JSONRenderer())
     else:
-        processors.append(structlog.dev.ConsoleRenderer(colors=True))
+        processors.append(structlog.dev.ConsoleRenderer())
 
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(
-            getattr(structlog, log_level.upper(), structlog.INFO)
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
 

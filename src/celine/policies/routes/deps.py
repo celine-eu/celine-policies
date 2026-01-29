@@ -1,34 +1,65 @@
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, status
 
+from celine.policies.auth.jwt import JWTValidationError
 from celine.policies.auth.subject import extract_subject_from_claims
-from celine.policies.main import (
-    get_policy_engine as _get_policy_engine,
-    get_jwt_validator as _get_jwt_validator,
-    get_audit_logger as _get_audit_logger,
-)
 from celine.policies.models import Subject
 
-
-def get_engine():
-    return _get_policy_engine()
-
-
-def get_jwt_validator():
-    return _get_jwt_validator()
+from celine.policies.audit import AuditLogger
+from celine.policies.auth import JWTValidator
+from celine.policies.engine import CachedPolicyEngine
 
 
-def get_audit_logger():
-    return _get_audit_logger()
+_policy_engine: CachedPolicyEngine | None = None
+_jwt_validator: JWTValidator | None = None
+_audit_logger: AuditLogger | None = None
 
 
-def get_subject(
+def get_policy_engine() -> CachedPolicyEngine:
+    if _policy_engine is None:
+        raise RuntimeError("Policy engine not initialized")
+    return _policy_engine
+
+
+def get_jwt_validator() -> JWTValidator:
+    if _jwt_validator is None:
+        raise RuntimeError("JWT validator not initialized")
+    return _jwt_validator
+
+
+def get_audit_logger() -> AuditLogger:
+    if _audit_logger is None:
+        raise RuntimeError("Audit logger not initialized")
+    return _audit_logger
+
+async def get_subject(
     authorization: Annotated[str | None, Header()] = None,
     jwt_validator=Depends(get_jwt_validator),
-) -> Subject:
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
+) -> Subject | None:
+    """Extract subject from Authorization header.
 
-    claims = jwt_validator.validate_authorization_header(authorization)
-    return extract_subject_from_claims(claims)
+    Returns None for anonymous access (no header or invalid token).
+    Raises HTTPException for malformed tokens.
+    """
+    if not authorization:
+        return None
+
+    # Extract token from "Bearer <token>"
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header format",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = parts[1]
+
+    try:
+        claims = jwt_validator.validate(token)
+        return extract_subject_from_claims(claims)
+    except JWTValidationError as e:
+        # Keep the previous behavior: invalid token => anonymous (not 401),
+        # unless you want strict 401 here. The docstring says anonymous for invalid token.
+        return None

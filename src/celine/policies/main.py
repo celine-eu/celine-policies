@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from celine.policies.audit import AuditLogger, configure_logging as configure_audit_logging
+from celine.policies.audit import AuditLogger, configure_audit_logging
 from celine.policies.auth import JWKSCache, JWTValidator
 from celine.policies.config import Settings, settings as app_settings
 from celine.policies.engine import CachedPolicyEngine, DecisionCache, PolicyEngine
@@ -23,28 +23,6 @@ from celine.policies.routes import (
 )
 
 logger = logging.getLogger(__name__)
-
-_policy_engine: CachedPolicyEngine | None = None
-_jwt_validator: JWTValidator | None = None
-_audit_logger: AuditLogger | None = None
-
-
-def get_policy_engine() -> CachedPolicyEngine:
-    if _policy_engine is None:
-        raise RuntimeError("Policy engine not initialized")
-    return _policy_engine
-
-
-def get_jwt_validator() -> JWTValidator:
-    if _jwt_validator is None:
-        raise RuntimeError("JWT validator not initialized")
-    return _jwt_validator
-
-
-def get_audit_logger() -> AuditLogger:
-    if _audit_logger is None:
-        raise RuntimeError("Audit logger not initialized")
-    return _audit_logger
 
 
 @asynccontextmanager
