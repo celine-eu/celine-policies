@@ -6,10 +6,10 @@ from typing import Any
 
 import httpx
 import jwt
-import structlog
+import logging
 from jwt import PyJWKClient, PyJWKClientError
 
-logger = structlog.get_logger()
+logger = logging.getLogger(__name__)
 
 
 class JWKSCache:
@@ -39,7 +39,7 @@ class JWKSCache:
                 return self._client.get_signing_key_from_jwt(token)  # type: ignore
             except PyJWKClientError as e:
                 # Key might have rotated, force refresh
-                logger.warning("JWKS key lookup failed, refreshing", error=str(e))
+                logger.warning("JWKS key lookup failed, refreshing error=%s", e)
                 self._refresh()
                 return self._client.get_signing_key_from_jwt(token)  # type: ignore
 
@@ -51,7 +51,7 @@ class JWKSCache:
 
     def _refresh(self) -> None:
         """Refresh JWKS client."""
-        logger.debug("Refreshing JWKS", uri=self._jwks_uri)
+        logger.debug("Refreshing JWKS uri=%s", self._jwks_uri)
         self._client = PyJWKClient(self._jwks_uri, cache_keys=True)
         self._last_fetch = time.time()
 
@@ -120,11 +120,7 @@ class JWTValidator:
                 options=options,
             )
 
-            logger.debug(
-                "JWT validated",
-                sub=claims.get("sub"),
-                client_id=claims.get("client_id"),
-            )
+            logger.debug("JWT validated sub=%s client_id=%s", claims.get("sub"), claims.get("client_id"))
 
             return claims
 
@@ -137,7 +133,7 @@ class JWTValidator:
         except jwt.InvalidTokenError as e:
             raise JWTValidationError(f"Invalid token: {e}")
         except Exception as e:
-            logger.error("JWT validation error", error=str(e))
+            logger.error("JWT validation error error=%s", e)
             raise JWTValidationError(f"Validation failed: {e}")
 
 
@@ -145,3 +141,5 @@ class JWTValidationError(Exception):
     """JWT validation error."""
 
     pass
+
+

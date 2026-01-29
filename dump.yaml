@@ -1,8 +1,7 @@
 contents:
-  - policies
+  - src
   - scripts
   - README.md
   - docker-compose.yaml
   - Dockerfile
   - pyproject.toml
-

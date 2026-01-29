@@ -6,12 +6,12 @@ import threading
 import time
 from typing import Any
 
-import structlog
+import logging
 from cachetools import TTLCache
 
-from ..models import Decision
+from celine.policies.models import Decision
 
-logger = structlog.get_logger()
+logger = logging.getLogger(__name__)
 
 
 class DecisionCache:
@@ -47,7 +47,7 @@ class DecisionCache:
             result = self._cache.get(key)
             if result is not None:
                 self._hits += 1
-                logger.debug("Cache hit", policy=policy, key=key[:16])
+                logger.debug("Cache hit policy=%s key=%s", policy, key[:16])
             else:
                 self._misses += 1
             return result
@@ -63,7 +63,7 @@ class DecisionCache:
         key = self._make_key(policy, input_data)
         with self._lock:
             self._cache[key] = decision
-            logger.debug("Cache set", policy=policy, key=key[:16])
+            logger.debug("Cache set policy=%s key=%s", policy, key[:16])
 
     def invalidate(self, policy: str | None = None) -> int:
         """Invalidate cache entries.
@@ -79,14 +79,14 @@ class DecisionCache:
             if policy is None:
                 count = len(self._cache)
                 self._cache.clear()
-                logger.info("Cache cleared", entries=count)
+                logger.info("Cache cleared entries=%s", count)
                 return count
 
             # Partial invalidation by policy prefix
             keys_to_remove = [k for k in self._cache if k.startswith(f"{policy}:")]
             for key in keys_to_remove:
                 del self._cache[key]
-            logger.info("Cache invalidated", policy=policy, entries=len(keys_to_remove))
+            logger.info("Cache invalidated policy=%s entries=%s", policy, len(keys_to_remove))
             return len(keys_to_remove)
 
     @property
@@ -212,3 +212,5 @@ class CachedPolicyEngine:
     # Delegate other methods to underlying engine
     def __getattr__(self, name: str) -> Any:
         return getattr(self._engine, name)
+
+

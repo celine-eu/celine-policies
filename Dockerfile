@@ -28,7 +28,7 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application
-COPY src/celine_policies /app/celine_policies
+COPY src/celine /app/celine
 COPY policies /app/policies
 COPY data /app/data
 

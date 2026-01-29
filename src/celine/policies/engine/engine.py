@@ -8,11 +8,11 @@ from typing import Any
 
 from regorus import Engine
 
-import structlog
+import logging
 
-from ..models import Decision, FilterPredicate, PolicyInput
+from celine.policies.models import Decision, FilterPredicate, PolicyInput
 
-logger = structlog.get_logger()
+logger = logging.getLogger(__name__)
 
 
 class PolicyEngineError(Exception):
@@ -58,9 +58,9 @@ class PolicyEngine:
                     try:
                         self._engine.add_policy_from_file(str(rego_file))
                         self._policy_count += 1
-                        logger.debug("Loaded policy", file=str(rego_file))
+                        logger.debug("Loaded policy file=%s", rego_file)
                     except Exception as e:
-                        logger.error("Failed to load policy", file=str(rego_file), error=str(e))
+                        logger.error("Failed to load policy file=%s error=%s", rego_file, e)
                         raise PolicyEngineError(f"Failed to load {rego_file}: {e}") from e
 
             # Load all data.json files
@@ -75,21 +75,17 @@ class PolicyEngine:
                         )
                         self._engine.add_data_from_json_file(str(data_file))
                         self._data_count += 1
-                        logger.debug("Loaded data", file=str(data_file), path=data_path)
+                        logger.debug("Loaded data file=%s path=%s", data_file, data_path)
                     except Exception as e:
-                        logger.error("Failed to load data", file=str(data_file), error=str(e))
+                        logger.error("Failed to load data file=%s error=%s", data_file, e)
                         raise PolicyEngineError(f"Failed to load {data_file}: {e}") from e
 
             self._loaded = True
-            logger.info(
-                "Policy engine loaded",
-                policies=self._policy_count,
-                data_files=self._data_count,
-            )
+            logger.info("Policy engine loaded policies=%s data_files=%s", self._policy_count, self._data_count)
 
     def reload(self) -> None:
         """Hot-reload policies (thread-safe)."""
-        logger.info("Reloading policies...")
+        logger.info("Reloading policies")
         new_engine = PolicyEngine(self._policies_dir, self._data_dir)
         new_engine.load()
 
@@ -138,7 +134,7 @@ class PolicyEngine:
                 return {"value": result}
 
             except Exception as e:
-                logger.error("Policy evaluation failed", rule=rule, error=str(e))
+                logger.error("Policy evaluation failed rule=%s error=%s", rule, e)
                 raise PolicyEngineError(f"Evaluation failed for {rule}: {e}") from e
 
     def evaluate_decision(
@@ -187,12 +183,7 @@ class PolicyEngine:
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-        logger.debug(
-            "Policy evaluated",
-            package=policy_package,
-            allowed=allowed,
-            latency_ms=round(elapsed_ms, 2),
-        )
+        logger.debug("Policy evaluated package=%s allowed=%s latency_ms=%s", policy_package, allowed, round(elapsed_ms, 2))
 
         return Decision(
             allowed=allowed,
@@ -228,3 +219,5 @@ class PolicyEngine:
             result["subject"] = None
 
         return result
+
+

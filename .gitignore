@@ -1,7 +1,13 @@
+*.egg-info
+__pycache__
+.venv
+
 .DS_Store
 .idea
 .vscode
 /tmp
-sources.txt
+
 # Dumpster output
+sources.txt
 .dumpster
+

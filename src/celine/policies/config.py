@@ -58,7 +58,12 @@ class Settings(BaseSettings):
         return f"{self.oidc_issuer.rstrip('/')}/protocol/openid-connect/certs"
 
 
+settings = Settings()
+
+
 @lru_cache
 def get_settings() -> Settings:
-    """Get cached settings instance."""
-    return Settings()
+    """Backward-compatible alias for the module-level settings singleton."""
+    return settings
+
+
