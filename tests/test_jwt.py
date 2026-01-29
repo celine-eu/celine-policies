@@ -7,9 +7,18 @@ from jwt import PyJWKClientError
 from celine.policies.auth.jwt import JWKSCache, JWTValidationError, JWTValidator
 
 
+class FakeJWKS(JWKSCache):
+    secret: str
+    def __init__(self, jwks_uri: str = "", ttl_seconds: int = 3600, secret: str = ""):
+        super().__init__(jwks_uri, ttl_seconds)
+        self.secret = secret
+
+    def get_signing_key(self, token: str):
+        return _Key(self.secret)
 class _Key:
     def __init__(self, key):
         self.key = key
+
 
 
 def test_jwt_validator_valid_hs256():
@@ -21,11 +30,7 @@ def test_jwt_validator_valid_hs256():
         algorithm="HS256",
     )
 
-    class FakeJWKS:
-        def get_signing_key(self, token: str):
-            return _Key(secret)
-
-    v = JWTValidator(jwks_cache=FakeJWKS(), issuer="issuer", audience=None, algorithms=["HS256"])
+    v = JWTValidator(jwks_cache=FakeJWKS(secret=secret), issuer="issuer", audience=None, algorithms=["HS256"])
     claims = v.validate(token)
     assert claims["sub"] == "u1"
     assert claims["iss"] == "issuer"
@@ -41,11 +46,7 @@ def test_jwt_validator_invalid_issuer():
         algorithm="HS256",
     )
 
-    class FakeJWKS:
-        def get_signing_key(self, token: str):
-            return _Key(secret)
-
-    v = JWTValidator(jwks_cache=FakeJWKS(), issuer="issuer", audience=None, algorithms=["HS256"])
+    v = JWTValidator(jwks_cache=FakeJWKS(secret=secret), issuer="issuer", audience=None, algorithms=["HS256"])
     with pytest.raises(JWTValidationError) as e:
         v.validate(token)
     assert "Invalid issuer" in str(e.value)
