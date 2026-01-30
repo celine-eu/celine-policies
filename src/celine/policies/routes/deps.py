@@ -7,14 +7,52 @@ from celine.policies.auth.subject import extract_subject_from_claims
 from celine.policies.models import Subject
 
 from celine.policies.audit import AuditLogger
-from celine.policies.auth import JWTValidator
-from celine.policies.engine import CachedPolicyEngine
+from celine.policies.auth import JWKSCache, JWTValidator
+from celine.policies.config import settings
+from celine.policies.engine import CachedPolicyEngine, DecisionCache, PolicyEngine
+from celine.policies.logs import configure_logging as configure_app_logging
 
 
 _policy_engine: CachedPolicyEngine | None = None
 _jwt_validator: JWTValidator | None = None
 _audit_logger: AuditLogger | None = None
 
+
+async def init_deps():
+
+    global _policy_engine, _jwt_validator, _audit_logger
+
+    engine = PolicyEngine(
+        policies_dir=settings.policies_dir,
+        data_dir=settings.data_dir,
+    )
+    engine.load()
+
+    cache = DecisionCache(
+        maxsize=settings.decision_cache_maxsize,
+        ttl_seconds=settings.decision_cache_ttl_seconds,
+    )
+    _policy_engine = CachedPolicyEngine(
+        engine=engine,
+        cache=cache,
+        cache_enabled=settings.decision_cache_enabled,
+    )
+
+    jwks_cache = JWKSCache(
+        jwks_uri=settings.jwks_uri,
+        ttl_seconds=settings.jwks_cache_ttl_seconds,
+    )
+    _jwt_validator = JWTValidator(
+        jwks_cache=jwks_cache,
+        issuer=settings.oidc_issuer,
+        audience=settings.oidc_audience,
+        algorithms=settings.jwt_algorithms,
+    )
+
+    _audit_logger = AuditLogger(
+        enabled=settings.audit_enabled,
+        log_inputs=settings.audit_log_inputs,
+    )
 
 def get_policy_engine() -> CachedPolicyEngine:
     if _policy_engine is None:
@@ -33,6 +71,14 @@ def get_audit_logger() -> AuditLogger:
         raise RuntimeError("Audit logger not initialized")
     return _audit_logger
 
+
+def raise_401(detail = "Unauthorized"):
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
 async def get_subject(
     authorization: Annotated[str | None, Header()] = None,
     jwt_validator=Depends(get_jwt_validator),
@@ -48,11 +94,7 @@ async def get_subject(
     # Extract token from "Bearer <token>"
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header format",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise_401("Invalid authorization header format")
 
     token = parts[1]
 
@@ -60,6 +102,4 @@ async def get_subject(
         claims = jwt_validator.validate(token)
         return extract_subject_from_claims(claims)
     except JWTValidationError as e:
-        # Keep the previous behavior: invalid token => anonymous (not 401),
-        # unless you want strict 401 here. The docstring says anonymous for invalid token.
-        return None
+        raise_401()
