@@ -1,41 +1,34 @@
 version: "3"
 
 tasks:
-  default:
-    desc: List available tasks
-    cmds:
-      - task --list
-
-  opa:run:
-    desc: Run OPA locally (docker-compose)
-    cmds:
-      - docker compose up --remove-orphans
-
-  opa:down:
-    desc: Stop OPA
-    cmds:
-      - docker compose down
-
-  test:
+  policies:test:
     desc: Run OPA unit tests
     cmds:
-      - docker compose run --rm -v "$PWD:/policies:ro" opa test /policies -v
+      - docker run --rm -v "$PWD/policies:/policies" openpolicyagent/opa:latest test /policies -v
 
-  fmt:
+  policies:fmt:
     desc: Format Rego files
     cmds:
-      - docker run --rm -v "$PWD:/policies" openpolicyagent/opa:latest fmt -w /policies
+      - docker run --rm -v "$PWD/policies:/policies" openpolicyagent/opa:latest fmt -w /policies
 
-  check:
+  policies:check:
     desc: Format + test
     cmds:
       - task: fmt
       - task: test
 
-  dump-source:
+  release:
     cmds:
-      - uv run dumpster-cli
+      - uv run semantic-release -v version --no-vcs-release
+      - git push
+      - git push --tags
 
   run:
+    desc: "Run development server"
     cmds:
-      - uv run python3 src/celine/policies/main.py
+      - uv run uvicorn celine.policies.main:create_app --reload --host 0.0.0.0 --port 8003
+
+  test:
+    desc: "Run test"
+    cmds:
+      - uv run pytest

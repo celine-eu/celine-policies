@@ -113,17 +113,3 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
 
     return app
 
-
-app = create_app()
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    settings = app_settings
-    uvicorn.run(
-        "celine.policies.main:app",
-        host=settings.host,
-        port=settings.port,
-        reload=settings.environment == "development",
-    )

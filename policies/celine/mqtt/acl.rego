@@ -1,235 +1,254 @@
-# METADATA
-# title: MQTT Topic ACL Policy
-# description: Controls access to MQTT topics for pub/sub operations
-# scope: package
-# entrypoint: true
 package celine.mqtt.acl
 
 import rego.v1
 
-import data.celine.common.subject
-
-# Default deny
 default allow := false
+default reason := "no matching allow rule"
+default superuser := false
 
-default reason := ""
-
-# MQTT access types (from mosquitto-go-auth)
-# 1 = subscribe, 2 = publish, 3 = subscribe+publish, 4 = subscribe literal
-
-# =============================================================================
-# TOPIC PATTERNS
-# =============================================================================
-
-# Topic structure: celine/{domain}/{resource_type}/{resource_id}/{channel}
-# Examples:
-#   celine/twins/twin-123/telemetry
-#   celine/twins/twin-123/commands
-#   celine/pipelines/pipe-456/status
-#   celine/datasets/ds-789/updates
-#   celine/system/alerts
-
-# =============================================================================
-# SYSTEM TOPICS
-# =============================================================================
-
-# Admins can subscribe to all system topics
-allow if {
-	input.action.name == "subscribe"
-	startswith(input.resource.id, "celine/system/")
-	subject.is_user
-	subject.has_group_level(subject.level_admin)
-}
-
-# Services with mqtt.system scope can publish/subscribe to system topics
-allow if {
-	startswith(input.resource.id, "celine/system/")
-	subject.is_service
-	subject.has_scope("mqtt.system")
-}
-
-# =============================================================================
-# TWIN TOPICS
-# =============================================================================
-
-# Users can subscribe to twin telemetry if they have viewer+ access
-allow if {
-	input.action.name == "subscribe"
-	topic_match(input.resource.id, "celine/twins/+/telemetry")
-	subject.is_user
-	subject.has_group_level(subject.level_viewer)
-}
-
-# Users can subscribe to twin status
-allow if {
-	input.action.name == "subscribe"
-	topic_match(input.resource.id, "celine/twins/+/status")
-	subject.is_user
-	subject.has_group_level(subject.level_viewer)
-}
-
-# Editors+ can publish commands to twins
-allow if {
-	input.action.name == "publish"
-	topic_match(input.resource.id, "celine/twins/+/commands")
-	subject.is_user
-	subject.has_group_level(subject.level_editor)
-}
-
-# Services with twin.write scope can publish to twin topics
-allow if {
-	input.action.name == "publish"
-	topic_match(input.resource.id, "celine/twins/+/#")
-	subject.is_service
-	subject.has_any_scope(["twin.write", "twin.admin"])
-}
-
-# Services with twin.read scope can subscribe to twin topics
-allow if {
-	input.action.name == "subscribe"
-	topic_match(input.resource.id, "celine/twins/+/#")
-	subject.is_service
-	subject.has_any_scope(["twin.read", "twin.write", "twin.admin"])
-}
-
-# =============================================================================
-# PIPELINE TOPICS
-# =============================================================================
-
-# Anyone authenticated can subscribe to pipeline status
-allow if {
-	input.action.name == "subscribe"
-	topic_match(input.resource.id, "celine/pipelines/+/status")
-	not subject.is_anonymous
-}
-
-# Services with pipeline.execute can publish pipeline events
-allow if {
-	input.action.name == "publish"
-	topic_match(input.resource.id, "celine/pipelines/+/#")
-	subject.is_service
-	subject.has_any_scope(["pipeline.execute", "pipeline.admin"])
-}
-
-# =============================================================================
-# DATASET TOPICS
-# =============================================================================
-
-# Users can subscribe to dataset update notifications
-allow if {
-	input.action.name == "subscribe"
-	topic_match(input.resource.id, "celine/datasets/+/updates")
-	subject.is_user
-	subject.has_group_level(subject.level_viewer)
-}
-
-# Services with dataset scope can publish dataset events
-allow if {
-	input.action.name == "publish"
-	topic_match(input.resource.id, "celine/datasets/+/#")
-	subject.is_service
-	subject.has_any_scope(["dataset.admin"])
-}
-
-# =============================================================================
-# USER-SPECIFIC TOPICS
-# =============================================================================
-
-# Users can subscribe/publish to their own topics
-allow if {
-	topic_parts := split(input.resource.id, "/")
-	count(topic_parts) >= 3
-	topic_parts[0] == "celine"
-	topic_parts[1] == "users"
-	topic_parts[2] == subject.subject_id
-}
-
-# =============================================================================
-# WILDCARD SUBSCRIPTIONS
-# =============================================================================
-
-# Only admins can subscribe to broad wildcards
-allow if {
-	input.action.name == "subscribe"
-	contains(input.resource.id, "#")
-	subject.is_user
-	subject.has_group_level(subject.level_admin)
-}
+################################################################################
+# Entry points (FastAPI PolicyEngine contract)
+################################################################################
 
 allow if {
-	input.action.name == "subscribe"
-	contains(input.resource.id, "#")
-	subject.is_service
-	subject.has_scope("mqtt.admin")
+  input.subject != null
+  input.resource.type == "topic"
+  has_capability_for_action(input.action.name)
+  matches_any_acl_rule(input.resource.id)
 }
 
-# =============================================================================
-# TOPIC MATCHING HELPERS
-# =============================================================================
-
-# Match topic against pattern with + and # wildcards
-# + matches exactly one level
-# # matches zero or more levels (only at end)
-topic_match(topic, pattern) if {
-	topic_parts := split(topic, "/")
-	pattern_parts := split(pattern, "/")
-	parts_match(topic_parts, pattern_parts)
+reason := msg if {
+  not allow
+  msg := deny_reason
 }
 
-# Base case: both empty
-parts_match([], []) := true
-
-# # wildcard matches everything remaining
-parts_match(_, pattern_parts) if {
-	count(pattern_parts) > 0
-	pattern_parts[0] == "#"
-}
-
-# + wildcard matches exactly one segment
-parts_match(topic_parts, pattern_parts) if {
-	count(topic_parts) > 0
-	count(pattern_parts) > 0
-	pattern_parts[0] == "+"
-	parts_match(array.slice(topic_parts, 1, count(topic_parts)), array.slice(pattern_parts, 1, count(pattern_parts)))
-}
-
-# Exact segment match
-parts_match(topic_parts, pattern_parts) if {
-	count(topic_parts) > 0
-	count(pattern_parts) > 0
-	topic_parts[0] == pattern_parts[0]
-	parts_match(array.slice(topic_parts, 1, count(topic_parts)), array.slice(pattern_parts, 1, count(pattern_parts)))
-}
-
-# =============================================================================
-# REASONS
-# =============================================================================
-
-reason := "topic access granted" if {
-	allow
-}
-
-reason := "anonymous access denied" if {
-	not allow
-	subject.is_anonymous
-}
-
-reason := "topic access denied - insufficient privileges" if {
-	not allow
-	not subject.is_anonymous
-}
-
-# =============================================================================
-# SUPERUSER CHECK
-# =============================================================================
-
-# Superuser bypasses all ACL checks
+# Backward compatibility for /mqtt/superuser (if you still evaluate this path)
 superuser if {
-	subject.is_user
-	subject.has_group_level(subject.level_admin)
+  subject_has_group_name("admins")
+} else if {
+  subject_has_scope_pattern("mqtt.admin")
+} else if {
+  input.action.name == "superuser"
+  allow
 }
 
-superuser if {
-	subject.is_service
-	subject.has_scope("mqtt.admin")
+################################################################################
+# Capability layer (roles.json)
+#
+# roles.json must be mounted at data.celine.roles
+# - group_permissions: {group: ["read","write",...]}
+# - scope_permissions: {scope: ["read","write",...]}
+#
+# MQTT actions are "publish" and "subscribe" (and optionally "superuser")
+# You should map these in roles.json permissions lists.
+################################################################################
+
+has_capability_for_action(act) if {
+  # via group permissions
+  some grp_name in input.subject.groups
+  perms := data.celine.roles.group_permissions[grp_name]
+  perms[_] == act
+} else if {
+  # via scope permissions
+  some scope_name in input.subject.scopes
+  perms := data.celine.roles.scope_permissions[scope_name]
+  perms[_] == act
+}
+
+################################################################################
+# ACL layer (topic scoping)
+#
+# data.celine.mqtt.acl.rules: list of rule objects
+################################################################################
+
+matches_any_acl_rule(topic) if {
+  some rule in data.celine.mqtt.acl.rules
+  acl_rule_matches(rule, topic)
+}
+
+acl_rule_matches(rule, topic) if {
+  rule_subjects_match(rule.subjects)
+  rule_topics_match(rule.topics, topic)
+  rule_actions_match(rule.actions)
+  rule_effect_allows(rule)
+}
+
+rule_effect_allows(rule) if {
+  # missing effect => allow by default
+  not rule.effect
+} else if {
+  rule.effect == "allow"
+}
+
+# If rule.actions missing => treat as "*"
+rule_actions_match(actions) if {
+  actions == "*"
+} else if {
+  not actions
+} else if {
+  some act in actions
+  act == input.action.name
+}
+
+# If rule.topics missing => treat as "*"
+rule_topics_match(topics, topic) if {
+  topics == "*"
+} else if {
+  not topics
+} else if {
+  some pat in topics
+  topic_match(pat, topic)
+}
+
+# If rule.subjects missing => match any subject
+rule_subjects_match(subjects) if {
+  not subjects
+} else if {
+  subject_types_match(subjects)
+  subject_ids_match(subjects)
+  subject_groups_match(subjects)
+  subject_scopes_match(subjects)
+}
+
+subject_types_match(subjects) if {
+  not subjects.types
+} else if {
+  subjects.types == "*"
+} else if {
+  some tval in subjects.types
+  tval == input.subject.type
+}
+
+subject_ids_match(subjects) if {
+  not subjects.ids
+} else if {
+  subjects.ids == "*"
+} else if {
+  some idval in subjects.ids
+  idval == input.subject.id
+}
+
+subject_groups_match(subjects) if {
+  not subjects.groups
+} else if {
+  subjects.groups == "*"
+} else if {
+  some gname in subjects.groups
+  subject_has_group_name(gname)
+}
+
+subject_scopes_match(subjects) if {
+  not subjects.scopes
+} else if {
+  subjects.scopes == "*"
+} else if {
+  some sp in subjects.scopes
+  subject_has_scope_pattern(sp)
+}
+
+subject_types_match(types) if {
+  not types
+} else if {
+  types == "*"
+} else if {
+  some tval in types
+  tval == input.subject.type
+}
+
+subject_ids_match(ids) if {
+  not ids
+} else if {
+  ids == "*"
+} else if {
+  some idval in ids
+  idval == input.subject.id
+}
+
+subject_groups_match(groups) if {
+  not groups
+} else if {
+  groups == "*"
+} else if {
+  some gname in groups
+  subject_has_group_name(gname)
+}
+
+subject_scopes_match(scopes) if {
+  not scopes
+} else if {
+  scopes == "*"
+} else if {
+  some sp in scopes
+  subject_has_scope_pattern(sp)
+}
+
+################################################################################
+# Subject helpers
+################################################################################
+
+subject_has_group_name(gname) if {
+  input.subject != null
+  some sg in input.subject.groups
+  sg == gname
+}
+
+# Supports exact scope and prefix wildcard like "mqtt.*"
+subject_has_scope_pattern(pattern) if {
+  input.subject != null
+  some have in input.subject.scopes
+  scope_pattern_match(pattern, have)
+}
+
+scope_pattern_match(pattern, have) if {
+  pattern == have
+} else if {
+  endswith(pattern, ".*")
+  prefix := trim_suffix(pattern, ".*")
+  startswith(have, sprintf("%s.", [prefix]))
+}
+
+################################################################################
+# Topic matching (MQTT wildcards # and +) - Rego v1 compatible using glob.match
+#
+# - '+' matches exactly one level (no '/')
+# - '#' matches multi-level suffix
+################################################################################
+
+topic_match(pattern, topic) if {
+  pattern == topic
+} else if {
+  pattern == "#"
+} else if {
+  endswith(pattern, "/#")
+  prefix := trim_suffix(pattern, "/#")
+  topic == prefix
+} else if {
+  endswith(pattern, "/#")
+  prefix := trim_suffix(pattern, "/#")
+  startswith(topic, sprintf("%s/", [prefix]))
+} else if {
+  # Convert MQTT pattern to glob:
+  #   '+' -> '*'
+  #   '# ' is only valid at end; we already handled '/#' and '#'
+  glob_pat := mqtt_to_glob(pattern)
+  glob.match(glob_pat, ["/"], topic)
+}
+
+mqtt_to_glob(pat) := out if {
+  # replace '+' with '*' for single-segment match
+  out := replace(pat, "+", "*")
+}
+
+################################################################################
+# Deny reason (best-effort)
+################################################################################
+
+deny_reason := msg if {
+  input.subject == null
+  msg := "anonymous subject not allowed"
+} else if {
+  input.resource.type != "topic"
+  msg := "resource type must be topic"
+} else if {
+  msg := "no ACL rule matched or capability missing"
 }

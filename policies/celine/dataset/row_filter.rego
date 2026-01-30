@@ -16,110 +16,96 @@ default filters := []
 default allow := true
 
 # =============================================================================
-# ORGANIZATION-BASED FILTERING
+# FILTER ACCUMULATOR
 # =============================================================================
 
-# Filter by organization if subject has org claim
-filters contains filter if {
-	subject.is_user
-	org_id := input.subject.claims.organization
-	org_id != null
-	filter := {
-		"field": "organization_id",
-		"operator": "eq",
-		"value": org_id,
-	}
+# Collect filters in a set, then expose them as a list via `filters`
+filter_set contains filter if {
+    # ORGANIZATION-BASED FILTERING (user)
+    subject.is_user
+    org_id := input.subject.claims.organization
+    org_id != null
+    filter := {
+        "field": "organization_id",
+        "operator": "eq",
+        "value": org_id,
+    }
 }
 
-# Services may have org scope that limits access
-filters contains filter if {
-	subject.is_service
-	org_id := input.subject.claims.organization
-	org_id != null
-	filter := {
-		"field": "organization_id",
-		"operator": "eq",
-		"value": org_id,
-	}
+filter_set contains filter if {
+    # ORGANIZATION-BASED FILTERING (service)
+    subject.is_service
+    org_id := input.subject.claims.organization
+    org_id != null
+    filter := {
+        "field": "organization_id",
+        "operator": "eq",
+        "value": org_id,
+    }
 }
 
-# =============================================================================
-# CLASSIFICATION-BASED FILTERING
-# =============================================================================
-
-# Viewers can only see public classifications
-filters contains filter if {
-	input.resource.attributes.access_level == "internal"
-	subject.is_user
-	subject.in_group("viewers")
-	not subject.in_any_group(["editors", "managers", "admins"])
-	filter := {
-		"field": "classification",
-		"operator": "eq",
-		"value": "public",
-	}
+filter_set contains filter if {
+    # CLASSIFICATION-BASED FILTERING (viewers)
+    input.resource.attributes.access_level == "internal"
+    subject.is_user
+    subject.in_group("viewers")
+    not subject.in_any_group(["editors", "managers", "admins"])
+    filter := {
+        "field": "classification",
+        "operator": "eq",
+        "value": "public",
+    }
 }
 
-# Editors can see public and internal classifications
-filters contains filter if {
-	input.resource.attributes.access_level == "internal"
-	subject.is_user
-	subject.in_group("editors")
-	not subject.in_any_group(["managers", "admins"])
-	filter := {
-		"field": "classification",
-		"operator": "in",
-		"value": ["public", "internal"],
-	}
+filter_set contains filter if {
+    # CLASSIFICATION-BASED FILTERING (editors)
+    input.resource.attributes.access_level == "internal"
+    subject.is_user
+    subject.in_group("editors")
+    not subject.in_any_group(["managers", "admins"])
+    filter := {
+        "field": "classification",
+        "operator": "in",
+        "value": ["public", "internal"],
+    }
 }
 
-# Managers and admins have no classification filter (full access)
-# No filter rule needed - absence of filter means no restriction
+# Managers/admins: no classification filter
 
 # =============================================================================
-# TIME-BASED FILTERING (EXAMPLE)
+# MATERIALIZE FILTERS AS LIST
 # =============================================================================
 
-# Non-admins can only access data from last 2 years
-# filters contains filter if {
-#     subject.is_user
-#     not subject.in_group("admins")
-#     filter := {
-#         "field": "created_at",
-#         "operator": "gte",
-#         "value": "2024-01-01T00:00:00Z"
-#     }
-# }
+filters := [f | f := filter_set[_]]
 
 # =============================================================================
 # HELPERS
 # =============================================================================
 
-# Expose allowed classifications for debugging/audit
 allowed_classifications := ["public", "internal", "confidential"] if {
-	subject.is_user
-	subject.in_any_group(["managers", "admins"])
+    subject.is_user
+    subject.in_any_group(["managers", "admins"])
 }
 
 allowed_classifications := ["public", "internal"] if {
-	subject.is_user
-	subject.in_group("editors")
-	not subject.in_any_group(["managers", "admins"])
+    subject.is_user
+    subject.in_group("editors")
+    not subject.in_any_group(["managers", "admins"])
 }
 
 allowed_classifications := ["public"] if {
-	subject.is_user
-	subject.in_group("viewers")
-	not subject.in_any_group(["editors", "managers", "admins"])
+    subject.is_user
+    subject.in_group("viewers")
+    not subject.in_any_group(["editors", "managers", "admins"])
 }
 
 allowed_classifications := ["public", "internal", "confidential"] if {
-	subject.is_service
-	subject.has_scope("dataset.admin")
+    subject.is_service
+    subject.has_scope("dataset.admin")
 }
 
 allowed_classifications := ["public", "internal"] if {
-	subject.is_service
-	subject.has_scope("dataset.query")
-	not subject.has_scope("dataset.admin")
+    subject.is_service
+    subject.has_scope("dataset.query")
+    not subject.has_scope("dataset.admin")
 }

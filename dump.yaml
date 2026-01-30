@@ -1,6 +1,15 @@
+extensions:
+  - .py
+  - .md
+  - .rego
+  - .yaml
+  - .toml
+  - .json
+
 contents:
   - src
   - scripts
+  - policies
   - README.md
   - docker-compose.yaml
   - Dockerfile
