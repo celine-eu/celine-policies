@@ -141,5 +141,3 @@ class JWTValidationError(Exception):
     """JWT validation error."""
 
     pass
-
-

@@ -1,86 +1,87 @@
-"""Extract Subject from JWT claims.
+"""JWT subject extraction.
 
-Handles both human users (groups-based) and service accounts (scopes-based).
+The policy service distinguishes:
+- user tokens (human principals, usually with groups/roles)
+- service tokens (client credentials / service accounts)
 """
 
+from __future__ import annotations
+
 from typing import Any
-import logging
 
 from celine.policies.models import Subject, SubjectType
 
-logger = logging.getLogger(__name__)
+
+def _extract_groups(claims: dict[str, Any]) -> list[str]:
+    groups: list[str] = []
+
+    realm_access = claims.get("realm_access")
+    if isinstance(realm_access, dict):
+        roles = realm_access.get("roles")
+        if isinstance(roles, list):
+            groups.extend([str(r) for r in roles])
+
+    grp_claim = claims.get("groups")
+    if isinstance(grp_claim, list):
+        groups.extend([str(g).lstrip("/") for g in grp_claim])
+
+    return sorted(set(groups))
 
 
-class SubjectExtractor:
-    """Extract Subject from JWT claims.
+def _extract_scopes(claims: dict[str, Any]) -> list[str]:
+    scope = claims.get("scope")
+    if isinstance(scope, str):
+        return sorted(set([s for s in scope.split() if s]))
+    if isinstance(scope, list):
+        return sorted(set([str(s) for s in scope if s]))
+    return []
 
-    Keycloak-specific claim mapping:
-    - Users: groups from 'groups' claim
-    - Services: identified by 'client_id' claim, scopes from 'scope' claim
-    """
 
-    def __init__(
-        self,
-        groups_claim: str = "groups",
-        scope_claim: str = "scope",
-        client_id_claim: str = "client_id",
-    ):
-        self._groups_claim = groups_claim
-        self._scope_claim = scope_claim
-        self._client_id_claim = client_id_claim
+def _looks_like_service_account(claims: dict[str, Any]) -> bool:
+    preferred_username = claims.get("preferred_username")
+    if isinstance(preferred_username, str) and preferred_username.startswith("service-account-"):
+        return True
+    return False
 
-    def extract(self, claims: dict[str, Any]) -> Subject:
-        is_service = self._client_id_claim in claims
-        subject_type = SubjectType.SERVICE if is_service else SubjectType.USER
 
-        if is_service:
-            subject_id = claims.get(self._client_id_claim, claims.get("sub", "unknown"))
-        else:
-            subject_id = claims.get("sub", "unknown")
+def _extract_service_id(claims: dict[str, Any]) -> str:
+    for key in ("client_id", "clientId"):
+        val = claims.get(key)
+        if isinstance(val, str) and val:
+            return val
 
-        groups = self._extract_groups(claims)
-        scopes = self._extract_scopes(claims)
+    azp = claims.get("azp")
+    if isinstance(azp, str) and azp:
+        return azp
 
-        subject = Subject(
-            id=subject_id,
-            type=subject_type,
-            groups=groups,
-            scopes=scopes,
-            claims=claims,
-        )
+    preferred_username = claims.get("preferred_username")
+    if isinstance(preferred_username, str) and preferred_username.startswith("service-account-"):
+        return preferred_username.replace("service-account-", "", 1)
 
-        logger.debug(
-            "Subject extracted id=%s type=%s groups=%s scopes=%s",
-            subject_id,
-            subject_type.value,
-            groups,
-            scopes,
-        )
-
-        return subject
-
-    def _extract_groups(self, claims: dict[str, Any]) -> list[str]:
-        raw_groups = claims.get(self._groups_claim, [])
-        if not isinstance(raw_groups, list):
-            return []
-
-        groups: list[str] = []
-        for g in raw_groups:
-            if isinstance(g, str):
-                normalized = g.strip("/").split("/")[-1] if g else ""
-                if normalized:
-                    groups.append(normalized)
-        return groups
-
-    def _extract_scopes(self, claims: dict[str, Any]) -> list[str]:
-        raw_scope = claims.get(self._scope_claim, "")
-
-        if isinstance(raw_scope, str):
-            return [s for s in raw_scope.split() if s]
-        if isinstance(raw_scope, list):
-            return [s for s in raw_scope if isinstance(s, str)]
-        return []
+    sub = claims.get("sub")
+    return str(sub) if sub is not None else "unknown-service"
 
 
 def extract_subject_from_claims(claims: dict[str, Any]) -> Subject:
-    return SubjectExtractor().extract(claims)
+    """Extract a Subject from JWT claims."""
+
+    is_service = ("client_id" in claims) or ("clientId" in claims) or _looks_like_service_account(claims)
+
+    if is_service:
+        subject_id = _extract_service_id(claims)
+        return Subject(
+            id=subject_id,
+            type=SubjectType.SERVICE,
+            groups=[],
+            scopes=_extract_scopes(claims),
+            claims=claims,
+        )
+
+    subject_id = str(claims.get("sub") or claims.get("preferred_username") or "unknown-user")
+    return Subject(
+        id=subject_id,
+        type=SubjectType.USER,
+        groups=_extract_groups(claims),
+        scopes=_extract_scopes(claims),
+        claims=claims,
+    )

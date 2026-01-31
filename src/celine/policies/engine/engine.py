@@ -27,6 +27,8 @@ class PolicyEngine:
     Supports hot-reload via copy-on-write pattern.
     """
 
+    cache_stats = None
+
     def __init__(self, policies_dir: Path, data_dir: Path | None = None):
         """Initialize the policy engine.
 
@@ -60,8 +62,12 @@ class PolicyEngine:
                         self._policy_count += 1
                         logger.debug("Loaded policy file=%s", rego_file)
                     except Exception as e:
-                        logger.error("Failed to load policy file=%s error=%s", rego_file, e)
-                        raise PolicyEngineError(f"Failed to load {rego_file}: {e}") from e
+                        logger.error(
+                            "Failed to load policy file=%s error=%s", rego_file, e
+                        )
+                        raise PolicyEngineError(
+                            f"Failed to load {rego_file}: {e}"
+                        ) from e
 
             # Load all data.json files
             if self._data_dir and self._data_dir.exists():
@@ -70,18 +76,26 @@ class PolicyEngine:
                         # Derive data path from file location
                         # e.g., data/celine/roles.json -> data.celine.roles
                         rel_path = data_file.relative_to(self._data_dir)
-                        data_path = "data." + ".".join(
-                            rel_path.with_suffix("").parts
-                        )
+                        data_path = "data." + ".".join(rel_path.with_suffix("").parts)
                         self._engine.add_data_from_json_file(str(data_file))
                         self._data_count += 1
-                        logger.debug("Loaded data file=%s path=%s", data_file, data_path)
+                        logger.debug(
+                            "Loaded data file=%s path=%s", data_file, data_path
+                        )
                     except Exception as e:
-                        logger.error("Failed to load data file=%s error=%s", data_file, e)
-                        raise PolicyEngineError(f"Failed to load {data_file}: {e}") from e
+                        logger.error(
+                            "Failed to load data file=%s error=%s", data_file, e
+                        )
+                        raise PolicyEngineError(
+                            f"Failed to load {data_file}: {e}"
+                        ) from e
 
             self._loaded = True
-            logger.info("Policy engine loaded policies=%s data_files=%s", self._policy_count, self._data_count)
+            logger.info(
+                "Policy engine loaded policies=%s data_files=%s",
+                self._policy_count,
+                self._data_count,
+            )
 
     def reload(self) -> None:
         """Hot-reload policies (thread-safe)."""
@@ -177,20 +191,31 @@ class PolicyEngine:
             filters_result = self.evaluate(filters_rule, input_dict)
             raw_filters = filters_result.get("value", [])
             if isinstance(raw_filters, list):
-                filters = [FilterPredicate(**f) for f in raw_filters if isinstance(f, dict)]
+                filters = [
+                    FilterPredicate(**f) for f in raw_filters if isinstance(f, dict)
+                ]
         except PolicyEngineError:
             pass  # Filters are optional
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-        logger.debug("Policy evaluated package=%s allowed=%s latency_ms=%s", policy_package, allowed, round(elapsed_ms, 2))
+        logger.debug(
+            "Policy evaluated package=%s allowed=%s latency_ms=%s",
+            policy_package,
+            allowed,
+            round(elapsed_ms, 2),
+        )
 
         return Decision(
             allowed=allowed,
             reason=reason,
             policy=policy_package,
             filters=filters,
+            cached=False,
         )
+
+    def build_input_dict(self, policy_input: PolicyInput) -> dict[str, Any]:
+        return self._build_input(policy_input)
 
     def _build_input(self, policy_input: PolicyInput) -> dict[str, Any]:
         """Build OPA input from PolicyInput."""
@@ -219,5 +244,3 @@ class PolicyEngine:
             result["subject"] = None
 
         return result
-
-

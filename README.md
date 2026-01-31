@@ -102,8 +102,8 @@ admins (level 4) > managers (level 3) > editors (level 2) > viewers (level 1)
 | `dataset.query` | Read internal datasets |
 | `dataset.admin` | Read/write all datasets |
 | `pipeline.execute` | Execute pipeline transitions |
-| `twin.read` | Read twin data |
-| `twin.write` | Write twin data |
+| `dt.read` | Read dt data |
+| `dt.write` | Write dt data |
 | `mqtt.admin` | Full MQTT access |
 
 ## API Endpoints
@@ -120,14 +120,13 @@ Evaluates any policy based on resource type.
 
 ```
 POST /dataset/access   - Check dataset access
-POST /dataset/filter   - Get row-level filters
+POST /dataset/filters  - Get row-level filters
 ```
 
 ### Pipeline
 
 ```
 POST /pipeline/transition  - Validate state transition
-GET  /pipeline/states      - List valid states
 ```
 
 ### MQTT (mosquitto-go-auth)
@@ -174,7 +173,7 @@ policies/
     │   └── access_test.rego
     ├── pipeline/
     │   └── state.rego    # State machine
-    ├── twin/
+    ├── dt/
     │   └── access.rego
     ├── mqtt/
     │   └── acl.rego

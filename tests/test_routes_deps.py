@@ -1,10 +1,11 @@
 import pytest
 from fastapi import HTTPException
 
+from celine.policies.auth.jwt import JWTValidator
 from celine.policies.routes import deps
 
 
-class FakeValidator:
+class FakeValidator(JWTValidator):
     def __init__(self, claims=None, exc=None):
         self._claims = claims
         self._exc = exc
@@ -31,6 +32,8 @@ async def test_get_subject_rejects_bad_header(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_subject_valid(monkeypatch):
     claims = {"sub": "u1", "iat": 1, "exp": 2, "iss": "x", "groups": ["g"]}
-    subj = await deps.get_subject(authorization="Bearer token", jwt_validator=FakeValidator(claims=claims))
+    subj = await deps.get_subject(
+        authorization="Bearer token", jwt_validator=FakeValidator(claims=claims)
+    )
     assert subj is not None
     assert subj.id == "u1"

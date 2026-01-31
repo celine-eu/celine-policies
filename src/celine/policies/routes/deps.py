@@ -2,25 +2,24 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
 
+from celine.policies.api import PolicyAPI
 from celine.policies.auth.jwt import JWTValidationError
 from celine.policies.auth.subject import extract_subject_from_claims
-from celine.policies.models import Subject
-
 from celine.policies.audit import AuditLogger
 from celine.policies.auth import JWKSCache, JWTValidator
 from celine.policies.config import settings
 from celine.policies.engine import CachedPolicyEngine, DecisionCache, PolicyEngine
-from celine.policies.logs import configure_logging as configure_app_logging
+from celine.policies.models import Subject
 
 
 _policy_engine: CachedPolicyEngine | None = None
 _jwt_validator: JWTValidator | None = None
 _audit_logger: AuditLogger | None = None
+_policy_api: PolicyAPI | None = None
 
 
-async def init_deps():
-
-    global _policy_engine, _jwt_validator, _audit_logger
+async def init_deps() -> None:
+    global _policy_engine, _jwt_validator, _audit_logger, _policy_api
 
     engine = PolicyEngine(
         policies_dir=settings.policies_dir,
@@ -54,7 +53,10 @@ async def init_deps():
         log_inputs=settings.audit_log_inputs,
     )
 
-def get_policy_engine() -> CachedPolicyEngine:
+    _policy_api = PolicyAPI(engine=_policy_engine, audit=_audit_logger)
+
+
+def get_policy_engine() -> PolicyEngine:
     if _policy_engine is None:
         raise RuntimeError("Policy engine not initialized")
     return _policy_engine
@@ -72,26 +74,27 @@ def get_audit_logger() -> AuditLogger:
     return _audit_logger
 
 
-def raise_401(detail = "Unauthorized"):
+def get_policy_api() -> PolicyAPI:
+    if _policy_api is None:
+        raise RuntimeError("Policy API not initialized")
+    return _policy_api
+
+
+def raise_401(detail: str = "Unauthorized") -> None:
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=detail,
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+
 async def get_subject(
     authorization: Annotated[str | None, Header()] = None,
-    jwt_validator=Depends(get_jwt_validator),
+    jwt_validator: JWTValidator = Depends(get_jwt_validator),
 ) -> Subject | None:
-    """Extract subject from Authorization header.
-
-    Returns None for anonymous access (no header or invalid token).
-    Raises HTTPException for malformed tokens.
-    """
     if not authorization:
         return None
 
-    # Extract token from "Bearer <token>"
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
         raise_401("Invalid authorization header format")
@@ -101,5 +104,5 @@ async def get_subject(
     try:
         claims = jwt_validator.validate(token)
         return extract_subject_from_claims(claims)
-    except JWTValidationError as e:
+    except JWTValidationError:
         raise_401()

@@ -9,68 +9,41 @@ import rego.v1
 
 import data.celine.common.subject
 
-# Default: no filters (full access if allowed)
 default filters := []
-
-# Default allow (row filters are additive to access policy)
 default allow := true
+
+full_classifications := {"public", "internal", "confidential"}
 
 # =============================================================================
 # FILTER ACCUMULATOR
 # =============================================================================
 
-# Collect filters in a set, then expose them as a list via `filters`
 filter_set contains filter if {
-    # ORGANIZATION-BASED FILTERING (user)
-    subject.is_user
-    org_id := input.subject.claims.organization
-    org_id != null
-    filter := {
-        "field": "organization_id",
-        "operator": "eq",
-        "value": org_id,
-    }
+	not subject.is_anonymous
+	org_id := input.subject.claims.organization
+	org_id != null
+	filter := {
+		"field": "organization_id",
+		"operator": "eq",
+		"value": org_id,
+	}
 }
 
 filter_set contains filter if {
-    # ORGANIZATION-BASED FILTERING (service)
-    subject.is_service
-    org_id := input.subject.claims.organization
-    org_id != null
-    filter := {
-        "field": "organization_id",
-        "operator": "eq",
-        "value": org_id,
-    }
+	input.resource.attributes.access_level == "internal"
+	needs_classification_filter
+	allowed := allowed_classifications
+	filter := {
+		"field": "classification",
+		"operator": "in",
+		"value": allowed,
+	}
 }
 
-filter_set contains filter if {
-    # CLASSIFICATION-BASED FILTERING (viewers)
-    input.resource.attributes.access_level == "internal"
-    subject.is_user
-    subject.in_group("viewers")
-    not subject.in_any_group(["editors", "managers", "admins"])
-    filter := {
-        "field": "classification",
-        "operator": "eq",
-        "value": "public",
-    }
+needs_classification_filter if {
+	allowed := allowed_classifications_set
+	count(allowed) < count(full_classifications)
 }
-
-filter_set contains filter if {
-    # CLASSIFICATION-BASED FILTERING (editors)
-    input.resource.attributes.access_level == "internal"
-    subject.is_user
-    subject.in_group("editors")
-    not subject.in_any_group(["managers", "admins"])
-    filter := {
-        "field": "classification",
-        "operator": "in",
-        "value": ["public", "internal"],
-    }
-}
-
-# Managers/admins: no classification filter
 
 # =============================================================================
 # MATERIALIZE FILTERS AS LIST
@@ -79,33 +52,32 @@ filter_set contains filter if {
 filters := [f | f := filter_set[_]]
 
 # =============================================================================
-# HELPERS
+# CLASSIFICATION DERIVATION (group hierarchy ∩ client scopes)
 # =============================================================================
 
-allowed_classifications := ["public", "internal", "confidential"] if {
-    subject.is_user
-    subject.in_any_group(["managers", "admins"])
+allowed_classifications := [c | c := allowed_classifications_set[_]]
+
+allowed_classifications_set := {c |
+	c := group_allowed_set[_]
+	c in scope_allowed_set
 }
 
-allowed_classifications := ["public", "internal"] if {
-    subject.is_user
-    subject.in_group("editors")
-    not subject.in_any_group(["managers", "admins"])
-}
+group_allowed_set := {"public", "internal", "confidential"} if {
+	subject.is_user
+	subject.has_group_level(subject.level_manager)
+} else := {"public", "internal"} if {
+	subject.is_user
+	subject.has_group_level(subject.level_editor)
+} else := {"public"} if {
+	subject.is_user
+	subject.has_group_level(subject.level_viewer)
+} else := {"public", "internal", "confidential"} if {
+	subject.is_service
+} else := {"public"}
 
-allowed_classifications := ["public"] if {
-    subject.is_user
-    subject.in_group("viewers")
-    not subject.in_any_group(["editors", "managers", "admins"])
-}
-
-allowed_classifications := ["public", "internal", "confidential"] if {
-    subject.is_service
-    subject.has_scope("dataset.admin")
-}
-
-allowed_classifications := ["public", "internal"] if {
-    subject.is_service
-    subject.has_scope("dataset.query")
-    not subject.has_scope("dataset.admin")
-}
+scope_allowed_set := {"public", "internal", "confidential"} if {
+	subject.has_scope("dataset.admin")
+} else := {"public", "internal"} if {
+	subject.has_scope("dataset.query")
+	not subject.has_scope("dataset.admin")
+} else := {"public"}

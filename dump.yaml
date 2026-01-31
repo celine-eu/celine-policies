@@ -10,6 +10,7 @@ contents:
   - src
   - scripts
   - policies
+  - tests
   - README.md
   - docker-compose.yaml
   - Dockerfile

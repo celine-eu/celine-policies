@@ -1,142 +1,140 @@
 # METADATA
 # title: Digital Twin Access and Event Policy
-# description: Controls access to digital twins and event generation
+# description: Controls access to digital twins (dt) and event emission
 # scope: package
 # entrypoint: true
-package celine.twin.access
+package celine.dt.access
 
 import rego.v1
 
 import data.celine.common.subject
 
-# Default deny
 default allow := false
-
 default reason := ""
 
 # =============================================================================
 # READ ACCESS
 # =============================================================================
 
-# Any authenticated user can read twin data
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "read"
 	subject.is_user
 	subject.has_group_level(subject.level_viewer)
+	subject.has_any_scope(["dt.read", "dt.write", "dt.admin"])
 }
 
-reason := "user can read twin data" if {
-	input.resource.type == "twin"
+reason := "user can read dt data" if {
+	input.resource.type == "dt"
 	input.action.name == "read"
 	subject.is_user
 	subject.has_group_level(subject.level_viewer)
+	subject.has_any_scope(["dt.read", "dt.write", "dt.admin"])
 }
 
-# Services with twin.read scope can read
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "read"
 	subject.is_service
-	subject.has_any_scope(["twin.read", "twin.write", "twin.admin"])
+	subject.has_any_scope(["dt.read", "dt.write", "dt.admin"])
 }
 
-reason := "service has twin read scope" if {
-	input.resource.type == "twin"
+reason := "service has dt read scope" if {
+	input.resource.type == "dt"
 	input.action.name == "read"
 	subject.is_service
-	subject.has_any_scope(["twin.read", "twin.write", "twin.admin"])
+	subject.has_any_scope(["dt.read", "dt.write", "dt.admin"])
 }
 
 # =============================================================================
 # WRITE ACCESS
 # =============================================================================
 
-# Editors+ can write twin configuration
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "write"
 	subject.is_user
 	subject.has_group_level(subject.level_editor)
+	subject.has_any_scope(["dt.write", "dt.admin"])
 }
 
-reason := "user can write twin data" if {
-	input.resource.type == "twin"
+reason := "user can write dt data" if {
+	input.resource.type == "dt"
 	input.action.name == "write"
 	subject.is_user
 	subject.has_group_level(subject.level_editor)
+	subject.has_any_scope(["dt.write", "dt.admin"])
 }
 
-# Services with twin.write scope can write
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "write"
 	subject.is_service
-	subject.has_any_scope(["twin.write", "twin.admin"])
+	subject.has_any_scope(["dt.write", "dt.admin"])
 }
 
-reason := "service has twin write scope" if {
-	input.resource.type == "twin"
+reason := "service has dt write scope" if {
+	input.resource.type == "dt"
 	input.action.name == "write"
 	subject.is_service
-	subject.has_any_scope(["twin.write", "twin.admin"])
+	subject.has_any_scope(["dt.write", "dt.admin"])
 }
 
 # =============================================================================
 # SIMULATE ACCESS
 # =============================================================================
 
-# Managers+ can run simulations
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "simulate"
 	subject.is_user
 	subject.has_group_level(subject.level_manager)
+	subject.has_any_scope(["dt.simulate", "dt.admin"])
 }
 
 reason := "user can run simulations" if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "simulate"
 	subject.is_user
 	subject.has_group_level(subject.level_manager)
+	subject.has_any_scope(["dt.simulate", "dt.admin"])
 }
 
-# Services with twin.simulate scope can simulate
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "simulate"
 	subject.is_service
-	subject.has_any_scope(["twin.simulate", "twin.admin"])
+	subject.has_any_scope(["dt.simulate", "dt.admin"])
 }
 
-reason := "service has twin simulate scope" if {
-	input.resource.type == "twin"
+reason := "service has dt simulate scope" if {
+	input.resource.type == "dt"
 	input.action.name == "simulate"
 	subject.is_service
-	subject.has_any_scope(["twin.simulate", "twin.admin"])
+	subject.has_any_scope(["dt.simulate", "dt.admin"])
 }
 
 # =============================================================================
 # ADMIN ACCESS
 # =============================================================================
 
-# Only admins can administer twins
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "admin"
 	subject.is_user
 	subject.has_group_level(subject.level_admin)
+	subject.has_scope("dt.admin")
 }
 
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "admin"
 	subject.is_service
-	subject.has_scope("twin.admin")
+	subject.has_scope("dt.admin")
 }
 
 reason := "admin access granted" if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "admin"
 	allow
 }
@@ -145,27 +143,24 @@ reason := "admin access granted" if {
 # EVENT EMISSION
 # =============================================================================
 
-# Services can emit events if they have appropriate scope
 allow if {
-	input.resource.type == "twin"
+	input.resource.type == "dt"
 	input.action.name == "emit_event"
 	subject.is_service
 	can_emit_event
 }
 
 can_emit_event if {
-	subject.has_any_scope(["twin.write", "twin.simulate", "twin.admin"])
+	subject.has_any_scope(["dt.write", "dt.simulate", "dt.admin"])
 }
 
-# Event type restrictions could be added here
-# e.g., only simulation services can emit simulation events
 can_emit_event if {
 	input.action.context.event_type == "simulation"
-	subject.has_scope("twin.simulate")
+	subject.has_any_scope(["dt.simulate", "dt.admin"])
 }
 
-reason := "service can emit twin events" if {
-	input.resource.type == "twin"
+reason := "service can emit dt events" if {
+	input.resource.type == "dt"
 	input.action.name == "emit_event"
 	subject.is_service
 	can_emit_event

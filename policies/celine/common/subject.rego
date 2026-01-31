@@ -38,15 +38,16 @@ in_any_group(groups) if {
 	group in input.subject.groups
 }
 
-# Check if service has a specific scope
+# Check if subject has a specific scope (users and services).
+# For user tokens, scopes represent the client scopes granted to the requesting client.
 has_scope(scope) if {
-	is_service
+	input.subject != null
 	scope in input.subject.scopes
 }
 
-# Check if service has any of the specified scopes
+# Check if subject has any of the specified scopes (users and services).
 has_any_scope(scopes) if {
-	is_service
+	input.subject != null
 	some scope in scopes
 	scope in input.subject.scopes
 }
@@ -97,9 +98,6 @@ group_level(groups) := 0 if {
 
 # Level constants for readability
 level_admin := 4
-
 level_manager := 3
-
 level_editor := 2
-
 level_viewer := 1

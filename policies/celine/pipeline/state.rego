@@ -9,26 +9,18 @@ import rego.v1
 
 import data.celine.common.subject
 
-# Default deny
 default allow := false
-
 default reason := ""
 
-# =============================================================================
-# VALID STATE TRANSITIONS
-# =============================================================================
-
-# Define valid state machine transitions
 valid_transitions := {
 	"pending": {"started", "cancelled"},
 	"started": {"running", "failed", "cancelled"},
 	"running": {"completed", "failed", "cancelled"},
 	"completed": set(),
-	"failed": {"pending"}, # Allow retry
-	"cancelled": {"pending"}, # Allow restart
+	"failed": {"pending"},
+	"cancelled": {"pending"},
 }
 
-# Check if transition is valid in state machine
 is_valid_transition if {
 	from_state := input.action.context.from_state
 	to_state := input.action.context.to_state
@@ -40,16 +32,15 @@ is_valid_transition if {
 # AUTHORIZATION RULES
 # =============================================================================
 
-# Users can trigger transitions if they have appropriate group level
 allow if {
 	input.resource.type == "pipeline"
 	input.action.name == "transition"
 	is_valid_transition
 	subject.is_user
+	subject.has_any_scope(["pipeline.execute", "pipeline.admin"])
 	can_user_transition
 }
 
-# Services can trigger transitions if they have pipeline scope
 allow if {
 	input.resource.type == "pipeline"
 	input.action.name == "transition"
@@ -59,39 +50,31 @@ allow if {
 }
 
 # =============================================================================
-# USER TRANSITION PERMISSIONS
+# USER TRANSITION PERMISSIONS (group hierarchy)
 # =============================================================================
 
-# Viewers cannot trigger any transitions
-# Editors can start and view
 can_user_transition if {
-	subject.in_group("editors")
+	subject.has_group_level(subject.level_editor)
 	input.action.context.to_state in {"started", "running"}
 }
 
-# Managers can also cancel and retry
 can_user_transition if {
-	subject.in_group("managers")
+	subject.has_group_level(subject.level_manager)
 	input.action.context.to_state in {"started", "running", "cancelled", "pending"}
 }
 
-# Admins can do everything including marking complete/failed
 can_user_transition if {
-	subject.in_group("admins")
+	subject.has_group_level(subject.level_admin)
 }
 
 # =============================================================================
-# SERVICE TRANSITION PERMISSIONS
+# SERVICE TRANSITION PERMISSIONS (scopes only)
 # =============================================================================
 
-# Services with pipeline.execute can trigger execution transitions
 can_service_transition if {
 	subject.has_scope("pipeline.execute")
 	input.action.context.to_state in {"started", "running", "completed", "failed"}
-}
-
-# Services with pipeline.admin can do everything
-can_service_transition if {
+} else if {
 	subject.has_scope("pipeline.admin")
 }
 
@@ -99,7 +82,6 @@ can_service_transition if {
 # READ ACCESS
 # =============================================================================
 
-# Anyone authenticated can read pipeline state
 allow if {
 	input.resource.type == "pipeline"
 	input.action.name == "read"
@@ -127,11 +109,20 @@ reason := "invalid state transition" if {
 	not is_valid_transition
 }
 
+reason := "missing pipeline scope for requesting client" if {
+	not allow
+	input.action.name == "transition"
+	is_valid_transition
+	subject.is_user
+	not subject.has_any_scope(["pipeline.execute", "pipeline.admin"])
+}
+
 reason := "insufficient privileges for transition" if {
 	not allow
 	input.action.name == "transition"
 	is_valid_transition
 	subject.is_user
+	subject.has_any_scope(["pipeline.execute", "pipeline.admin"])
 	not can_user_transition
 }
 
@@ -143,15 +134,9 @@ reason := "insufficient scope for transition" if {
 	not can_service_transition
 }
 
-# =============================================================================
-# HELPERS FOR CONSUMERS
-# =============================================================================
-
-# List all valid target states from current state
 valid_target_states := targets if {
 	from_state := input.action.context.from_state
 	targets := valid_transitions[from_state]
 }
 
-# Get all states
 all_states := {"pending", "started", "running", "completed", "failed", "cancelled"}

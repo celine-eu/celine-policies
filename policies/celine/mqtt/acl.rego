@@ -22,7 +22,7 @@ reason := msg if {
   msg := deny_reason
 }
 
-# Backward compatibility for /mqtt/superuser (if you still evaluate this path)
+# Backward compatibility for /mqtt/superuser
 superuser if {
   subject_has_group_name("admins")
 } else if {
@@ -36,20 +36,21 @@ superuser if {
 # Capability layer (roles.json)
 #
 # roles.json must be mounted at data.celine.roles
-# - group_permissions: {group: ["read","write",...]}
-# - scope_permissions: {scope: ["read","write",...]}
+# - group_permissions: {group: ["read","publish","subscribe","superuser",...]}
+# - scope_permissions: {scope: ["read","publish","subscribe","superuser",...]}
 #
-# MQTT actions are "publish" and "subscribe" (and optionally "superuser")
-# You should map these in roles.json permissions lists.
+# MQTT actions:
+# - subscribe  (MOSQ_ACL_SUBSCRIBE)
+# - read       (MOSQ_ACL_READ)
+# - publish    (MOSQ_ACL_WRITE)
+# - superuser  (optional)
 ################################################################################
 
 has_capability_for_action(act) if {
-  # via group permissions
   some grp_name in input.subject.groups
   perms := data.celine.roles.group_permissions[grp_name]
   perms[_] == act
 } else if {
-  # via scope permissions
   some scope_name in input.subject.scopes
   perms := data.celine.roles.scope_permissions[scope_name]
   perms[_] == act
@@ -74,13 +75,11 @@ acl_rule_matches(rule, topic) if {
 }
 
 rule_effect_allows(rule) if {
-  # missing effect => allow by default
   not rule.effect
 } else if {
   rule.effect == "allow"
 }
 
-# If rule.actions missing => treat as "*"
 rule_actions_match(actions) if {
   actions == "*"
 } else if {
@@ -90,7 +89,6 @@ rule_actions_match(actions) if {
   act == input.action.name
 }
 
-# If rule.topics missing => treat as "*"
 rule_topics_match(topics, topic) if {
   topics == "*"
 } else if {
@@ -100,7 +98,6 @@ rule_topics_match(topics, topic) if {
   topic_match(pat, topic)
 }
 
-# If rule.subjects missing => match any subject
 rule_subjects_match(subjects) if {
   not subjects
 } else if {
@@ -146,42 +143,6 @@ subject_scopes_match(subjects) if {
   subject_has_scope_pattern(sp)
 }
 
-subject_types_match(types) if {
-  not types
-} else if {
-  types == "*"
-} else if {
-  some tval in types
-  tval == input.subject.type
-}
-
-subject_ids_match(ids) if {
-  not ids
-} else if {
-  ids == "*"
-} else if {
-  some idval in ids
-  idval == input.subject.id
-}
-
-subject_groups_match(groups) if {
-  not groups
-} else if {
-  groups == "*"
-} else if {
-  some gname in groups
-  subject_has_group_name(gname)
-}
-
-subject_scopes_match(scopes) if {
-  not scopes
-} else if {
-  scopes == "*"
-} else if {
-  some sp in scopes
-  subject_has_scope_pattern(sp)
-}
-
 ################################################################################
 # Subject helpers
 ################################################################################
@@ -192,7 +153,6 @@ subject_has_group_name(gname) if {
   sg == gname
 }
 
-# Supports exact scope and prefix wildcard like "mqtt.*"
 subject_has_scope_pattern(pattern) if {
   input.subject != null
   some have in input.subject.scopes
@@ -209,9 +169,6 @@ scope_pattern_match(pattern, have) if {
 
 ################################################################################
 # Topic matching (MQTT wildcards # and +) - Rego v1 compatible using glob.match
-#
-# - '+' matches exactly one level (no '/')
-# - '#' matches multi-level suffix
 ################################################################################
 
 topic_match(pattern, topic) if {
@@ -227,15 +184,11 @@ topic_match(pattern, topic) if {
   prefix := trim_suffix(pattern, "/#")
   startswith(topic, sprintf("%s/", [prefix]))
 } else if {
-  # Convert MQTT pattern to glob:
-  #   '+' -> '*'
-  #   '# ' is only valid at end; we already handled '/#' and '#'
   glob_pat := mqtt_to_glob(pattern)
   glob.match(glob_pat, ["/"], topic)
 }
 
 mqtt_to_glob(pat) := out if {
-  # replace '+' with '*' for single-segment match
   out := replace(pat, "+", "*")
 }
 

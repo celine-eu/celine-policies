@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from celine.policies.audit import configure_audit_logging
-from celine.policies.config import Settings, settings
+from celine.policies.config import settings
 from celine.policies.logs import configure_logging as configure_app_logging
 from celine.policies.routes.deps import init_deps
 from celine.policies.routes import (
@@ -18,7 +18,7 @@ from celine.policies.routes import (
     dataset_router,
     health_router,
     mqtt_router,
-    pipeline_router,    
+    pipeline_router,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,9 +72,12 @@ def create_app() -> FastAPI:
     app.include_router(mqtt_router)
 
     @app.exception_handler(Exception)
-    async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    async def global_exception_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
         logger.exception("Unhandled exception", exc_info=exc)
-        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        return JSONResponse(
+            status_code=500, content={"detail": "Internal server error"}
+        )
 
     return app
-

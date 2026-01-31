@@ -24,13 +24,9 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
-    # Server
-    host: str = "0.0.0.0"
-    port: int = 8000
-
     # Policies
     policies_dir: Path = Field(default=Path("policies"))
-    data_dir: Path = Field(default=Path("data"))
+    data_dir: Path = Field(default=Path("policies/data"))
 
     # JWT / OIDC
     oidc_issuer: str = "http://keycloak.celine.localhost/realms/celine"
@@ -65,5 +61,3 @@ settings = Settings()
 def get_settings() -> Settings:
     """Backward-compatible alias for the module-level settings singleton."""
     return settings
-
-

@@ -3,7 +3,7 @@ from celine.policies.models import SubjectType
 
 
 def test_extract_user_subject_from_groups():
-    claims = {"sub": "user-1", "groups": ["/realm/admins", "/realm/users"]}
+    claims = {"sub": "user-1", "groups": ["/admins", "/users"]}
     subj = extract_subject_from_claims(claims)
     assert subj.id == "user-1"
     assert subj.type == SubjectType.USER
@@ -23,4 +23,4 @@ def test_extract_subject_handles_bad_claim_types():
     subj = extract_subject_from_claims(claims)
     assert subj.id == "user-2"
     assert subj.groups == []
-    assert subj.scopes == ["a"]
+    assert subj.scopes == ["1", "a"]

@@ -1,0 +1,61 @@
+{
+  "celine": {
+    "mqtt": {
+      "acl": {
+        "rules": [
+          {
+            "actions": "*",
+            "effect": "allow",
+            "subjects": {
+              "groups": [
+                "admins"
+              ]
+            },
+            "topics": [
+              "#"
+            ]
+          }
+        ]
+      }
+    },
+    "roles": {
+      "group_permissions": {
+        "admins": [
+          "subscribe",
+          "read",
+          "publish",
+          "superuser"
+        ],
+        "editors": [
+          "subscribe",
+          "read",
+          "publish"
+        ],
+        "managers": [
+          "subscribe",
+          "read",
+          "publish"
+        ],
+        "viewers": [
+          "subscribe",
+          "read"
+        ]
+      },
+      "scope_permissions": {
+        "mqtt.admin": [
+          "subscribe",
+          "read",
+          "publish",
+          "superuser"
+        ],
+        "mqtt.read": [
+          "subscribe",
+          "read"
+        ],
+        "mqtt.write": [
+          "publish"
+        ]
+      }
+    }
+  }
+}

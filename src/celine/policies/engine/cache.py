@@ -9,7 +9,14 @@ from typing import Any
 import logging
 from cachetools import TTLCache
 
+from celine.policies.config import settings
+from celine.policies.engine.engine import PolicyEngine
 from celine.policies.models import Decision
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from celine.policies.engine.engine import PolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +34,9 @@ class DecisionCache:
             maxsize: Maximum number of entries
             ttl_seconds: Time-to-live in seconds
         """
-        self._cache: TTLCache[str, Decision] = TTLCache(maxsize=maxsize, ttl=ttl_seconds)
+        self._cache: TTLCache[str, Decision] = TTLCache(
+            maxsize=maxsize, ttl=ttl_seconds
+        )
         self._lock = threading.RLock()
         self._hits = 0
         self._misses = 0
@@ -86,7 +95,9 @@ class DecisionCache:
             keys_to_remove = [k for k in self._cache if k.startswith(f"{policy}:")]
             for key in keys_to_remove:
                 del self._cache[key]
-            logger.info("Cache invalidated policy=%s entries=%s", policy, len(keys_to_remove))
+            logger.info(
+                "Cache invalidated policy=%s entries=%s", policy, len(keys_to_remove)
+            )
             return len(keys_to_remove)
 
     @property
@@ -147,12 +158,12 @@ class DecisionCache:
         return result
 
 
-class CachedPolicyEngine:
+class CachedPolicyEngine(PolicyEngine):
     """Policy engine with integrated caching."""
 
     def __init__(
         self,
-        engine: Any,  # PolicyEngine - avoiding circular import
+        engine: "PolicyEngine",  # PolicyEngine - avoiding circular import
         cache: DecisionCache | None = None,
         cache_enabled: bool = True,
     ):
@@ -163,6 +174,7 @@ class CachedPolicyEngine:
             cache: Optional cache instance (creates default if None)
             cache_enabled: Whether caching is enabled
         """
+        super().__init__(settings.policies_dir, settings.data_dir)
         self._engine = engine
         self._cache = cache or DecisionCache()
         self._cache_enabled = cache_enabled
@@ -172,7 +184,7 @@ class CachedPolicyEngine:
         policy_package: str,
         policy_input: Any,  # PolicyInput
         skip_cache: bool = False,
-    ) -> tuple[Decision, bool]:
+    ) -> Decision:
         """Evaluate policy with caching.
 
         Args:
@@ -189,7 +201,8 @@ class CachedPolicyEngine:
         if self._cache_enabled and not skip_cache:
             cached = self._cache.get(policy_package, input_dict)
             if cached is not None:
-                return cached, True
+                cached.cached = True
+                return cached
 
         # Evaluate policy
         decision = self._engine.evaluate_decision(policy_package, policy_input)
@@ -198,7 +211,7 @@ class CachedPolicyEngine:
         if self._cache_enabled and not skip_cache:
             self._cache.set(policy_package, input_dict, decision)
 
-        return decision, False
+        return decision
 
     def invalidate_cache(self, policy: str | None = None) -> int:
         """Invalidate cache entries."""
@@ -208,9 +221,3 @@ class CachedPolicyEngine:
     def cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         return self._cache.stats
-
-    # Delegate other methods to underlying engine
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._engine, name)
-
-

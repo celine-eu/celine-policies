@@ -7,7 +7,6 @@ package celine.dataset.access
 
 import rego.v1
 
-import data.celine.common.access_levels
 import data.celine.common.subject
 
 # Default deny
@@ -32,42 +31,42 @@ reason := "open datasets are publicly readable" if {
 }
 
 # =============================================================================
-# INTERNAL DATASETS - Users
+# INTERNAL DATASETS
 # =============================================================================
 
-# Users in viewers+ groups can read internal datasets
+# Users (viewers+) can read internal datasets if the calling client has dataset.query (or admin)
 allow if {
 	input.resource.attributes.access_level == "internal"
 	input.action.name == "read"
 	subject.is_user
 	subject.has_group_level(subject.level_viewer)
+	subject.has_any_scope(["dataset.query", "dataset.admin"])
 }
 
-reason := "user has viewer access to internal datasets" if {
+reason := "user has viewer access and client has dataset.query scope" if {
 	input.resource.attributes.access_level == "internal"
 	input.action.name == "read"
 	subject.is_user
 	subject.has_group_level(subject.level_viewer)
+	subject.has_any_scope(["dataset.query", "dataset.admin"])
 }
 
-# Users in editors+ groups can write internal datasets
+# Users (editors+) can write internal datasets if the calling client has dataset.admin
 allow if {
 	input.resource.attributes.access_level == "internal"
 	input.action.name == "write"
 	subject.is_user
 	subject.has_group_level(subject.level_editor)
+	subject.has_scope("dataset.admin")
 }
 
-reason := "user has editor access to internal datasets" if {
+reason := "user has editor access and client has dataset.admin scope" if {
 	input.resource.attributes.access_level == "internal"
 	input.action.name == "write"
 	subject.is_user
 	subject.has_group_level(subject.level_editor)
+	subject.has_scope("dataset.admin")
 }
-
-# =============================================================================
-# INTERNAL DATASETS - Services
-# =============================================================================
 
 # Services with dataset.query scope can read internal datasets
 allow if {
@@ -100,42 +99,25 @@ reason := "service has dataset.admin scope" if {
 }
 
 # =============================================================================
-# RESTRICTED DATASETS - Users
+# RESTRICTED DATASETS
 # =============================================================================
 
-# Only admins can read restricted datasets
+# Only admins can read/write restricted datasets and the calling client must have dataset.admin
 allow if {
 	input.resource.attributes.access_level == "restricted"
-	input.action.name == "read"
+	input.action.name in {"read", "write"}
 	subject.is_user
 	subject.has_group_level(subject.level_admin)
+	subject.has_scope("dataset.admin")
 }
 
-reason := "user has admin access to restricted datasets" if {
+reason := "user has admin access and client has dataset.admin scope" if {
 	input.resource.attributes.access_level == "restricted"
-	input.action.name == "read"
+	input.action.name in {"read", "write"}
 	subject.is_user
 	subject.has_group_level(subject.level_admin)
+	subject.has_scope("dataset.admin")
 }
-
-# Only admins can write restricted datasets
-allow if {
-	input.resource.attributes.access_level == "restricted"
-	input.action.name == "write"
-	subject.is_user
-	subject.has_group_level(subject.level_admin)
-}
-
-reason := "user has admin access to restricted datasets" if {
-	input.resource.attributes.access_level == "restricted"
-	input.action.name == "write"
-	subject.is_user
-	subject.has_group_level(subject.level_admin)
-}
-
-# =============================================================================
-# RESTRICTED DATASETS - Services
-# =============================================================================
 
 # Only services with dataset.admin scope can access restricted datasets
 allow if {
@@ -156,11 +138,12 @@ reason := "service has dataset.admin scope for restricted access" if {
 # ADMIN ACTIONS
 # =============================================================================
 
-# Admin action requires admin group or dataset.admin scope
+# Admin action requires admin group and dataset.admin scope (users) or dataset.admin scope (services)
 allow if {
 	input.action.name == "admin"
 	subject.is_user
 	subject.has_group_level(subject.level_admin)
+	subject.has_scope("dataset.admin")
 }
 
 allow if {
@@ -182,6 +165,14 @@ reason := "anonymous access denied for non-open datasets" if {
 	not allow
 	subject.is_anonymous
 	input.resource.attributes.access_level != "open"
+}
+
+reason := "missing dataset scope for requesting client" if {
+	not allow
+	not subject.is_anonymous
+	subject.is_user
+	input.resource.attributes.access_level != "open"
+	not subject.has_any_scope(["dataset.query", "dataset.admin"])
 }
 
 reason := "insufficient group privileges" if {

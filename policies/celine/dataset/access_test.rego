@@ -51,6 +51,24 @@ test_internal_dataset_viewer_read_allowed if {
 			"id": "user-1",
 			"type": "user",
 			"groups": ["viewers"],
+			"scopes": ["dataset.query"],
+			"claims": {},
+		},
+		"resource": {
+			"type": "dataset",
+			"id": "ds-internal",
+			"attributes": {"access_level": "internal"},
+		},
+		"action": {"name": "read", "context": {}},
+	}
+}
+
+test_internal_dataset_viewer_read_denied_without_scope if {
+	not access.allow with input as {
+		"subject": {
+			"id": "user-1",
+			"type": "user",
+			"groups": ["viewers"],
 			"scopes": [],
 			"claims": {},
 		},
@@ -69,7 +87,7 @@ test_internal_dataset_viewer_write_denied if {
 			"id": "user-1",
 			"type": "user",
 			"groups": ["viewers"],
-			"scopes": [],
+			"scopes": ["dataset.query"],
 			"claims": {},
 		},
 		"resource": {
@@ -87,7 +105,7 @@ test_internal_dataset_editor_write_allowed if {
 			"id": "user-1",
 			"type": "user",
 			"groups": ["editors"],
-			"scopes": [],
+			"scopes": ["dataset.admin"],
 			"claims": {},
 		},
 		"resource": {
@@ -179,7 +197,7 @@ test_restricted_dataset_viewer_denied if {
 			"id": "user-1",
 			"type": "user",
 			"groups": ["viewers"],
-			"scopes": [],
+			"scopes": ["dataset.query"],
 			"claims": {},
 		},
 		"resource": {
@@ -197,7 +215,7 @@ test_restricted_dataset_manager_denied if {
 			"id": "user-1",
 			"type": "user",
 			"groups": ["managers"],
-			"scopes": [],
+			"scopes": ["dataset.query"],
 			"claims": {},
 		},
 		"resource": {
@@ -215,7 +233,7 @@ test_restricted_dataset_admin_read_allowed if {
 			"id": "user-1",
 			"type": "user",
 			"groups": ["admins"],
-			"scopes": [],
+			"scopes": ["dataset.admin"],
 			"claims": {},
 		},
 		"resource": {
@@ -233,7 +251,7 @@ test_restricted_dataset_admin_write_allowed if {
 			"id": "user-1",
 			"type": "user",
 			"groups": ["admins"],
-			"scopes": [],
+			"scopes": ["dataset.admin"],
 			"claims": {},
 		},
 		"resource": {
@@ -242,6 +260,24 @@ test_restricted_dataset_admin_write_allowed if {
 			"attributes": {"access_level": "restricted"},
 		},
 		"action": {"name": "write", "context": {}},
+	}
+}
+
+test_restricted_dataset_admin_denied_without_scope if {
+	not access.allow with input as {
+		"subject": {
+			"id": "user-1",
+			"type": "user",
+			"groups": ["admins"],
+			"scopes": [],
+			"claims": {},
+		},
+		"resource": {
+			"type": "dataset",
+			"id": "ds-restricted",
+			"attributes": {"access_level": "restricted"},
+		},
+		"action": {"name": "read", "context": {}},
 	}
 }
 
