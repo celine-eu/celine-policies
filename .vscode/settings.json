@@ -1,0 +1,6 @@
+{
+    "python.analysis.extraPaths": [
+        "celine"
+    ],
+    "python.analysis.diagnosticMode": "workspace",
+}

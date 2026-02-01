@@ -30,7 +30,9 @@ RESOURCE_POLICY_MAP: dict[str, str] = {
 
 
 def policy_package_for_resource(resource: Resource) -> str:
-    resource_type = resource.type.value if hasattr(resource.type, "value") else str(resource.type)
+    resource_type = (
+        resource.type.value if hasattr(resource.type, "value") else str(resource.type)
+    )
     pkg = RESOURCE_POLICY_MAP.get(resource_type)
     if not pkg:
         raise PolicyPackageError(f"Unknown resource type: {resource_type}")
@@ -60,7 +62,7 @@ class PolicyAPI:
     ) -> EvaluationResult:
         start = time.perf_counter()
         try:
-            decision, cached = self._engine.evaluate_decision(
+            decision = self._engine.evaluate_decision(
                 policy_package, policy_input, skip_cache=skip_cache
             )
             latency_ms = (time.perf_counter() - start) * 1000
@@ -69,10 +71,12 @@ class PolicyAPI:
                 decision=decision,
                 policy_input=policy_input,
                 latency_ms=latency_ms,
-                cached=cached,
+                cached=decision.cached,
                 source_service=source_service,
             )
-            return EvaluationResult(decision=decision, cached=cached, latency_ms=latency_ms)
+            return EvaluationResult(
+                decision=decision, cached=decision.cached, latency_ms=latency_ms
+            )
         except Exception as e:
             latency_ms = (time.perf_counter() - start) * 1000
             self._audit.log_error(

@@ -8,6 +8,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8009:8009"
+      - "48009:48009"
     command: >
       uv run uvicorn celine.policies.main:create_app
       --reload

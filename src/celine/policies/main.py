@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 import logging
 
 from fastapi import FastAPI, Request
@@ -47,6 +48,16 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+
+    if os.getenv("DEBUG_ATTACH"):
+        import debugpy
+
+        debug_port = int(os.getenv("DEBUG_PORT", 5679))
+        debugpy.listen(("0.0.0.0", debug_port))
+        logger.info(f"Debugger listening on 0.0.0.0:{debug_port}")
+
+        if os.getenv("DEBUG_ATTACH") == "wait":
+            debugpy.wait_for_client()
 
     app = FastAPI(
         title="CELINE Policy Service",

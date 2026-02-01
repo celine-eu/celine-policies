@@ -15,7 +15,9 @@ class AuthorizeRequest(BaseModel):
 
     resource: Resource = Field(..., description="Resource being accessed")
     action: Action = Field(..., description="Action being performed")
-    context: dict[str, Any] = Field(default_factory=dict, description="Additional context for policy evaluation")
+    context: dict[str, Any] = Field(
+        default_factory=dict, description="Additional context for policy evaluation"
+    )
 
 
 class AuthorizeResponse(BaseModel):
@@ -30,8 +32,12 @@ class DatasetAccessRequest(BaseModel):
     """Request to check dataset access."""
 
     dataset_id: str = Field(..., description="Dataset identifier")
-    access_level: Literal["open", "internal", "restricted"] = Field(..., description="Dataset access level")
-    action: Literal["read", "write", "admin"] = Field(default="read", description="Action type")
+    access_level: Literal["open", "internal", "restricted"] = Field(
+        ..., description="Dataset access level"
+    )
+    action: Literal["read", "write", "admin"] = Field(
+        default="read", description="Action type"
+    )
 
 
 class DatasetAccessResponse(BaseModel):
@@ -46,14 +52,18 @@ class DatasetFilterRequest(BaseModel):
     """Request to get row-level filters for a dataset."""
 
     dataset_id: str = Field(..., description="Dataset identifier")
-    access_level: Literal["open", "internal", "restricted"] = Field(..., description="Dataset access level")
+    access_level: Literal["open", "internal", "restricted"] = Field(
+        ..., description="Dataset access level"
+    )
 
 
 class DatasetFilterResponse(BaseModel):
     """Response with row-level filters."""
 
     allowed: bool
-    filters: list[FilterPredicate] = Field(default_factory=list, description="Filters to apply to queries")
+    filters: list[FilterPredicate] = Field(
+        default_factory=list, description="Filters to apply to queries"
+    )
     reason: str = ""
     request_id: str
 
@@ -78,7 +88,9 @@ class DtAccessRequest(BaseModel):
     """Request to check digital twin (dt) access."""
 
     dt_id: str = Field(..., description="DT identifier")
-    action: Literal["read", "write", "simulate", "admin"] = Field(default="read", description="Action type")
+    action: Literal["read", "write", "simulate", "admin"] = Field(
+        default="read", description="Action type"
+    )
 
 
 class DtAccessResponse(BaseModel):
@@ -110,7 +122,7 @@ class MqttAuthRequest(BaseModel):
 
     username: str = Field(..., description="Username (may contain JWT)")
     password: str = Field(default="", description="Password (often empty for JWT auth)")
-    clientid: str = Field(..., description="MQTT client ID")
+    clientid: str = Field(default="", description="MQTT client ID")
 
 
 class MqttAclRequest(BaseModel):
@@ -124,7 +136,7 @@ class MqttAclRequest(BaseModel):
 
     username: str = Field(..., description="Username")
     topic: str = Field(..., description="MQTT topic")
-    clientid: str = Field(..., description="MQTT client ID")
+    clientid: str = Field(default="", description="MQTT client ID")
     acc: int = Field(..., ge=0, le=7, description="Access mask (READ|WRITE|SUBSCRIBE)")
 
 
@@ -144,10 +156,14 @@ class MqttResponse(BaseModel):
 class UserDataAccessRequest(BaseModel):
     """Request to check user's access to their own data."""
 
-    resource_type: str = Field(..., description="Type of user resource (dashboard, profile, etc.)")
+    resource_type: str = Field(
+        ..., description="Type of user resource (dashboard, profile, etc.)"
+    )
     resource_id: str = Field(..., description="Resource identifier")
     owner_id: str = Field(..., description="Resource owner's user ID")
-    action: Literal["read", "write", "delete", "share"] = Field(default="read", description="Action type")
+    action: Literal["read", "write", "delete", "share"] = Field(
+        default="read", description="Action type"
+    )
 
 
 class UserDataAccessResponse(BaseModel):

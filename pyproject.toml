@@ -39,6 +39,7 @@ pythonpath = ["src"]
 
 [dependency-groups]
 dev = [
+    "debugpy>=1.8.20",
     "dumpster-cli>=1.4.0",
     "pytest-asyncio>=1.3.0",
 ]
