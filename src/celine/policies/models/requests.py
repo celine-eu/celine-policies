@@ -16,7 +16,9 @@ class AuthorizeRequest(BaseModel):
     resource: Resource = Field(..., description="Resource being accessed")
     action: Action = Field(..., description="Action being performed")
     context: dict[str, Any] = Field(
-        default_factory=dict, description="Additional context for policy evaluation"
+        default_factory=dict,
+        description="Additional context for policy evaluation",
+        json_schema_extra={"title": "AuthorizeRequestContext"},
     )
 
 
