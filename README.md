@@ -1,249 +1,138 @@
 # CELINE Policy Service
 
-Centralized authorization service for the CELINE platform using embedded OPA (regorus).
+Centralized authorization service for the CELINE platform using embedded OPA (Open Policy Agent).
 
-## Overview
+The policy service provides a unified authorization layer for all CELINE platform services, enforcing consistent access control across datasets, pipelines, digital twins, MQTT messaging, and user data.
 
-This service provides policy-based authorization for:
-- **Dataset API** - Access control and row-level filtering
-- **Pipeline Events** - State transition validation
-- **Digital Twin** - API access and event emission
-- **MQTT Broker** - Topic-based ACLs (mosquitto-go-auth compatible)
-- **User Data** - Own-data access and delegation
+## Key Features
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    FastAPI Policy Service                        │
-│                                                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │  Routes: /authorize, /dataset/*, /pipeline/*, /mqtt/*     │  │
-│  └─────────────────────────┬─────────────────────────────────┘  │
-│                            │                                     │
-│  ┌─────────────────────────▼─────────────────────────────────┐  │
-│  │  Policy Engine (regorus - embedded Rego)                  │  │
-│  │  └── Decision Cache (LRU + TTL)                           │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │  JWT Validator  │  │  Subject Extract │  │  Audit Logger   │  │
-│  │  (JWKS cached)  │  │  (Keycloak)      │  │  (structured)   │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-```
+- **Unified Authorization** — Single service handles all authorization decisions
+- **Policy as Code** — Rego policies are versioned, testable, and auditable
+- **Zero Trust Model** — Every request is validated regardless of origin
+- **Dual Authorization** — User permissions intersected with client scopes
+- **MQTT Integration** — Native support for mosquitto-go-auth
+- **Audit Logging** — All decisions logged for compliance and debugging
 
 ## Quick Start
 
-### Using Docker Compose
-
 ```bash
-# Start service with Keycloak
+# Start the service stack
 docker compose up -d
 
-# Test health
-curl http://localhost:8000/health
+# Verify health
+curl http://localhost:8009/health
 
-# Test authorization
-curl -X POST http://localhost:8000/dataset/access \
-  -H "Content-Type: application/json" \
+# Check authorization (requires JWT)
+curl -X POST http://localhost:8009/authorize \
   -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
   -d '{
-    "dataset_id": "ds-123",
-    "access_level": "internal",
-    "action": "read"
+    "resource": {"type": "dataset", "id": "ds-123", "attributes": {"access_level": "internal"}},
+    "action": {"name": "read"}
   }'
 ```
 
-### Local Development
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Getting Started](docs/getting-started.md) | Developer quickstart guide |
+| [Architecture](docs/architecture.md) | Authorization model and system design |
+| [API Reference](docs/api-reference.md) | Complete endpoint documentation |
+| [Scopes & Permissions](docs/scopes-and-permissions.md) | OAuth scopes and access control |
+| [MQTT Integration](docs/mqtt-integration.md) | Topic patterns and broker setup |
+| [Deployment](docs/deployment.md) | Configuration and production deployment |
+
+## Platform Services
+
+The policy service authorizes requests for the following CELINE services:
+
+| Service | Description | Key Scopes |
+|---------|-------------|------------|
+| **digital-twin** | Digital twin state and simulation | `dt.read`, `dt.write`, `dt.simulate` |
+| **pipelines** | Data pipeline orchestration | `pipeline.execute`, `dataset.admin` |
+| **rec-registry** | REC certificate registry | `dataset.query`, `dataset.admin` |
+| **nudging** | User engagement and notifications | `dt.read`, `userdata.read` |
+
+## Authorization Model Overview
+
+```
+┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   Client     │────▶│  Policy Service  │────▶│  OPA (regorus)  │
+│  (with JWT)  │     │                  │     │                 │
+└──────────────┘     └──────────────────┘     └─────────────────┘
+                              │
+                     ┌────────┴────────┐
+                     ▼                 ▼
+              ┌────────────┐    ┌────────────┐
+              │ User Groups│    │Client Scope│
+              │  (roles)   │    │ (OAuth)    │
+              └────────────┘    └────────────┘
+                     │                 │
+                     └────────┬────────┘
+                              ▼
+                     ┌────────────────┐
+                     │   Decision:    │
+                     │ groups ∩ scope │
+                     └────────────────┘
+```
+
+Authorization requires **both**:
+1. **User** must have sufficient group level (admins > managers > editors > viewers)
+2. **Client** must have the required OAuth scope
+
+This dual-check prevents privilege escalation via low-trust clients.
+
+## Project Structure
+
+```
+celine-policies/
+├── src/celine/policies/    # Python service code
+│   ├── api/                # Policy API layer
+│   ├── auth/               # JWT validation, subject extraction
+│   ├── engine/             # OPA engine wrapper
+│   ├── routes/             # FastAPI endpoints
+│   └── models/             # Pydantic models
+├── policies/               # Rego policy files
+│   └── celine/
+│       ├── common/         # Shared helpers
+│       ├── dataset/        # Dataset access policies
+│       ├── pipeline/       # Pipeline state machine
+│       ├── dt/             # Digital twin policies
+│       ├── mqtt/           # MQTT ACL policies
+│       └── userdata/       # User data access
+├── docs/                   # Documentation
+├── tests/                  # Python and Rego tests
+└── config/                 # Keycloak, mosquitto configs
+```
+
+## Development
 
 ```bash
 # Install dependencies
-pip install -e ".[dev]"
+uv sync
 
 # Run tests
 pytest
-
-# Run OPA tests
 opa test policies/ -v
 
-# Start server
-uvicorn celine_policies.main:app --reload
-```
-
-## Authorization Model
-
-### Subject Types
-
-| Type | Identified By | Authorization Via |
-|------|---------------|-------------------|
-| User | JWT `sub` claim | Group membership (`groups` claim) |
-| Service | JWT `client_id` claim | OAuth scopes (`scope` claim) |
-| Anonymous | No JWT | Limited to open resources |
-
-### Group Hierarchy
-
-```
-admins (level 4) > managers (level 3) > editors (level 2) > viewers (level 1)
-```
-
-### Dataset Access Levels
-
-| Level | Anonymous | Viewers | Editors | Managers | Admins |
-|-------|-----------|---------|---------|----------|--------|
-| open | read | read | read | read | read/write |
-| internal | ❌ | read | read/write | read/write | read/write |
-| restricted | ❌ | ❌ | ❌ | ❌ | read/write |
-
-### Service Scopes
-
-| Scope | Permissions |
-|-------|-------------|
-| `dataset.query` | Read internal datasets |
-| `dataset.admin` | Read/write all datasets |
-| `pipeline.execute` | Execute pipeline transitions |
-| `dt.read` | Read dt data |
-| `dt.write` | Write dt data |
-| `mqtt.admin` | Full MQTT access |
-
-## API Endpoints
-
-### Generic Authorization
-
-```
-POST /authorize
-```
-
-Evaluates any policy based on resource type.
-
-### Dataset
-
-```
-POST /dataset/access   - Check dataset access
-POST /dataset/filters  - Get row-level filters
-```
-
-### Pipeline
-
-```
-POST /pipeline/transition  - Validate state transition
-```
-
-### MQTT (mosquitto-go-auth)
-
-```
-POST /mqtt/auth      - Authenticate user
-POST /mqtt/acl       - Check topic ACL
-POST /mqtt/superuser - Check superuser status
-```
-
-### Health
-
-```
-GET /health   - Liveness check
-GET /ready    - Readiness check
-POST /reload  - Reload policies
-```
-
-## Configuration
-
-Environment variables (prefix: `CELINE_`):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENVIRONMENT` | development | Environment name |
-| `LOG_LEVEL` | INFO | Logging level |
-| `OIDC_ISSUER` | http://keycloak.../realms/celine | JWT issuer |
-| `POLICIES_DIR` | policies | Rego policies directory |
-| `DATA_DIR` | data | Policy data directory |
-| `DECISION_CACHE_ENABLED` | true | Enable decision caching |
-| `DECISION_CACHE_TTL_SECONDS` | 300 | Cache TTL |
-
-## Policy Structure
-
-```
-policies/
-└── celine/
-    ├── common/           # Shared helpers
-    │   ├── subject.rego  # Subject type detection
-    │   └── access_levels.rego
-    ├── dataset/
-    │   ├── access.rego   # Dataset access rules
-    │   ├── row_filter.rego
-    │   └── access_test.rego
-    ├── pipeline/
-    │   └── state.rego    # State machine
-    ├── dt/
-    │   └── access.rego
-    ├── mqtt/
-    │   └── acl.rego
-    └── userdata/
-        └── access.rego
-```
-
-## Testing
-
-### Python Tests
-
-```bash
-pytest tests/python -v
-```
-
-### Rego Policy Tests
-
-```bash
-opa test policies/ -v
-```
-
-### Integration Tests
-
-```bash
-# Start services
-docker compose up -d
-
-# Run integration tests
-pytest tests/integration -v
-```
-
-## Audit Logging
-
-All decisions are logged with:
-
-```json
-{
-  "event": "policy_decision",
-  "request_id": "uuid",
-  "allowed": true,
-  "policy": "celine.dataset.access",
-  "subject_id": "user-123",
-  "subject_type": "user",
-  "resource_type": "dataset",
-  "resource_id": "ds-456",
-  "action": "read",
-  "latency_ms": 0.5,
-  "cached": false
-}
-```
-
-## Performance
-
-- **Embedded OPA**: ~0.1-0.5ms per evaluation
-- **Decision Cache**: Configurable LRU + TTL
-- **JWKS Cache**: 1 hour TTL with refresh on failure
-
-## MQTT Integration
-
-Configure mosquitto-go-auth:
-
-```
-auth_opt_backends http
-auth_opt_http_host policy-service
-auth_opt_http_port 8000
-auth_opt_http_getuser_uri /mqtt/auth
-auth_opt_http_aclcheck_uri /mqtt/acl
-auth_opt_http_superuser_uri /mqtt/superuser
+# Start development server
+uv run uvicorn celine.policies.main:create_app --reload --port 8009
 ```
 
 ## License
 
-Internal use only.
+
+Copyright 2026 Spindox Labs
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.

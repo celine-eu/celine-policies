@@ -13,7 +13,6 @@ from celine.policies.engine.engine import PolicyEngine
 from celine.policies.models import (
     Action,
     MqttAclRequest,
-    MqttAuthRequest,
     MqttResponse,
     MqttSuperuserRequest,
     PolicyInput,
@@ -78,7 +77,7 @@ async def mqtt_auth(
 
 @router.post("/acl")
 async def mqtt_acl(
-    request: Request,
+    request: MqttAclRequest,
     response: Response,
     api: PolicyAPI = Depends(get_policy_api),
     jwt_validator=Depends(get_jwt_validator),
@@ -86,48 +85,45 @@ async def mqtt_acl(
 ) -> MqttResponse:
     request_id = x_request_id or str(uuid.uuid4())
 
-    json = await request.json()
-    print("JSON", json)
+    subject = _extract_subject_from_username(request.username, jwt_validator)
+    if subject is None:
+        response.status_code = status.HTTP_403_FORBIDDEN
+        return MqttResponse(ok=False, reason="invalid credentials")
 
-    # subject = _extract_subject_from_username(request.username, jwt_validator)
-    # if subject is None:
-    #     response.status_code = status.HTTP_403_FORBIDDEN
-    #     return MqttResponse(ok=False, reason="invalid credentials")
+    actions = _acc_to_actions(request.acc)
+    base_env = {
+        "request_id": request_id,
+        "timestamp": time.time(),
+        "clientid": request.clientid,
+        "acc": request.acc,
+    }
 
-    # actions = _acc_to_actions(request.acc)
-    # base_env = {
-    #     "request_id": request_id,
-    #     "timestamp": time.time(),
-    #     "clientid": request.clientid,
-    #     "acc": request.acc,
-    # }
-
-    # for idx, action_name in enumerate(actions):
-    #     eval_request_id = (
-    #         request_id if len(actions) == 1 else f"{request_id}:{idx}:{action_name}"
-    #     )
-    #     policy_input = PolicyInput(
-    #         subject=subject,
-    #         resource=Resource(
-    #             type=ResourceType.TOPIC,
-    #             id=request.topic,
-    #             attributes={"clientid": request.clientid},
-    #         ),
-    #         action=Action(name=action_name, context={"acc": request.acc}),
-    #         environment=base_env,
-    #     )
-    #     result = api.evaluate(
-    #         request_id=eval_request_id,
-    #         policy_package="celine.mqtt.acl",
-    #         policy_input=policy_input,
-    #         source_service="mosquitto",
-    #     )
-    #     if not result.decision.allowed:
-    #         response.status_code = status.HTTP_403_FORBIDDEN
-    #         return MqttResponse(
-    #             ok=False,
-    #             reason=result.decision.reason or f"denied for action {action_name}",
-    #         )
+    for idx, action_name in enumerate(actions):
+        eval_request_id = (
+            request_id if len(actions) == 1 else f"{request_id}:{idx}:{action_name}"
+        )
+        policy_input = PolicyInput(
+            subject=subject,
+            resource=Resource(
+                type=ResourceType.TOPIC,
+                id=request.topic,
+                attributes={"clientid": request.clientid},
+            ),
+            action=Action(name=action_name, context={"acc": request.acc}),
+            environment=base_env,
+        )
+        result = api.evaluate(
+            request_id=eval_request_id,
+            policy_package="celine.mqtt.acl",
+            policy_input=policy_input,
+            source_service="mosquitto",
+        )
+        if not result.decision.allowed:
+            response.status_code = status.HTTP_403_FORBIDDEN
+            return MqttResponse(
+                ok=False,
+                reason=result.decision.reason or f"denied for action {action_name}",
+            )
 
     return MqttResponse(ok=True, reason="authorized")
 
