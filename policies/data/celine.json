@@ -57,7 +57,9 @@
                 "service"
               ],
               "scopes": [
-                "pipeline.execute"
+                "pipeline.execute",
+                "pipeline.status",
+                "pipeline.admin"
               ]
             },
             "topics": [
@@ -65,7 +67,8 @@
               "celine/pipelines/events/#"
             ],
             "actions": [
-              "publish"
+              "publish",
+              "subscribe"
             ],
             "effect": "allow"
           },

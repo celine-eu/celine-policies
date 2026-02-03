@@ -7,7 +7,7 @@ package celine.dataset.access
 
 import rego.v1
 
-import data.celine.common.subject
+import data.celine.common.subject as subject
 
 # Default deny
 default allow := false

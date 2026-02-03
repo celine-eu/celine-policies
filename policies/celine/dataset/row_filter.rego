@@ -7,7 +7,7 @@ package celine.dataset.row_filter
 
 import rego.v1
 
-import data.celine.common.subject
+import data.celine.common.subject as subject
 
 default filters := []
 default allow := true

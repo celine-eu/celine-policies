@@ -1,0 +1,40 @@
+realm: celine
+
+scopes:
+  - name: pipeline.status.read
+    description: Pipeline Status Read
+  - name: pipeline.status.write
+    description: Pipeline Status Write
+  - name: dt.admin
+    description: DT administration
+  - name: dt.values.read
+    description: DT Values API read
+  - name: dt.app.run
+    description: DT run an app
+  - name: dt.simulation.run
+    description: DT run a simulation
+  - name: dt.simulation.read
+    description: DT read a simulation
+  - name: dt.simulation.write
+    description: DT write a simulation
+
+clients:
+  - client_id: svc-pipelines
+    secret: svc-pipelines
+    # secret: ${SVC_PIPELINES_SECRET} # supports env var interpolation
+    name: Pipeline Orchestrator
+    default_scopes:
+      - pipeline.status.read
+      - pipeline.status.write
+
+  - client_id: svc-digital-twin
+    name: Digital Twin
+    secret: svc-digital-twin
+    # secret: ${SVC_DT_SECRET} # supports env var interpolation
+    default_scopes:
+      - dt.admin
+      - dt.values.read
+      - dt.app.run
+      - dt.simulation.run
+      - dt.simulation.read
+      - dt.simulation.write

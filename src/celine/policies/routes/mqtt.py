@@ -79,13 +79,22 @@ async def mqtt_auth(
 async def mqtt_acl(
     request: MqttAclRequest,
     response: Response,
+    authorization: str | None = Header(default=None),
     api: PolicyAPI = Depends(get_policy_api),
     jwt_validator=Depends(get_jwt_validator),
     x_request_id: Annotated[str | None, Header()] = None,
 ) -> MqttResponse:
     request_id = x_request_id or str(uuid.uuid4())
 
-    subject = _extract_subject_from_username(request.username, jwt_validator)
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+
+    if not token:
+        response.status_code = status.HTTP_403_FORBIDDEN
+        return MqttResponse(ok=False, reason="Missing token")
+
+    subject = _extract_subject_from_username(token, jwt_validator)
     if subject is None:
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid credentials")

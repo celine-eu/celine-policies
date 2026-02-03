@@ -136,7 +136,6 @@ class MqttAclRequest(BaseModel):
     - MOSQ_ACL_SUBSCRIBE 0x04
     """
 
-    username: str = Field(..., description="Username")
     topic: str = Field(..., description="MQTT topic")
     clientid: str = Field(default="", description="MQTT client ID")
     acc: int = Field(..., ge=0, le=7, description="Access mask (READ|WRITE|SUBSCRIBE)")
