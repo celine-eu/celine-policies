@@ -14,8 +14,8 @@ tasks:
   policies:check:
     desc: Format + test
     cmds:
-      - task: fmt
-      - task: test
+      - task: policies:fmt
+      - task: policies:test
 
   release:
     cmds:

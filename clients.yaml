@@ -1,40 +1,143 @@
 realm: celine
 
+# =============================================================================
+# SCOPE DEFINITIONS
+# =============================================================================
+# Convention: {service}.{resource}.{action}
+# 
+# Special scopes:
+#   {service}.admin     - full access to service (matches all {service}.*)
+#   {service}.{res}.*   - wildcard for all actions on resource
+#
+# MQTT topic mapping:
+#   celine/{service}/{resource}/... → {service}.{resource}.{read|write}
+# =============================================================================
+
 scopes:
-  - name: pipeline.status.read
-    description: Pipeline Status Read
-  - name: pipeline.status.write
-    description: Pipeline Status Write
+  # ---------------------------------------------------------------------------
+  # Digital Twin Service
+  # ---------------------------------------------------------------------------
   - name: dt.admin
-    description: DT administration
+    description: Full administrative access to Digital Twin service
+
   - name: dt.values.read
-    description: DT Values API read
-  - name: dt.app.run
-    description: DT run an app
-  - name: dt.simulation.run
-    description: DT run a simulation
+    description: Read digital twin values
+
+  - name: dt.values.write
+    description: Write digital twin values
+
   - name: dt.simulation.read
-    description: DT read a simulation
+    description: Read simulation data
+
   - name: dt.simulation.write
-    description: DT write a simulation
+    description: Write/update simulation data
+
+  - name: dt.simulation.run
+    description: Execute simulations
+
+  - name: dt.app.run
+    description: Execute digital twin apps
+
+  # ---------------------------------------------------------------------------
+  # Pipeline Service
+  # ---------------------------------------------------------------------------
+  - name: pipeline.admin
+    description: Full administrative access to Pipeline service
+
+  - name: pipeline.status.read
+    description: Read pipeline status
+
+  - name: pipeline.status.write
+    description: Update pipeline status
+
+  - name: pipeline.job.read
+    description: Read job details
+
+  - name: pipeline.job.write
+    description: Modify job configuration
+
+  - name: pipeline.job.execute
+    description: Trigger job execution
+
+  # ---------------------------------------------------------------------------
+  # Dataset Service
+  # ---------------------------------------------------------------------------
+  - name: dataset.admin
+    description: Full administrative access to Dataset service
+
+  - name: dataset.query
+    description: Execute dataset queries
+
+  - name: dataset.read
+    description: Read dataset metadata and schema
+
+  - name: dataset.write
+    description: Write dataset data
+
+  # ---------------------------------------------------------------------------
+  # MQTT
+  # ---------------------------------------------------------------------------
+  - name: mqtt.admin
+    description: MQTT superuser / administrative access
+
+# =============================================================================
+# CLIENT DEFINITIONS
+# =============================================================================
 
 clients:
+  # ---------------------------------------------------------------------------
+  # Digital Twin Service
+  # ---------------------------------------------------------------------------
+  - client_id: svc-digital-twin
+    name: Digital Twin Service
+    description: Digital twin state, simulation, and app execution
+    secret: ${SVC_DIGITAL_TWIN_SECRET:-svc-digital-twin}
+    default_scopes:
+      - dt.admin
+    # Or use granular scopes:
+    # default_scopes:
+    #   - dt.values.read
+    #   - dt.values.write
+    #   - dt.simulation.read
+    #   - dt.simulation.write
+    #   - dt.simulation.run
+    #   - dt.app.run
+
+  # ---------------------------------------------------------------------------
+  # Pipeline Service
+  # ---------------------------------------------------------------------------
   - client_id: svc-pipelines
-    secret: svc-pipelines
-    # secret: ${SVC_PIPELINES_SECRET} # supports env var interpolation
     name: Pipeline Orchestrator
+    description: Data pipeline orchestration and status management
+    secret: ${SVC_PIPELINES_SECRET:-svc-pipelines}
     default_scopes:
       - pipeline.status.read
       - pipeline.status.write
+      - pipeline.job.execute
 
-  - client_id: svc-digital-twin
-    name: Digital Twin
-    secret: svc-digital-twin
-    # secret: ${SVC_DT_SECRET} # supports env var interpolation
+  # ---------------------------------------------------------------------------
+  # Dataset Service (example)
+  # ---------------------------------------------------------------------------
+  - client_id: svc-dataset-api
+    name: Dataset API Service
+    description: Dataset query and management
+    secret: ${SVC_DATASET_SECRET:-svc-dataset-api}
+    default_scopes:
+      - dataset.query
+      - dataset.read
+    optional_scopes:
+      - dataset.write
+      - dataset.admin
+
+  # ---------------------------------------------------------------------------
+  # Admin CLI (for Keycloak sync operations)
+  # ---------------------------------------------------------------------------
+  - client_id: celine-admin-cli
+    name: CELINE Admin CLI
+    description: Administrative CLI for platform management
+    secret: ${CELINE_ADMIN_CLI_SECRET}
     default_scopes:
       - dt.admin
-      - dt.values.read
-      - dt.app.run
-      - dt.simulation.run
-      - dt.simulation.read
-      - dt.simulation.write
+      - pipeline.admin
+      - dataset.admin
+      - mqtt.admin
