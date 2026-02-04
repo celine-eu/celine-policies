@@ -1,15 +1,15 @@
 """MQTT authorization endpoints (mosquitto-go-auth compatible)."""
 
+import logging
 import time
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Response, status
 
 from celine.policies.api import PolicyAPI
 from celine.policies.auth import JWTValidationError
 from celine.policies.auth.subject import extract_subject_from_claims
-from celine.policies.engine.engine import PolicyEngine
 from celine.policies.models import (
     Action,
     MqttAclRequest,
@@ -20,16 +20,17 @@ from celine.policies.models import (
     Subject,
 )
 from celine.policies.models.core import ResourceType
-from celine.policies.routes.deps import (
-    get_jwt_validator,
-    get_policy_api,
-    get_policy_engine,
-)
+from celine.policies.routes.deps import get_jwt_validator, get_policy_api
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/mqtt", tags=["mqtt"])
 
+MQTT_POLICY_PACKAGE = "celine.mqtt"
 
-def _extract_subject_from_username(token: str, jwt_validator) -> Subject | None:
+
+def _extract_subject_from_token(token: str, jwt_validator) -> Subject | None:
+    """Extract subject from JWT token."""
     if token.count(".") == 2:
         try:
             claims = jwt_validator.validate(token)
@@ -40,6 +41,7 @@ def _extract_subject_from_username(token: str, jwt_validator) -> Subject | None:
 
 
 def _acc_to_actions(acc: int) -> list[str]:
+    """Convert mosquitto acc bitmask to action names."""
     actions: list[str] = []
     if acc & 0x04:
         actions.append("subscribe")
@@ -50,6 +52,13 @@ def _acc_to_actions(acc: int) -> list[str]:
     return actions or ["unknown"]
 
 
+def _get_token_from_header(authorization: str | None) -> str | None:
+    """Extract bearer token from Authorization header."""
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ", 1)[1].strip()
+    return None
+
+
 @router.post("/user")
 async def mqtt_auth(
     response: Response,
@@ -57,17 +66,13 @@ async def mqtt_auth(
     jwt_validator=Depends(get_jwt_validator),
     x_request_id: Annotated[str | None, Header()] = None,
 ) -> MqttResponse:
-    request_id = x_request_id or str(uuid.uuid4())
-
-    token = None
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-
+    """Authenticate MQTT client via JWT."""
+    token = _get_token_from_header(authorization)
     if not token:
         response.status_code = status.HTTP_403_FORBIDDEN
-        return MqttResponse(ok=False, reason="Missing token")
+        return MqttResponse(ok=False, reason="missing token")
 
-    subject = _extract_subject_from_username(token, jwt_validator)
+    subject = _extract_subject_from_token(token, jwt_validator)
     if subject is None:
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid credentials")
@@ -84,55 +89,49 @@ async def mqtt_acl(
     jwt_validator=Depends(get_jwt_validator),
     x_request_id: Annotated[str | None, Header()] = None,
 ) -> MqttResponse:
+    """Authorize MQTT topic access."""
     request_id = x_request_id or str(uuid.uuid4())
 
-    token = None
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-
+    token = _get_token_from_header(authorization)
     if not token:
         response.status_code = status.HTTP_403_FORBIDDEN
-        return MqttResponse(ok=False, reason="Missing token")
+        return MqttResponse(ok=False, reason="missing token")
 
-    subject = _extract_subject_from_username(token, jwt_validator)
+    subject = _extract_subject_from_token(token, jwt_validator)
     if subject is None:
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid credentials")
 
     actions = _acc_to_actions(request.acc)
-    base_env = {
-        "request_id": request_id,
-        "timestamp": time.time(),
-        "clientid": request.clientid,
-        "acc": request.acc,
-    }
 
-    for idx, action_name in enumerate(actions):
-        eval_request_id = (
-            request_id if len(actions) == 1 else f"{request_id}:{idx}:{action_name}"
-        )
+    for action_name in actions:
         policy_input = PolicyInput(
             subject=subject,
             resource=Resource(
                 type=ResourceType.TOPIC,
                 id=request.topic,
-                attributes={"clientid": request.clientid},
+                attributes={},
             ),
-            action=Action(name=action_name, context={"acc": request.acc}),
-            environment=base_env,
+            action=Action(name=action_name, context={}),
+            environment={"request_id": request_id, "timestamp": time.time()},
         )
-        result = api.evaluate(
-            request_id=eval_request_id,
-            policy_package="celine.mqtt.acl",
-            policy_input=policy_input,
-            source_service="mosquitto",
-        )
-        if not result.decision.allowed:
-            response.status_code = status.HTTP_403_FORBIDDEN
-            return MqttResponse(
-                ok=False,
-                reason=result.decision.reason or f"denied for action {action_name}",
+
+        try:
+            result = api.evaluate(
+                request_id=request_id,
+                policy_package=MQTT_POLICY_PACKAGE,
+                policy_input=policy_input,
+                source_service="mqtt-broker",
             )
+
+            if not result.decision.allowed:
+                response.status_code = status.HTTP_403_FORBIDDEN
+                return MqttResponse(ok=False, reason=result.decision.reason)
+
+        except Exception as e:
+            logger.exception("MQTT ACL check failed", exc_info=e)
+            response.status_code = status.HTTP_403_FORBIDDEN
+            return MqttResponse(ok=False, reason=f"check failed: {e}")
 
     return MqttResponse(ok=True, reason="authorized")
 
@@ -141,36 +140,23 @@ async def mqtt_acl(
 async def mqtt_superuser(
     request: MqttSuperuserRequest,
     response: Response,
-    engine: PolicyEngine = Depends(get_policy_engine),
+    authorization: str | None = Header(default=None),
     jwt_validator=Depends(get_jwt_validator),
     x_request_id: Annotated[str | None, Header()] = None,
 ) -> MqttResponse:
-    request_id = x_request_id or str(uuid.uuid4())
+    """Check if client is MQTT superuser."""
+    token = _get_token_from_header(authorization)
+    if not token:
+        response.status_code = status.HTTP_403_FORBIDDEN
+        return MqttResponse(ok=False, reason="missing token")
 
-    subject = _extract_subject_from_username(request.username, jwt_validator)
+    subject = _extract_subject_from_token(token, jwt_validator)
     if subject is None:
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid credentials")
 
-    policy_input = PolicyInput(
-        subject=subject,
-        resource=Resource(type=ResourceType.TOPIC, id="*", attributes={}),
-        action=Action(name="superuser", context={}),
-        environment={"request_id": request_id, "timestamp": time.time()},
-    )
+    if "mqtt.admin" in subject.scopes:
+        return MqttResponse(ok=True, reason="superuser")
 
-    try:
-        input_dict = engine.build_input_dict(policy_input)
-        is_superuser = bool(
-            engine.evaluate("data.celine.mqtt.acl.superuser", input_dict).get(
-                "value", False
-            )
-        )
-        if not is_superuser:
-            response.status_code = status.HTTP_403_FORBIDDEN
-        return MqttResponse(
-            ok=is_superuser, reason="superuser" if is_superuser else "not superuser"
-        )
-    except Exception as e:
-        response.status_code = status.HTTP_403_FORBIDDEN
-        return MqttResponse(ok=False, reason=f"check failed: {e}")
+    response.status_code = status.HTTP_403_FORBIDDEN
+    return MqttResponse(ok=False, reason="not superuser")

@@ -1,9 +1,7 @@
 # METADATA
 # title: Scope Matching
-# description: Core scope matching logic with wildcard and admin override support
+# description: Shared scope matching logic - imported by all policies
 # scope: package
-# authors:
-#   - CELINE Platform Team
 package celine.scopes
 
 import rego.v1
@@ -11,9 +9,9 @@ import rego.v1
 # =============================================================================
 # SCOPE MATCHING
 # =============================================================================
-# 
+#
 # Scope convention: {service}.{resource}.{action}
-# 
+#
 # Matching rules:
 #   1. Exact match: "dt.simulation.read" matches "dt.simulation.read"
 #   2. Admin override: "dt.admin" matches any "dt.*"
@@ -53,22 +51,8 @@ scope_matches(have, want) if {
 }
 
 # =============================================================================
-# HELPERS
+# SUBJECT HELPERS
 # =============================================================================
-
-# Extract service from scope
-service_from_scope(scope) := service if {
-    parts := split(scope, ".")
-    count(parts) >= 1
-    service := parts[0]
-}
-
-# Extract resource from scope (if present)
-resource_from_scope(scope) := resource if {
-    parts := split(scope, ".")
-    count(parts) >= 2
-    resource := parts[1]
-}
 
 # Check if subject is a service (machine-to-machine)
 is_service if {

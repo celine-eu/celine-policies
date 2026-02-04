@@ -1,11 +1,6 @@
 """Policy engine package."""
 
-from .cache import CachedPolicyEngine, DecisionCache
-from .engine import PolicyEngine, PolicyEngineError
+from celine.policies.engine.engine import PolicyEngine, PolicyEngineError
+from celine.policies.engine.cache import CachedPolicyEngine, DecisionCache
 
-__all__ = [
-    "PolicyEngine",
-    "PolicyEngineError",
-    "DecisionCache",
-    "CachedPolicyEngine",
-]
+__all__ = ["PolicyEngine", "PolicyEngineError", "CachedPolicyEngine", "DecisionCache"]

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-import os
 import logging
+import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,21 +13,18 @@ from fastapi.responses import JSONResponse
 from celine.policies.audit import configure_audit_logging
 from celine.policies.config import settings
 from celine.policies.logs import configure_logging as configure_app_logging
-from celine.policies.routes.deps import init_deps
 from celine.policies.routes import (
     authorize_router,
-    dataset_router,
     health_router,
     mqtt_router,
-    pipeline_router,
 )
+from celine.policies.routes.deps import init_deps
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
     configure_app_logging()
 
     configure_audit_logging(
@@ -48,7 +45,6 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-
     if os.getenv("DEBUG_ATTACH"):
         import debugpy
 
@@ -62,7 +58,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="CELINE Policy Service",
         description="Centralized authorization service for the CELINE platform",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",
@@ -76,10 +72,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Simplified routes: health, authorize, mqtt
     app.include_router(health_router)
     app.include_router(authorize_router)
-    app.include_router(dataset_router)
-    app.include_router(pipeline_router)
     app.include_router(mqtt_router)
 
     @app.exception_handler(Exception)

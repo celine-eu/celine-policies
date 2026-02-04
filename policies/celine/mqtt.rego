@@ -3,8 +3,6 @@
 # description: Topic-based authorization deriving required scopes from topic patterns
 # scope: package
 # entrypoint: true
-# authors:
-#   - CELINE Platform Team
 package celine.mqtt
 
 import rego.v1
@@ -16,7 +14,7 @@ import data.celine.scopes
 # =============================================================================
 #
 # Topic pattern: celine/{service}/{resource}/...
-# 
+#
 # Authorization flow:
 #   1. Parse topic to extract service and resource
 #   2. Map MQTT action (subscribe/publish) to scope action (read/write)
@@ -28,11 +26,10 @@ import data.celine.scopes
 default allow := false
 default reason := "unauthorized"
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # MAIN RULES
-# -----------------------------------------------------------------------------
+# =============================================================================
 
-# Service authorization via derived scope
 allow if {
     scopes.is_service
     required := required_scope(input.resource.id, input.action.name)
@@ -45,7 +42,7 @@ reason := "service authorized via scope" if {
     scopes.has_scope(required)
 }
 
-# Service authorization via admin scope
+# Admin scope for service always wins
 allow if {
     scopes.is_service
     parsed := parse_topic(input.resource.id)
@@ -60,11 +57,10 @@ reason := "service authorized via admin scope" if {
     scopes.has_scope(admin_scope)
 }
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # TOPIC PARSING
-# -----------------------------------------------------------------------------
+# =============================================================================
 
-# Parse topic: celine/{service}/{resource}/... → {"service": x, "resource": y}
 parse_topic(topic) := result if {
     parts := split(topic, "/")
     count(parts) >= 3
@@ -75,7 +71,6 @@ parse_topic(topic) := result if {
     }
 }
 
-# Fallback for short topics: celine/{service} → {"service": x, "resource": ""}
 parse_topic(topic) := result if {
     parts := split(topic, "/")
     count(parts) == 2
@@ -86,18 +81,16 @@ parse_topic(topic) := result if {
     }
 }
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # SCOPE DERIVATION
-# -----------------------------------------------------------------------------
+# =============================================================================
 
-# Map MQTT action to scope action
 mqtt_action_map := {
     "subscribe": "read",
     "read": "read",
     "publish": "write",
 }
 
-# Derive required scope from topic and MQTT action
 required_scope(topic, mqtt_action) := scope if {
     parsed := parse_topic(topic)
     parsed.resource != ""
@@ -105,16 +98,15 @@ required_scope(topic, mqtt_action) := scope if {
     scope := concat(".", [parsed.service, parsed.resource, scope_action])
 }
 
-# For service-level topics (no resource), require admin
 required_scope(topic, mqtt_action) := scope if {
     parsed := parse_topic(topic)
     parsed.resource == ""
     scope := concat(".", [parsed.service, "admin"])
 }
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # DENIAL REASONS
-# -----------------------------------------------------------------------------
+# =============================================================================
 
 reason := "anonymous access denied" if {
     not allow
@@ -133,12 +125,9 @@ reason := "missing required scope" if {
     parse_topic(input.resource.id)
 }
 
-# -----------------------------------------------------------------------------
-# INTROSPECTION (for debugging/logging)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# INTROSPECTION
+# =============================================================================
 
-# Expose derived scope for debugging
 derived_scope := required_scope(input.resource.id, input.action.name)
-
-# Expose parsed topic
 parsed_topic := parse_topic(input.resource.id)

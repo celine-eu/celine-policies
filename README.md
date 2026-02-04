@@ -122,4 +122,4 @@ uv run uvicorn celine.policies.main:create_app --reload --port 8009
 
 ## License
 
-Internal use only — CELINE Platform
+Apache 2
