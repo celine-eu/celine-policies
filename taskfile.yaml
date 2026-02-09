@@ -1,39 +1,23 @@
 version: "3"
 
 tasks:
-  policies:test:
-    desc: Run OPA unit tests
+  run:
+    desc: "Run development server"
     cmds:
-      - docker run --rm -v "$PWD/policies:/policies" openpolicyagent/opa:latest test /policies -v
+      - uv run uvicorn celine.mqtt_auth.main:create_app --reload --host 0.0.0.0 --port 8009
 
-  policies:fmt:
-    desc: Format Rego files
+  debug:
+    desc: "Run development server with debugger"
     cmds:
-      - docker run --rm -v "$PWD/policies:/policies" openpolicyagent/opa:latest fmt -w /policies
+      - DEBUG_ATTACH=nowait DEBUG_PORT=48009 uv run uvicorn celine.mqtt_auth.main:create_app --reload --host 0.0.0.0 --port 8009
 
-  policies:check:
-    desc: Format + test
+  test:
+    desc: "Run test"
     cmds:
-      - task: policies:fmt
-      - task: policies:test
+      - uv run pytest
 
   release:
     cmds:
       - uv run semantic-release -v version --no-vcs-release
       - git push
       - git push --tags
-
-  run:
-    desc: "Run development server"
-    cmds:
-      - docker compose up policy-service
-
-  debug:
-    desc: "Run development server with debugger"
-    cmds:
-      - DEBUG_ATTACH=nowait DEBUG_PORT=48009 uv run uvicorn celine.policies.main:create_app --reload --host 0.0.0.0 --port 8009
-
-  test:
-    desc: "Run test"
-    cmds:
-      - uv run pytest

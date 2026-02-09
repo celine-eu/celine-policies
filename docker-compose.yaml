@@ -2,7 +2,7 @@ networks:
   celine_security_net:
 
 services:
-  policy-service:
+  mqtt_auth:
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,18 +10,27 @@ services:
       - "8009:8009"
       - "48009:48009"
     command: >
-      uv run uvicorn celine.policies.main:create_app
+      uv run uvicorn celine.mqtt_auth.main:create_app
       --reload
       --host 0.0.0.0
       --port 8009
     environment:
-      - CELINE_ENVIRONMENT=development
-      - CELINE_LOG_LEVEL=DEBUG
-      - CELINE_OIDC_ISSUER=http://keycloak:8080/realms/celine
-      - CELINE_POLICIES_DIR=/app/policies
-      - CELINE_DATA_DIR=/app/policies/data
-      - CELINE_DECISION_CACHE_ENABLED=true
-      - CELINE_DECISION_CACHE_TTL_SECONDS=60
+      - CELINE_OIDC_JWKS_URI=http://keycloak.celine.localhost/realms/celine/protocol/openid-connect/certs
+      - CELINE_OIDC_ISSUER=http://keycloak.celine.localhost/realms/celine
+      - CELINE_OIDC_AUDIENCE=celine-mqtt
+
+      # Policy engine
+      - CELINE_POLICIES_POLICIES_DIR=/app/policies
+      - CELINE_POLICIES_POLICIES_CACHE_ENABLED=true
+      - CELINE_POLICIES_POLICIES_CACHE_TTL=300
+      - CELINE_POLICIES_POLICIES_CACHE_MAXSIZE=10000
+
+      # MQTT settings
+      - CELINE_MQTT_POLICY_PACKAGE=celine.mqtt.acl
+      - CELINE_MQTT_SUPERUSER_SCOPE=mqtt.admin
+
+      # Service settings
+      - CELINE_LOG_LEVEL=INFO
     volumes:
       # Mount policies for hot-reload during development
       - ./policies:/app/policies:ro
@@ -32,7 +41,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import httpx; httpx.get('http://localhost:8000/health').raise_for_status()",
+          "import httpx; httpx.get('http://localhost:8009/health').raise_for_status()",
         ]
       interval: 10s
       timeout: 5s

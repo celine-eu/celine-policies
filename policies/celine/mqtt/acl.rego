@@ -3,7 +3,7 @@
 # description: Topic-based authorization deriving required scopes from topic patterns
 # scope: package
 # entrypoint: true
-package celine.mqtt
+package celine.mqtt.acl
 
 import rego.v1
 

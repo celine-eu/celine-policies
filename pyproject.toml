@@ -23,15 +23,12 @@ dev = [
     "pytest-cov>=6.0.0",
 ]
 
-[project.scripts]
-celine-policies = "celine.policies.cli.main:create_app"
-
 [tool.uv]  # optional, helps uv handle locking
 package = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["celine.policies*"]
+include = ["celine.mqtt_auth*"]
 exclude = ["tests*"]
 
 [tool.pytest.ini_options]
