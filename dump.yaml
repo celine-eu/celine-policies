@@ -3,15 +3,25 @@ extensions:
   - .md
   - .rego
   - .yaml
+  - .yml
   - .toml
   - .json
 
-contents:
-  - src
-  - scripts
-  - policies
-  - tests
-  - README.md
-  - docker-compose.yaml
-  - Dockerfile
-  - pyproject.toml
+dumps:
+  - name: all
+    contents:
+      - src
+      - scripts
+      - policies
+      - tests
+      - README.md
+      - docker-compose.yaml
+      - Dockerfile
+      - pyproject.toml
+      - clients.yaml
+
+  - name: policies
+    contents:
+      - src/celine/policies
+      - pyproject.toml
+      - clients.yaml

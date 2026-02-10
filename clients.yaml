@@ -48,6 +48,14 @@ scopes:
   - name: dataset.write
     description: Write dataset data
 
+  # REC Registry
+  - name: rec_registry.admin
+    description: Full administrative access to the REC Registry, including configuration, user management, and destructive operations.
+  - name: rec_registry.import
+    description: Permission to import Renewable Energy Certificate (REC) data into the registry from external systems or bulk files.
+  - name: rec_registry.export
+    description: Permission to export Renewable Energy Certificate (REC) data from the registry for reporting, auditing, or downstream processing.
+
   # MQTT
   - name: mqtt.admin
     description: MQTT superuser access
@@ -96,6 +104,13 @@ clients:
       - dt.values.read # reads DT state
       - dataset.query # reads datasets
 
+  - client_id: svc-reg-registry
+    name: REC Registry  Service
+    secret: ${SVC_DT_SECRET:-svc-reg-registry}
+    default_scopes:
+      # Own resources
+      - rec_registry.admin
+
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET}
@@ -104,3 +119,4 @@ clients:
       - pipeline.admin
       - dataset.admin
       - mqtt.admin
+      - rec_registry.admin

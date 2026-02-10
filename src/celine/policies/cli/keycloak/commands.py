@@ -25,6 +25,7 @@ from celine.policies.cli.keycloak.client import (
 from celine.policies.cli.keycloak.models import KeycloakConfig
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.policies.cli.keycloak.sync import (
+    SyncResult,
     apply_sync_plan,
     compute_sync_plan,
     write_secrets_file,
