@@ -31,30 +31,30 @@ default reason := "unauthorized"
 # =============================================================================
 
 allow if {
-    scopes.is_service
+    data.celine.scopes.is_service
     required := required_scope(input.resource.id, input.action.name)
-    scopes.has_scope(required)
+    data.celine.scopes.has_scope(required)
 }
 
 reason := "service authorized via scope" if {
-    scopes.is_service
+    data.celine.scopes.is_service
     required := required_scope(input.resource.id, input.action.name)
-    scopes.has_scope(required)
+    data.celine.scopes.has_scope(required)
 }
 
 # Admin scope for service always wins
 allow if {
-    scopes.is_service
+    data.celine.scopes.is_service
     parsed := parse_topic(input.resource.id)
     admin_scope := concat(".", [parsed.service, "admin"])
-    scopes.has_scope(admin_scope)
+    data.celine.scopes.has_scope(admin_scope)
 }
 
 reason := "service authorized via admin scope" if {
-    scopes.is_service
+    data.celine.scopes.is_service
     parsed := parse_topic(input.resource.id)
     admin_scope := concat(".", [parsed.service, "admin"])
-    scopes.has_scope(admin_scope)
+    data.celine.scopes.has_scope(admin_scope)
 }
 
 # =============================================================================
@@ -110,18 +110,18 @@ required_scope(topic, mqtt_action) := scope if {
 
 reason := "anonymous access denied" if {
     not allow
-    scopes.is_anonymous
+    data.celine.scopes.is_anonymous
 }
 
 reason := "invalid topic format" if {
     not allow
-    not scopes.is_anonymous
+    not data.celine.scopes.is_anonymous
     not parse_topic(input.resource.id)
 }
 
 reason := "missing required scope" if {
     not allow
-    scopes.is_service
+    data.celine.scopes.is_service
     parse_topic(input.resource.id)
 }
 
