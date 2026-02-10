@@ -2,12 +2,12 @@
 
 import logging
 
+from celine.sdk.policies import CachedPolicyEngine, DecisionCache, PolicyEngine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from celine.mqtt_auth.config import MqttAuthSettings
 from celine.mqtt_auth.routes import get_engine, get_settings, router
-from celine.sdk.policies import CachedPolicyEngine, DecisionCache, PolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +48,13 @@ def create_app() -> FastAPI:
         cached_engine = CachedPolicyEngine(
             engine=engine,
             cache=cache,
-            cache_enabled=True,
+            enabled=True,
         )
     else:
         logger.info("Policy cache disabled")
         cached_engine = CachedPolicyEngine(
             engine=engine,
-            cache_enabled=False,
+            enabled=False,
         )
 
     logger.info(
