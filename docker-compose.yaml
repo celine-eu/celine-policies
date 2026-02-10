@@ -10,10 +10,10 @@ services:
       - "8009:8009"
       - "48009:48009"
     command: >
-      uv run uvicorn celine.mqtt_auth.main:create_app
-      --reload
-      --host 0.0.0.0
-      --port 8009
+      uvicorn celine.mqtt_auth.main:create_app
+        --reload
+        --host 0.0.0.0
+        --port 8009
     environment:
       - CELINE_OIDC_JWKS_URI=http://keycloak.celine.localhost/realms/celine/protocol/openid-connect/certs
       - CELINE_OIDC_ISSUER=http://keycloak.celine.localhost/realms/celine

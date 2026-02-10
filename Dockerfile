@@ -9,7 +9,6 @@ WORKDIR /app
 # Copy project files
 COPY pyproject.toml ./
 COPY src ./src
-COPY policies ./policies
 
 # Install dependencies
 RUN uv pip install --system --no-cache .
@@ -25,13 +24,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application and policies
 COPY src ./src
-COPY policies ./policies
 
 # Environment
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    CELINE_POLICIES_POLICIES_DIR=/app/policies \
-    CELINE_LOG_LEVEL=INFO
+    PYTHONDONTWRITEBYTECODE=1
 
 # Expose port
 EXPOSE 8009

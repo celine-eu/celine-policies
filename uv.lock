@@ -3,6 +3,18 @@ revision = 3
 requires-python = ">=3.12"
 
 [[package]]
+name = "aiomqtt"
+version = "2.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "paho-mqtt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/db/b5/798e4855d17f0f3a2e2ed21c07473fcb4bb45993116693d0f68553927e2c/aiomqtt-2.5.0.tar.gz", hash = "sha256:70e181c140a54ae736394efe2b9e865f665551a5417f6957456cc46010487b21", size = 86453, upload-time = "2026-01-04T16:46:51.079Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/24/1d5d7d89906db1a94b5029942c2fd909cf8e8551b288f56c03053d5615f8/aiomqtt-2.5.0-py3-none-any.whl", hash = "sha256:65dabeafeeee7b88864361ae9a118d81bd27082093f32f670a5c5fab17de8cf2", size = 15983, upload-time = "2026-01-04T16:46:49.736Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -49,6 +61,7 @@ source = { editable = "." }
 dependencies = [
     { name = "cachetools" },
     { name = "celine-regorus" },
+    { name = "celine-sdk" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic" },
@@ -76,6 +89,7 @@ dev = [
 requires-dist = [
     { name = "cachetools", specifier = ">=5.5.0" },
     { name = "celine-regorus", specifier = ">=0.5.0.post20260129052409" },
+    { name = "celine-sdk", specifier = ">=1.0.1" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
@@ -102,6 +116,22 @@ version = "0.5.0.post20260129052409"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/72/e6/405b9053ad8263419a3d966f6730bafd20caaa6676ffa963dbdb72f6c41b/celine_regorus-0.5.0.post20260129052409-cp310-abi3-manylinux_2_34_x86_64.whl", hash = "sha256:5fc8c5bb536406b145878bea7386eb09010d22baa9f21a456ca42f32813c2808", size = 3032463, upload-time = "2026-01-29T05:25:28.623Z" },
+]
+
+[[package]]
+name = "celine-sdk"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiomqtt" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fa/5a/8d90a10dc4e75a80f7cbc810d8f15ba0ef442fec0f2273e6beaf57cbe28d/celine_sdk-1.0.1.tar.gz", hash = "sha256:733eb9051fc65dd04dbba52c8967a78e36e7e9bc41457e4db0bf029ec7a064d3", size = 67364, upload-time = "2026-02-02T09:45:50.879Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0d/17/24fdce34869ef9d2c8551b89b4fe4c720a74272591acdace94ef305dfd8c/celine_sdk-1.0.1-py3-none-any.whl", hash = "sha256:1a3f8a2a2cdcc22f8e190bb0633c2444193b5e89542752a43a43a2d7e890f4d7", size = 183543, upload-time = "2026-02-02T09:45:49.261Z" },
 ]
 
 [[package]]
@@ -505,6 +535,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/65/ee/299d360cdc32edc7d2cf530f3accf79c4fca01e96ffc950d8a52213bd8e4/packaging-26.0.tar.gz", hash = "sha256:00243ae351a257117b6a241061796684b084ed1c516a08c48a3f7e147a9d80b4", size = 143416, upload-time = "2026-01-21T20:50:39.064Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529", size = 74366, upload-time = "2026-01-21T20:50:37.788Z" },
+]
+
+[[package]]
+name = "paho-mqtt"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/15/0a6214e76d4d32e7f663b109cf71fb22561c2be0f701d67f93950cd40542/paho_mqtt-2.1.0.tar.gz", hash = "sha256:12d6e7511d4137555a3f6ea167ae846af2c7357b10bc6fa4f7c3968fc1723834", size = 148848, upload-time = "2024-04-29T19:52:55.591Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/cb/00451c3cf31790287768bb12c6bec834f5d292eaf3022afc88e14b8afc94/paho_mqtt-2.1.0-py3-none-any.whl", hash = "sha256:6db9ba9b34ed5bc6b6e3812718c7e06e2fd7444540df2455d2c51bd58808feee", size = 67219, upload-time = "2024-04-29T19:52:48.345Z" },
 ]
 
 [[package]]
