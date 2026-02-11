@@ -21,3 +21,8 @@ tasks:
       - uv run semantic-release -v version --no-vcs-release
       - git push
       - git push --tags
+
+  keycloak:sync:
+    cmds:
+      - uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin
+      - uv run celine-policies keycloak sync
