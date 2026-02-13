@@ -2,7 +2,7 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Attach debugger",
+            "name": "policies debugger",
             "type": "debugpy",
             "request": "attach",
             "connect": {
