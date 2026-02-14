@@ -1,0 +1,882 @@
+/* 
+ * REC Keycloak Login Theme
+ * Matches the REC webapp design system
+ */
+
+/* ============================================
+   FONTS
+   ============================================ */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+/* ============================================
+   CSS VARIABLES - Light Theme (Default)
+   ============================================ */
+:root {
+  /* Typography */
+  --font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  
+  /* Core Colors */
+  --color-bg: #fafbfc;
+  --color-bg-elevated: #ffffff;
+  --color-bg-sunken: #f0f2f5;
+  --color-bg-hover: rgba(0, 0, 0, 0.04);
+
+  /* Text */
+  --color-text: #1a1a2e;
+  --color-text-secondary: #64748b;
+  --color-text-tertiary: #94a3b8;
+
+  /* Borders */
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+
+  /* Brand / Primary */
+  --color-primary: #0d9488;
+  --color-primary-hover: #0f766e;
+  --color-primary-light: #ccfbf1;
+  --color-primary-text: #ffffff;
+
+  /* Semantic */
+  --color-danger: #ef4444;
+  --color-danger-bg: #fee2e2;
+  --color-danger-text: #991b1b;
+  
+  --color-success: #10b981;
+  --color-success-bg: #d1fae5;
+  --color-success-text: #065f46;
+
+  --color-warning: #f59e0b;
+  --color-warning-bg: #fef3c7;
+  --color-warning-text: #92400e;
+
+  --color-info: #3b82f6;
+  --color-info-bg: #dbeafe;
+  --color-info-text: #1e40af;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+  /* Spacing */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+
+  /* Border Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-base: 250ms ease;
+}
+
+/* ============================================
+   DARK THEME
+   ============================================ */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0f172a;
+    --color-bg-elevated: #1e293b;
+    --color-bg-sunken: #0b1120;
+    --color-bg-hover: rgba(255, 255, 255, 0.06);
+
+    --color-text: #f1f5f9;
+    --color-text-secondary: #94a3b8;
+    --color-text-tertiary: #64748b;
+
+    --color-border: #334155;
+    --color-border-strong: #475569;
+
+    --color-primary: #14b8a6;
+    --color-primary-hover: #2dd4bf;
+    --color-primary-light: rgba(20, 184, 166, 0.15);
+    --color-primary-text: #0f172a;
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.15);
+    --color-danger-text: #fca5a5;
+
+    --color-success: #34d399;
+    --color-success-bg: rgba(52, 211, 153, 0.15);
+    --color-success-text: #6ee7b7;
+
+    --color-warning: #fbbf24;
+    --color-warning-bg: rgba(251, 191, 36, 0.15);
+    --color-warning-text: #fcd34d;
+
+    --color-info: #60a5fa;
+    --color-info-bg: rgba(96, 165, 250, 0.15);
+    --color-info-text: #93c5fd;
+
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* ============================================
+   BASE RESET & TYPOGRAPHY
+   ============================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.6;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ============================================
+   LOGIN PAGE LAYOUT
+   ============================================ */
+.login-pf {
+  background: var(--color-bg);
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.login-pf body {
+  background: var(--color-bg);
+}
+
+#kc-header {
+  display: none;
+}
+
+#kc-header-wrapper {
+  display: none;
+}
+
+/* Main login container */
+.login-pf-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: var(--space-md);
+}
+
+/* Card container */
+#kc-content {
+  width: 100%;
+  max-width: 420px;
+}
+
+#kc-content-wrapper {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  padding: var(--space-xl);
+  width: 100%;
+}
+
+/* ============================================
+   LOGO / BRAND
+   ============================================ */
+#kc-logo-wrapper {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-xl);
+}
+
+#kc-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+/* Custom logo - leaf icon */
+#kc-logo::before {
+  content: '';
+  display: block;
+  width: 48px;
+  height: 48px;
+  background: var(--color-primary-light);
+  border-radius: 50%;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%230d9488' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z'%3E%3C/path%3E%3Cpath d='M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12'%3E%3C/path%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/* Brand text */
+.kc-logo-text {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: -0.02em;
+}
+
+/* ============================================
+   PAGE TITLE
+   ============================================ */
+#kc-page-title {
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 var(--space-lg);
+}
+
+/* ============================================
+   FORM STYLES
+   ============================================ */
+#kc-form {
+  width: 100%;
+}
+
+#kc-form-wrapper {
+  width: 100%;
+}
+
+/* Form groups */
+.form-group {
+  margin-bottom: var(--space-md);
+}
+
+/* Labels */
+label.pf-c-form__label,
+.pf-c-form__label,
+label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text);
+  margin-bottom: var(--space-xs);
+}
+
+.pf-c-form__label-text {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+/* Input fields */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input.pf-c-form-control,
+.pf-c-form-control {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-family: var(--font-family);
+  font-size: 1rem;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  outline: none;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+input[type="email"]:focus,
+.pf-c-form-control:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+input[type="text"]::placeholder,
+input[type="password"]::placeholder,
+input[type="email"]::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* Password visibility toggle */
+.pf-c-form-control__toggle {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.pf-c-form-control__toggle:hover {
+  color: var(--color-text);
+}
+
+/* Input wrapper for password fields */
+.pf-c-input-group {
+  position: relative;
+}
+
+.pf-c-input-group input {
+  padding-right: 3rem;
+}
+
+/* ============================================
+   BUTTONS
+   ============================================ */
+.pf-c-button,
+button[type="submit"],
+input[type="submit"],
+#kc-login,
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.875rem 1.5rem;
+  font-family: var(--font-family);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-primary-text);
+  background: var(--color-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-decoration: none;
+  margin-top: var(--space-md);
+}
+
+.pf-c-button:hover,
+button[type="submit"]:hover,
+input[type="submit"]:hover,
+#kc-login:hover,
+.btn-primary:hover {
+  background: var(--color-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.pf-c-button:active,
+button[type="submit"]:active,
+input[type="submit"]:active {
+  transform: translateY(0);
+}
+
+.pf-c-button:focus,
+button[type="submit"]:focus,
+input[type="submit"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--color-primary-light);
+}
+
+/* Secondary buttons */
+.pf-c-button.pf-m-link,
+.btn-default,
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1rem;
+  font-family: var(--font-family);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  text-decoration: none;
+}
+
+.pf-c-button.pf-m-link:hover,
+.btn-default:hover,
+a.btn:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-primary);
+}
+
+/* ============================================
+   CHECKBOX / REMEMBER ME
+   ============================================ */
+#kc-form-options {
+  margin: var(--space-md) 0;
+}
+
+.checkbox,
+.pf-c-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  cursor: pointer;
+}
+
+.checkbox input[type="checkbox"],
+.pf-c-check__input {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  accent-color: var(--color-primary);
+}
+
+.checkbox label,
+.pf-c-check__label {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  margin: 0;
+}
+
+/* ============================================
+   LINKS
+   ============================================ */
+a,
+.pf-c-button.pf-m-link.pf-m-inline {
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--color-primary-hover);
+  text-decoration: underline;
+}
+
+#kc-registration,
+#kc-form-options .checkbox + a,
+.kc-form-options-wrapper > span > a {
+  display: block;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin-top: var(--space-lg);
+}
+
+#kc-registration a,
+.kc-form-options-wrapper > span > a {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+/* Forgot password link */
+#kc-form-options {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+/* ============================================
+   SOCIAL LOGIN / IDENTITY PROVIDERS
+   ============================================ */
+#kc-social-providers {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-xl);
+  border-top: 1px solid var(--color-border);
+}
+
+#kc-social-providers h4,
+#kc-social-providers .pf-c-login__main-footer-band-item {
+  text-align: center;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin-bottom: var(--space-md);
+}
+
+#kc-social-providers ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+#kc-social-providers li {
+  width: 100%;
+}
+
+#kc-social-providers a,
+.pf-c-button.kc-social-provider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  text-decoration: none;
+}
+
+#kc-social-providers a:hover,
+.pf-c-button.kc-social-provider:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+  text-decoration: none;
+}
+
+/* Social icons */
+#kc-social-providers .kc-social-icon-text {
+  font-weight: 500;
+}
+
+/* ============================================
+   ALERTS / ERROR MESSAGES
+   ============================================ */
+.alert,
+.pf-c-alert,
+#kc-content-wrapper .alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: 0.9375rem;
+  margin-bottom: var(--space-md);
+}
+
+.alert-error,
+.pf-c-alert.pf-m-danger,
+.alert-danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border: 1px solid transparent;
+}
+
+.alert-success,
+.pf-c-alert.pf-m-success {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.alert-warning,
+.pf-c-alert.pf-m-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+}
+
+.alert-info,
+.pf-c-alert.pf-m-info {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+
+.pf-c-alert__icon {
+  flex-shrink: 0;
+}
+
+.pf-c-alert__title {
+  font-weight: 600;
+  margin: 0;
+}
+
+.kc-feedback-text {
+  font-size: 0.875rem;
+}
+
+/* Input error state */
+input.pf-m-error,
+input:invalid,
+.has-error input {
+  border-color: var(--color-danger);
+}
+
+.pf-c-form__helper-text.pf-m-error,
+.help-block,
+.error-message {
+  color: var(--color-danger-text);
+  font-size: 0.8125rem;
+  margin-top: var(--space-xs);
+}
+
+/* ============================================
+   INFO BOX
+   ============================================ */
+#kc-info {
+  margin-top: var(--space-lg);
+  text-align: center;
+}
+
+#kc-info-wrapper {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+#kc-info-wrapper p {
+  margin: var(--space-xs) 0;
+}
+
+/* ============================================
+   LOCALE SELECTOR
+   ============================================ */
+#kc-locale {
+  position: absolute;
+  top: var(--space-md);
+  right: var(--space-md);
+}
+
+#kc-locale-wrapper {
+  position: relative;
+}
+
+#kc-current-locale-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+#kc-current-locale-link:hover {
+  color: var(--color-text);
+  background: var(--color-bg-hover);
+}
+
+#kc-locale-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--space-xs);
+  min-width: 120px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: 100;
+}
+
+#kc-locale-dropdown li {
+  list-style: none;
+}
+
+#kc-locale-dropdown a {
+  display: block;
+  padding: var(--space-sm) var(--space-md);
+  font-size: 0.875rem;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+#kc-locale-dropdown a:hover {
+  background: var(--color-bg-hover);
+  text-decoration: none;
+}
+
+/* ============================================
+   FOOTER
+   ============================================ */
+.pf-c-login__footer,
+#kc-footer {
+  margin-top: var(--space-xl);
+  text-align: center;
+}
+
+.pf-c-login__footer-list {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-lg);
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.pf-c-login__footer-list a {
+  font-size: 0.8125rem;
+  color: var(--color-text-tertiary);
+}
+
+.pf-c-login__footer-list a:hover {
+  color: var(--color-text-secondary);
+}
+
+/* ============================================
+   LOADING SPINNER
+   ============================================ */
+.pf-c-spinner,
+.kc-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================
+   OTP / TOTP PAGE
+   ============================================ */
+#kc-otp-login-form .pf-c-form-control,
+.otp-input {
+  text-align: center;
+  font-size: 1.5rem;
+  letter-spacing: 0.5em;
+  font-weight: 600;
+}
+
+/* ============================================
+   REGISTRATION PAGE
+   ============================================ */
+#kc-register-form .form-group {
+  margin-bottom: var(--space-md);
+}
+
+/* ============================================
+   PASSWORD RESET PAGE
+   ============================================ */
+#kc-reset-password-form .pf-c-form__label {
+  margin-bottom: var(--space-xs);
+}
+
+/* ============================================
+   UPDATE PASSWORD PAGE
+   ============================================ */
+#kc-passwd-update-form .form-group {
+  margin-bottom: var(--space-md);
+}
+
+.password-requirements {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  margin-top: var(--space-sm);
+}
+
+.password-requirements li {
+  margin-bottom: var(--space-xs);
+}
+
+/* ============================================
+   RESPONSIVE - MOBILE FIRST
+   ============================================ */
+
+/* Small mobile */
+@media (max-width: 375px) {
+  #kc-content-wrapper {
+    padding: var(--space-lg);
+    border-radius: var(--radius-lg);
+  }
+
+  #kc-page-title {
+    font-size: 1.125rem;
+  }
+
+  input[type="text"],
+  input[type="password"],
+  input[type="email"],
+  .pf-c-form-control {
+    padding: 0.625rem 0.875rem;
+    font-size: 1rem;
+  }
+
+  .pf-c-button,
+  button[type="submit"],
+  input[type="submit"],
+  #kc-login {
+    padding: 0.75rem 1.25rem;
+  }
+}
+
+/* Tablet */
+@media (min-width: 768px) {
+  .login-pf-page {
+    padding: var(--space-xl);
+  }
+
+  #kc-content-wrapper {
+    padding: var(--space-2xl);
+  }
+}
+
+/* Desktop */
+@media (min-width: 1024px) {
+  /* Optional: side-by-side layout for desktop */
+}
+
+/* ============================================
+   SAFE AREA (NOTCH SUPPORT)
+   ============================================ */
+@supports (padding: env(safe-area-inset-bottom)) {
+  .login-pf-page {
+    padding-bottom: calc(var(--space-md) + env(safe-area-inset-bottom));
+  }
+}
+
+/* ============================================
+   REDUCED MOTION
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+@media print {
+  .login-pf-page {
+    background: white;
+  }
+
+  #kc-content-wrapper {
+    box-shadow: none;
+    border: 1px solid #ccc;
+  }
+}
+
+/* ============================================
+   HIGH CONTRAST MODE
+   ============================================ */
+@media (prefers-contrast: high) {
+  :root {
+    --color-border: #000;
+    --color-border-strong: #000;
+  }
+
+  input[type="text"],
+  input[type="password"],
+  input[type="email"],
+  .pf-c-form-control {
+    border-width: 2px;
+  }
+}

@@ -2,6 +2,10 @@
     "id": "0c1045cc-7e38-4235-8a5b-502a2c4ae1ac",
     "realm": "celine",
     "enabled": true,
+    "loginTheme": "rec",
+    "accountTheme": "keycloak.v2",
+    "adminTheme": "keycloak.v2",
+    "emailTheme": "keycloak",
     "displayName": "CELINE",
     "roles": {
         "realm": [
@@ -44,6 +48,13 @@
         {
             "name": "viewers",
             "path": "/viewers",
+            "realmRoles": [
+                "viewer"
+            ]
+        },
+        {
+            "name": "participants",
+            "path": "/participants",
             "realmRoles": [
                 "viewer"
             ]
@@ -274,6 +285,329 @@
             ],
             "groups": [
                 "/viewers"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "username": "utente_0001",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0001",
+            "email": "utente_0001@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0001",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000002",
+            "username": "utente_0002",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0002",
+            "email": "utente_0002@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0002",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000003",
+            "username": "utente_0003",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0003",
+            "email": "utente_0003@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0003",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000004",
+            "username": "utente_0004",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0004",
+            "email": "utente_0004@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0004",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000005",
+            "username": "utente_0005",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0005",
+            "email": "utente_0005@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0005",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000006",
+            "username": "utente_0006",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0006",
+            "email": "utente_0006@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0006",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000007",
+            "username": "utente_0007",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0007",
+            "email": "utente_0007@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0007",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000008",
+            "username": "utente_0008",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0008",
+            "email": "utente_0008@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0008",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000009",
+            "username": "utente_0009",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0009",
+            "email": "utente_0009@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0009",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000010",
+            "username": "utente_0010",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0010",
+            "email": "utente_0010@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0010",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000011",
+            "username": "utente_0011",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0011",
+            "email": "utente_0011@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0011",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000012",
+            "username": "utente_0012",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0012",
+            "email": "utente_0012@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0012",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000013",
+            "username": "utente_0013",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0013",
+            "email": "utente_0013@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0013",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000014",
+            "username": "utente_0014",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0014",
+            "email": "utente_0014@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0014",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000015",
+            "username": "utente_0015",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0015",
+            "email": "utente_0015@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0015",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000016",
+            "username": "utente_0016",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0016",
+            "email": "utente_0016@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0016",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
+            ]
+        },
+        {
+            "id": "00000000-0000-0000-0000-000000000017",
+            "username": "utente_0017",
+            "enabled": true,
+            "emailVerified": true,
+            "firstName": "Utente",
+            "lastName": "0017",
+            "email": "utente_0017@celine.localhost",
+            "credentials": [
+                {
+                    "type": "password",
+                    "value": "utente_0017",
+                    "temporary": false
+                }
+            ],
+            "groups": [
+                "/participants"
             ]
         }
     ],
