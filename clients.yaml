@@ -104,16 +104,16 @@ clients:
       - dt.values.read # reads DT state
       - dataset.query # reads datasets
 
-  - client_id: svc-reg-registry
+  - client_id: svc-rec-registry
     name: REC Registry  Service
-    secret: ${SVC_DT_SECRET:-svc-reg-registry}
+    secret: ${SVC_DT_SECRET:-svc-rec-registry}
     default_scopes:
       # Own resources
       - rec_registry.admin
 
   - client_id: celine-cli
     name: CELINE Admin CLI
-    secret: ${CELINE_ADMIN_CLI_SECRET}
+    secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
     default_scopes:
       - dt.admin
       - pipeline.admin

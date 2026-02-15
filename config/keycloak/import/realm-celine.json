@@ -51,13 +51,6 @@
             "realmRoles": [
                 "viewer"
             ]
-        },
-        {
-            "name": "participants",
-            "path": "/participants",
-            "realmRoles": [
-                "viewer"
-            ]
         }
     ],
     "clients": [
@@ -76,12 +69,16 @@
                 "+"
             ],
             "defaultClientScopes": [
+                "basic",
                 "profile",
                 "email"
             ],
             "optionalClientScopes": [
                 "offline_access"
             ],
+            "attributes": {
+                "access.token.lifespan": "1800"
+            },
             "standardFlowEnabled": true,
             "implicitFlowEnabled": true,
             "directAccessGrantsEnabled": true,
@@ -97,6 +94,45 @@
                         "lightweight.claim": "false",
                         "access.token.claim": "true",
                         "introspection.token.claim": "true"
+                    }
+                },
+                {
+                    "name": "aud-mapper-dataset-api",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "included.client.audience": "svc-dataset-api",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "introspection.token.claim": "true",
+                        "lightweight.claim": "false"
+                    }
+                },
+                {
+                    "name": "aud-mapper-rec-registry",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "included.client.audience": "svc-rec-registry",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "introspection.token.claim": "true",
+                        "lightweight.claim": "false"
+                    }
+                },
+                {
+                    "name": "aud-mapper-digital-twin",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "included.client.audience": "svc-digital-twin",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "introspection.token.claim": "true",
+                        "lightweight.claim": "false"
                     }
                 },
                 {
@@ -303,7 +339,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -322,7 +358,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -341,7 +377,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -360,7 +396,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -379,7 +415,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -398,7 +434,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -417,7 +453,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -436,7 +472,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -455,7 +491,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -474,7 +510,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -493,7 +529,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -512,7 +548,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -531,7 +567,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -550,7 +586,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -569,7 +605,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -588,7 +624,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         },
         {
@@ -607,7 +643,7 @@
                 }
             ],
             "groups": [
-                "/participants"
+                "/viewers"
             ]
         }
     ],
