@@ -50,6 +50,7 @@ services:
       - celine_security_net
     extra_hosts:
       - "keycloak.celine.localhost:172.17.0.1"
+      - "api.celine.localhost:172.17.0.1"
 
   mosquitto:
     image: ghcr.io/lhns/mosquitto-go-auth:3.3.0-mosquitto_2.0.22
