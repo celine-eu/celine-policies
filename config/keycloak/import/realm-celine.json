@@ -219,6 +219,45 @@
                         "access.token.claim": "true",
                         "introspection.token.claim": "true"
                     }
+                },
+                {
+                    "name": "aud-mapper-dataset-api",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "included.client.audience": "svc-dataset-api",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "introspection.token.claim": "true",
+                        "lightweight.claim": "false"
+                    }
+                },
+                {
+                    "name": "aud-mapper-rec-registry",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "included.client.audience": "svc-rec-registry",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "introspection.token.claim": "true",
+                        "lightweight.claim": "false"
+                    }
+                },
+                {
+                    "name": "aud-mapper-digital-twin",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "included.client.audience": "svc-digital-twin",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "introspection.token.claim": "true",
+                        "lightweight.claim": "false"
+                    }
                 }
             ],
             "defaultClientScopes": [

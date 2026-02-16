@@ -28,21 +28,21 @@ def _load_secret_from_file(
     client_id: str = DEFAULT_ADMIN_CLIENT_ID,
 ) -> str | None:
     """Try to load client secret from .client.secrets.yaml.
-    
+
     Returns the secret if found, None otherwise.
     """
     if not secrets_file.exists():
         return None
-    
+
     try:
         data = yaml.safe_load(secrets_file.read_text())
         if not isinstance(data, dict):
             return None
-        
+
         clients = data.get("clients", {})
         if not isinstance(clients, dict):
             return None
-        
+
         client_data = clients.get(client_id, {})
         if isinstance(client_data, dict):
             secret = client_data.get("secret")
@@ -51,7 +51,7 @@ def _load_secret_from_file(
                 return str(secret)
     except Exception as e:
         logger.debug("Failed to load secrets file %s: %s", secrets_file, e)
-    
+
     return None
 
 
@@ -65,7 +65,7 @@ class KeycloakSettings(BaseSettings):
 
     # Connection
     base_url: str = Field(
-        default="http://localhost:8080",
+        default="http://keycloak.celine.localhost",
         description="Keycloak base URL",
     )
     realm: str = Field(
@@ -148,20 +148,20 @@ class KeycloakSettings(BaseSettings):
         secrets_file: Path = DEFAULT_SECRETS_FILE,
     ) -> "KeycloakSettings":
         """Try to auto-load secret from .client.secrets.yaml if not already set.
-        
+
         Only loads for the default admin client (celine-admin-cli).
         """
         if self.admin_client_secret:
             # Already have a secret
             return self
-        
+
         if self.admin_client_id != DEFAULT_ADMIN_CLIENT_ID:
             # Not using default client, don't auto-load
             return self
-        
+
         secret = _load_secret_from_file(secrets_file, self.admin_client_id)
         if secret:
             logger.info("Auto-loaded credentials from %s", secrets_file)
             return self.with_overrides(admin_client_secret=secret)
-        
+
         return self

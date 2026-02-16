@@ -58,17 +58,7 @@ def _extract_subject_from_token(
     """
     try:
         # Validate JWT if JWKS URI is configured
-        if settings.oidc_jwks_uri:
-            user = JwtUser.from_token(
-                token,
-                verify=True,
-                jwks_uri=settings.oidc_jwks_uri,
-                issuer=settings.oidc_issuer,
-                audience=settings.oidc_audience,
-            )
-        else:
-            # Just decode without verification (dev mode)
-            user = JwtUser.from_token(token, verify=False)
+        user = JwtUser.from_token(token, oidc=settings.oidc)
 
         # Extract scopes from claims
         scopes = user.claims.get("scope", "")

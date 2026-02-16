@@ -1,33 +1,30 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim AS builder
 
-# Install uv for fast dependency resolution
-COPY --from=ghcr.io/astral-sh/uv:0.9.27 /uv /uvx /bin/
-
-WORKDIR /app
-
-# Copy project files
-COPY pyproject.toml ./
-COPY src ./src
-
-# Install dependencies
-RUN uv pip install --system --no-cache .
-
-# Runtime stage
 FROM python:3.12-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_SYSTEM_PYTHON=1
+
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Install OS deps (build tools not strictly required for this set, keep lean)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy application and policies
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH=".venv/bin:/root/.local/bin:${PATH}"
+
+# Copy dependency manifests first for better caching
+COPY pyproject.toml README.md ./
 COPY src ./src
 
-# Environment
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+RUN uv sync --no-editable
+
+COPY policies ./policies
 
 # Expose port
 EXPOSE 8009

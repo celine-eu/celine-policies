@@ -2,6 +2,25 @@ networks:
   celine_security_net:
 
 services:
+  keycloak-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    volumes:
+      - ./clients.yaml:/app/clients.yaml:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - >
+        uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin &&
+        uv run celine-policies keycloak sync
+    extra_hosts:
+      - "keycloak.celine.localhost:172.17.0.1"
+      - "api.celine.localhost:172.17.0.1"
+
   mqtt_auth:
     build:
       context: .
@@ -14,27 +33,9 @@ services:
         --reload
         --host 0.0.0.0
         --port 8009
-    environment:
-      - CELINE_OIDC_JWKS_URI=http://keycloak.celine.localhost/realms/celine/protocol/openid-connect/certs
-      - CELINE_OIDC_ISSUER=http://keycloak.celine.localhost/realms/celine
-      - CELINE_OIDC_AUDIENCE=celine-mqtt
-
-      # Policy engine
-      - CELINE_POLICIES_POLICIES_DIR=/app/policies
-      - CELINE_POLICIES_POLICIES_CACHE_ENABLED=true
-      - CELINE_POLICIES_POLICIES_CACHE_TTL=300
-      - CELINE_POLICIES_POLICIES_CACHE_MAXSIZE=10000
-
-      # MQTT settings
-      - CELINE_MQTT_POLICY_PACKAGE=celine.mqtt.acl
-      - CELINE_MQTT_SUPERUSER_SCOPE=mqtt.admin
-
-      # Service settings
-      - CELINE_LOG_LEVEL=INFO
     volumes:
       # Mount policies for hot-reload during development
       - ./policies:/app/policies:ro
-      - ./src:/app/src
     healthcheck:
       test:
         [
@@ -46,6 +47,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    depends_on:
+      keycloak-sync:
+        condition: service_completed_successfully
     networks:
       - celine_security_net
     extra_hosts:
@@ -57,21 +61,20 @@ services:
     ports:
       - "1883:1883"
       - "1884:1884"
-    environment:
-      POLICY_SERVICE_HOST: "policy-service"
-      POLICY_SERVICE_PORT: "8000"
-      CACHE_ENABLED: "false"
-      CACHE_REDIS_HOST: "redis"
     volumes:
       - ./config/mosquitto:/etc/mosquitto:ro
       - ./data/mosquitto/data:/data:rw
       - ./data/mosquitto/logs:/logs:rw
     depends_on:
-      - redis
+      redis:
+        condition: service_started
+      mqtt_auth:
+        condition: service_healthy
     networks:
       - celine_security_net
     extra_hosts:
       - "keycloak.celine.localhost:172.17.0.1"
+      - "api.celine.localhost:172.17.0.1"
 
   redis:
     image: redis:7.2-alpine
