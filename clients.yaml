@@ -24,11 +24,9 @@ scopes:
   - name: digital-twin.app.run
     description: Execute digital twin apps
 
-  # Pipeline
+  # Pipelines
   - name: pipelines.admin
     description: Full access to Pipeline service
-  - name: pipelines.runs.admin
-    description: Admin pipeline runs
   - name: pipelines.runs.read
     description: Read pipeline runs
   - name: pipelines.runs.write
@@ -37,8 +35,6 @@ scopes:
     description: Read job details
   - name: pipelines.job.write
     description: Modify job configuration
-  - name: pipelines.job.execute
-    description: Trigger job execution
 
   # Dataset
   - name: dataset.admin
@@ -87,7 +83,6 @@ clients:
       # Own resources
       - pipelines.runs.read
       - pipelines.runs.write
-      - pipelines.job.execute
       # Dependencies
       - dataset.query # needs to read datasets
       - digital-twin.simulation.run # needs to trigger simulations
