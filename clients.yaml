@@ -9,33 +9,35 @@ realm: celine
 
 scopes:
   # Digital Twin
-  - name: dt.admin
+  - name: digital-twin.admin
     description: Full access to Digital Twin service
-  - name: dt.values.read
+  - name: digital-twin.values.read
     description: Read digital twin values
-  - name: dt.values.write
+  - name: digital-twin.values.write
     description: Write digital twin values
-  - name: dt.simulation.read
+  - name: digital-twin.simulation.read
     description: Read simulation data
-  - name: dt.simulation.write
+  - name: digital-twin.simulation.write
     description: Write simulation data
-  - name: dt.simulation.run
+  - name: digital-twin.simulation.run
     description: Execute simulations
-  - name: dt.app.run
+  - name: digital-twin.app.run
     description: Execute digital twin apps
 
   # Pipeline
-  - name: pipeline.admin
+  - name: pipelines.admin
     description: Full access to Pipeline service
-  - name: pipeline.status.read
-    description: Read pipeline status
-  - name: pipeline.status.write
-    description: Update pipeline status
-  - name: pipeline.job.read
+  - name: pipelines.runs.admin
+    description: Admin pipeline runs
+  - name: pipelines.runs.read
+    description: Read pipeline runs
+  - name: pipelines.runs.write
+    description: Update pipeline runs
+  - name: pipelines.job.read
     description: Read job details
-  - name: pipeline.job.write
+  - name: pipelines.job.write
     description: Modify job configuration
-  - name: pipeline.job.execute
+  - name: pipelines.job.execute
     description: Trigger job execution
 
   # Dataset
@@ -74,7 +76,7 @@ clients:
     secret: ${SVC_DT_SECRET:-svc-digital-twin}
     default_scopes:
       # Own resources
-      - dt.admin
+      - digital-twin.admin
       # Dependencies
       - dataset.query # needs to read datasets
 
@@ -83,12 +85,12 @@ clients:
     secret: ${SVC_PIPELINES_SECRET:-svc-pipelines}
     default_scopes:
       # Own resources
-      - pipeline.status.read
-      - pipeline.status.write
-      - pipeline.job.execute
+      - pipelines.runs.read
+      - pipelines.runs.write
+      - pipelines.job.execute
       # Dependencies
       - dataset.query # needs to read datasets
-      - dt.simulation.run # needs to trigger simulations
+      - digital-twin.simulation.run # needs to trigger simulations
 
   - client_id: svc-dataset-api
     name: Dataset API Service
@@ -101,7 +103,7 @@ clients:
     secret: ${SVC_NUDGING_SECRET:-svc-nudging}
     default_scopes:
       # Dependencies only
-      - dt.values.read # reads DT state
+      - digital-twin.values.read # reads DT state
       - dataset.query # reads datasets
 
   - client_id: svc-rec-registry
@@ -115,8 +117,8 @@ clients:
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
     default_scopes:
-      - dt.admin
-      - pipeline.admin
+      - digital-twin.admin
+      - pipelines.admin
       - dataset.admin
       - mqtt.admin
       - rec_registry.admin

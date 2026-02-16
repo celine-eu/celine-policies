@@ -1,74 +1,98 @@
-# METADATA
-# title: Scope Matching
-# description: Shared scope matching logic - imported by all policies
-# scope: package
 package celine.scopes
 
-import rego.v1
+default deny = true
 
-# =============================================================================
-# SCOPE MATCHING
-# =============================================================================
-#
-# Scope convention: {service}.{resource}.{action}
-#
-# Matching rules:
-#   1. Exact match: "dt.simulation.read" matches "dt.simulation.read"
-#   2. Admin override: "dt.admin" matches any "dt.*"
-#   3. Resource wildcard: "dt.simulation.*" matches "dt.simulation.{read,write,run}"
-#
-# =============================================================================
-
-# Check if subject has required scope
-has_scope(required) if {
-    some have in input.subject.scopes
-    scope_matches(have, required)
-}
-
-# Check if subject has any of the required scopes
-has_any_scope(required_list) if {
-    some required in required_list
-    has_scope(required)
-}
-
-# Exact match
-scope_matches(have, want) if {
-    have == want
-}
-
-# Admin override: {service}.admin matches {service}.**
-scope_matches(have, want) if {
-    endswith(have, ".admin")
-    service := trim_suffix(have, ".admin")
-    startswith(want, concat("", [service, "."]))
-}
-
-# Resource wildcard: {service}.{resource}.* matches {service}.{resource}.{action}
-scope_matches(have, want) if {
-    endswith(have, ".*")
-    prefix := trim_suffix(have, "*")
-    startswith(want, prefix)
-}
-
-# =============================================================================
-# SUBJECT HELPERS
-# =============================================================================
-
-# Check if subject is a service (machine-to-machine)
 is_service if {
-    input.subject.type == "service"
+  input.subject.type == "service"
 }
 
-# Check if subject is a user
 is_user if {
-    input.subject.type == "user"
+  input.subject.type == "user"
 }
 
-# Check if subject is anonymous/null
-is_anonymous if {
-    input.subject == null
+has_scope(required) if {
+  some i
+  input.subject.scopes[i] == required
 }
 
-is_anonymous if {
-    input.subject.type == "anonymous"
+has_scope_service_admin(service) if {
+  has_scope(sprintf("%s.admin", [service]))
+}
+
+has_scope_resource_wildcard(service, resource) if {
+  has_scope(sprintf("%s.%s.*", [service, resource]))
+}
+
+service_allowed(required, service, resource) if {
+  is_service
+  has_scope(required)
+}
+
+service_allowed(required, service, resource) if {
+  is_service
+  has_scope_service_admin(service)
+}
+
+service_allowed(required, service, resource) if {
+  is_service
+  has_scope_resource_wildcard(service, resource)
+}
+
+# ---- user groups ----
+
+user_in_group(g) if {
+  some i
+  input.subject.groups[i] == g
+}
+
+user_is_admin if {
+  is_user
+  user_in_group("admin")
+}
+
+user_is_admin if {
+  is_user
+  user_in_group("mqtt.admin")
+}
+
+user_is_service_admin(service) if {
+  is_user
+  user_in_group(sprintf("%s.admin", [service]))
+}
+
+user_is_service_admin(service) if {
+  is_user
+  user_in_group(sprintf("mqtt:%s:admin", [service]))
+}
+
+# required is "<service>.<resource>.<verb>" (e.g. pipelines.runs.read)
+user_allowed(required, service, resource, verb) if {
+  is_user
+  user_in_group(required)
+}
+
+# Alternative group naming: "mqtt:<service>:<resource>:<verb>"
+user_allowed(required, service, resource, verb) if {
+  is_user
+  user_in_group(sprintf("mqtt:%s:%s:%s", [service, resource, verb]))
+}
+
+# Resource wildcard groups: "<service>.<resource>.*" or "mqtt:<service>:<resource>:*"
+user_allowed(required, service, resource, verb) if {
+  is_user
+  user_in_group(sprintf("%s.%s.*", [service, resource]))
+}
+
+user_allowed(required, service, resource, verb) if {
+  is_user
+  user_in_group(sprintf("mqtt:%s:%s:*", [service, resource]))
+}
+
+# Admin groups
+user_allowed(required, service, resource, verb) if {
+  user_is_admin
+}
+
+user_allowed(required, service, resource, verb) if {
+  user_is_service_admin(service)
 }

@@ -20,8 +20,18 @@ dumps:
       - pyproject.toml
       - clients.yaml
 
-  - name: policies
+  - name: policies-sources
     contents:
       - src/celine/policies
       - pyproject.toml
       - clients.yaml
+
+  - name: mqtt-sources
+    contents:
+      - src/celine/mqtt_auth
+      - policies
+      - pyproject.toml
+
+  - name: rego-policies
+    contents:
+      - policies

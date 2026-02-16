@@ -72,9 +72,15 @@ def _extract_subject_from_token(
         if not isinstance(groups, list):
             groups = []
 
+        subject_type = SubjectType.ANONYMOUS
+        if groups:
+            subject_type = SubjectType.USER
+        elif scopes:
+            subject_type = SubjectType.SERVICE
+
         return Subject(
             id=user.sub,
-            type=SubjectType.USER,
+            type=subject_type,
             groups=groups,
             scopes=scopes,
             claims=user.claims,
@@ -99,7 +105,7 @@ def _acc_to_actions(acc: int) -> list[str]:
         actions.append("publish")
     if acc & 0x01:  # 1
         actions.append("read")
-    return actions or ["unknown"]
+    return actions or []
 
 
 @router.post("/user")
@@ -167,6 +173,9 @@ async def mqtt_acl(
 
     # Convert acc bitmask to action names
     actions = _acc_to_actions(request.acc)
+    if not actions:
+        response.status_code = status.HTTP_403_FORBIDDEN
+        return MqttResponse(ok=False, reason="invalid acc mask")
 
     # Check each action (publish, subscribe, read)
     for action_name in actions:
@@ -201,7 +210,7 @@ async def mqtt_acl(
         except Exception as e:
             logger.exception("MQTT ACL check failed: %s", e)
             response.status_code = status.HTTP_403_FORBIDDEN
-            return MqttResponse(ok=False, reason=f"check failed: {e}")
+            return MqttResponse(ok=False, reason=f"check failed")
 
     logger.info(
         "MQTT ACL allowed: user=%s topic=%s actions=%s",
@@ -240,7 +249,11 @@ async def mqtt_superuser(
         return MqttResponse(ok=False, reason="invalid credentials")
 
     # Check for superuser scope
-    if settings.mqtt_superuser_scope in subject.scopes:
+    if (
+        settings.mqtt_superuser_scope in subject.scopes
+        or "admin" in subject.groups
+        or "mqtt.admin" in subject.groups
+    ):
         logger.info("MQTT superuser: user=%s", subject.id)
         return MqttResponse(ok=True, reason="superuser")
 

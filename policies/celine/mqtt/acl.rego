@@ -1,133 +1,132 @@
-# METADATA
-# title: MQTT ACL Policy
-# description: Topic-based authorization deriving required scopes from topic patterns
-# scope: package
-# entrypoint: true
 package celine.mqtt.acl
-
-import rego.v1
 
 import data.celine.scopes
 
-# =============================================================================
-# MQTT AUTHORIZATION
-# =============================================================================
-#
-# Topic pattern: celine/{service}/{resource}/...
-#
-# Authorization flow:
-#   1. Parse topic to extract service and resource
-#   2. Map MQTT action (subscribe/publish) to scope action (read/write)
-#   3. Derive required scope: {service}.{resource}.{action}
-#   4. Check if subject has scope (with admin/wildcard expansion)
-#
-# =============================================================================
+default allow = false
+default reason = "denied"
 
-default allow := false
-default reason := "unauthorized"
+parts := split(input.resource.id, "/")
 
-# =============================================================================
-# MAIN RULES
-# =============================================================================
+is_celine_prefix if {
+  count(parts) >= 2
+  parts[0] == "celine"
+}
+
+service := parts[1]
+
+resource := parts[2]
+
+# ---- action -> verb ----
+
+valid_action if { input.action.name == "subscribe" }
+valid_action if { input.action.name == "read" }
+valid_action if { input.action.name == "publish" }
+
+verb := "read" if { input.action.name == "subscribe" }
+verb := "read" if { input.action.name == "read" }
+verb := "write" if { input.action.name == "publish" }
+
+required := sprintf("%s.%s.%s", [service, resource, verb])
+
+# ---- topic shapes ----
+
+# "celine/<service>"
+is_service_only if {
+  is_celine_prefix
+  count(parts) == 2
+}
+
+# "celine/<service>/#" or "celine/<service>/+"
+is_service_level_wildcard if {
+  is_celine_prefix
+  count(parts) == 3
+  (parts[2] == "#" or parts[2] == "+")
+}
+
+# "celine/<service>/<resource>/..." (resource cannot be "#" or "+")
+is_valid_topic_format if {
+  is_celine_prefix
+  count(parts) >= 3
+  not is_service_level_wildcard
+  not (resource == "#" or resource == "+")
+}
+
+# ---- allow rules (all require valid_action) ----
 
 allow if {
-    data.celine.scopes.is_service
-    required := required_scope(input.resource.id, input.action.name)
-    data.celine.scopes.has_scope(required)
+  valid_action
+  is_service_only
+  scopes.has_scope_service_admin(service)
+  reason = "service admin scope"
 }
 
-reason := "service authorized via scope" if {
-    data.celine.scopes.is_service
-    required := required_scope(input.resource.id, input.action.name)
-    data.celine.scopes.has_scope(required)
-}
-
-# Admin scope for service always wins
 allow if {
-    data.celine.scopes.is_service
-    parsed := parse_topic(input.resource.id)
-    admin_scope := concat(".", [parsed.service, "admin"])
-    data.celine.scopes.has_scope(admin_scope)
+  valid_action
+  is_service_only
+  scopes.user_is_admin
+  reason = "user global admin"
 }
 
-reason := "service authorized via admin scope" if {
-    data.celine.scopes.is_service
-    parsed := parse_topic(input.resource.id)
-    admin_scope := concat(".", [parsed.service, "admin"])
-    data.celine.scopes.has_scope(admin_scope)
+allow if {
+  valid_action
+  is_service_only
+  scopes.user_is_service_admin(service)
+  reason = "user service admin"
 }
 
-# =============================================================================
-# TOPIC PARSING
-# =============================================================================
-
-parse_topic(topic) := result if {
-    parts := split(topic, "/")
-    count(parts) >= 3
-    parts[0] == "celine"
-    result := {
-        "service": parts[1],
-        "resource": parts[2],
-    }
+allow if {
+  valid_action
+  is_service_level_wildcard
+  scopes.has_scope_service_admin(service)
+  reason = "service admin wildcard"
 }
 
-parse_topic(topic) := result if {
-    parts := split(topic, "/")
-    count(parts) == 2
-    parts[0] == "celine"
-    result := {
-        "service": parts[1],
-        "resource": "",
-    }
+allow if {
+  valid_action
+  is_service_level_wildcard
+  scopes.user_is_admin
+  reason = "user global admin wildcard"
 }
 
-# =============================================================================
-# SCOPE DERIVATION
-# =============================================================================
-
-mqtt_action_map := {
-    "subscribe": "read",
-    "read": "read",
-    "publish": "write",
+allow if {
+  valid_action
+  is_service_level_wildcard
+  scopes.user_is_service_admin(service)
+  reason = "user service admin wildcard"
 }
 
-required_scope(topic, mqtt_action) := scope if {
-    parsed := parse_topic(topic)
-    parsed.resource != ""
-    scope_action := mqtt_action_map[mqtt_action]
-    scope := concat(".", [parsed.service, parsed.resource, scope_action])
+allow if {
+  valid_action
+  is_valid_topic_format
+  scopes.service_allowed(required, service, resource)
+  reason = "service scope"
 }
 
-required_scope(topic, mqtt_action) := scope if {
-    parsed := parse_topic(topic)
-    parsed.resource == ""
-    scope := concat(".", [parsed.service, "admin"])
+allow if {
+  valid_action
+  is_valid_topic_format
+  scopes.user_allowed(required, service, resource, verb)
+  reason = "user group"
 }
 
-# =============================================================================
-# DENIAL REASONS
-# =============================================================================
+# ---- denial reasons (mutually exclusive) ----
 
-reason := "anonymous access denied" if {
-    not allow
-    data.celine.scopes.is_anonymous
+reason = "invalid action" if {
+  not valid_action
 }
 
-reason := "invalid topic format" if {
-    not allow
-    not data.celine.scopes.is_anonymous
-    not parse_topic(input.resource.id)
+reason = "invalid topic format" if {
+  valid_action
+  is_celine_prefix
+  not is_valid_topic_format
+  not is_service_only
+  not is_service_level_wildcard
 }
 
-reason := "missing required scope" if {
-    not allow
-    data.celine.scopes.is_service
-    parse_topic(input.resource.id)
+reason = "service-level wildcard denied" if {
+  valid_action
+  is_service_level_wildcard
+  not scopes.has_scope_service_admin(service)
+  not scopes.user_is_admin
+  not scopes.user_is_service_admin(service)
 }
-
-# =============================================================================
-# INTROSPECTION
-# =============================================================================
-
-derived_scope := required_scope(input.resource.id, input.action.name)
-parsed_topic := parse_topic(input.resource.id)
