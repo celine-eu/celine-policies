@@ -14,10 +14,11 @@ class MqttAuthRequest(BaseModel):
 class MqttAclRequest(BaseModel):
     """MQTT ACL check request from mosquitto-go-auth."""
 
-    username: str = Field(..., description="MQTT username")
     clientid: str = Field(..., description="MQTT client ID")
     topic: str = Field(..., description="MQTT topic")
-    acc: int = Field(..., description="Access type bitmask (1=read, 2=publish, 4=subscribe)")
+    acc: int = Field(
+        ..., description="Access type bitmask (1=read, 2=publish, 4=subscribe)"
+    )
 
 
 class MqttSuperuserRequest(BaseModel):

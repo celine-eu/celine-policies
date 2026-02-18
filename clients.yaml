@@ -75,6 +75,7 @@ clients:
       - digital-twin.admin
       # Dependencies
       - dataset.query # needs to read datasets
+      - pipelines.runs.read # subscribe to pipelines updates
 
   - client_id: svc-pipelines
     name: Pipeline Orchestrator
@@ -83,9 +84,6 @@ clients:
       # Own resources
       - pipelines.runs.read
       - pipelines.runs.write
-      # Dependencies
-      - dataset.query # needs to read datasets
-      - digital-twin.simulation.run # needs to trigger simulations
 
   - client_id: svc-dataset-api
     name: Dataset API Service

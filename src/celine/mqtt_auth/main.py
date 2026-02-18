@@ -128,13 +128,11 @@ def create_app() -> FastAPI:
     return app
 
 
-# For running with uvicorn
-app = create_app()
-
-
 if __name__ == "__main__":
     import uvicorn
 
+    # For running with uvicorn
+    app = create_app()
     uvicorn.run(
         "celine.mqtt_auth.main:app",
         host="0.0.0.0",

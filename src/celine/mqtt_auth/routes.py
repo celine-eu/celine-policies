@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Response, status, Request
 
 from celine.mqtt_auth.config import MqttAuthSettings
 from celine.mqtt_auth.models import (
@@ -142,7 +142,8 @@ async def mqtt_auth(
 
 @router.post("/acl")
 async def mqtt_acl(
-    request: MqttAclRequest,
+    # request: MqttAclRequest,
+    request: Request,
     response: Response,
     authorization: Annotated[str | None, Header()] = None,
     x_request_id: Annotated[str | None, Header()] = None,
@@ -157,22 +158,31 @@ async def mqtt_acl(
     - 200 + ok=true if authorized
     - 403 + ok=false if not authorized
     """
+
+    body: MqttAclRequest | None = None
+    raw_body = await request.body()
+    try:
+        body = MqttAclRequest.model_validate_json(raw_body)
+    except Exception as e:
+        logger.warning(f"Failed to parse body: {raw_body}")
+        raise HTTPException(500, "Failed to parse request body")
+
     request_id = x_request_id or str(uuid.uuid4())
 
     token = _get_token_from_header(authorization)
     if not token:
-        logger.debug("MQTT ACL failed: missing token (topic=%s)", request.topic)
+        logger.debug("MQTT ACL failed: missing token (topic=%s)", body.topic)
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="missing token")
 
     subject = _extract_subject_from_token(token, settings)
     if subject is None:
-        logger.debug("MQTT ACL failed: invalid credentials (topic=%s)", request.topic)
+        logger.debug("MQTT ACL failed: invalid credentials (topic=%s)", body.topic)
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid credentials")
 
     # Convert acc bitmask to action names
-    actions = _acc_to_actions(request.acc)
+    actions = _acc_to_actions(body.acc)
     if not actions:
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid acc mask")
@@ -183,7 +193,7 @@ async def mqtt_acl(
             subject=subject,
             resource=Resource(
                 type=ResourceType.TOPIC,
-                id=request.topic,
+                id=body.topic,
                 attributes={},
             ),
             action=Action(name=action_name, context={}),
@@ -198,11 +208,12 @@ async def mqtt_acl(
 
             if not decision.allowed:
                 logger.warning(
-                    "MQTT ACL denied: user=%s topic=%s action=%s reason=%s",
+                    "MQTT ACL denied: user=%s topic=%s action=%s reason=%s input=%s",
                     subject.id,
-                    request.topic,
+                    body.topic,
                     action_name,
                     decision.reason,
+                    policy_input.model_dump_json(),
                 )
                 response.status_code = status.HTTP_403_FORBIDDEN
                 return MqttResponse(ok=False, reason=decision.reason)
@@ -215,7 +226,7 @@ async def mqtt_acl(
     logger.info(
         "MQTT ACL allowed: user=%s topic=%s actions=%s",
         subject.id,
-        request.topic,
+        body.topic,
         actions,
     )
     return MqttResponse(ok=True, reason="authorized")

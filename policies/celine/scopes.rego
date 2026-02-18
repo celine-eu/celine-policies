@@ -96,3 +96,5 @@ user_allowed(required, service, resource, verb) if {
 user_allowed(required, service, resource, verb) if {
   user_is_service_admin(service)
 }
+
+
