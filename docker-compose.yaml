@@ -28,14 +28,11 @@ services:
     ports:
       - "8009:8009"
       - "48009:48009"
-    command: >
-      uvicorn celine.mqtt_auth.main:create_app
-        --reload
-        --host 0.0.0.0
-        --port 8009
     volumes:
       # Mount policies for hot-reload during development
       - ./policies:/app/policies:ro
+    environment:
+      - CELINE_POLICIES_DATA_DIR=/app/policies
     healthcheck:
       test:
         [

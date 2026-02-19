@@ -34,4 +34,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8009/health').raise_for_status()"
 
 # Run application
-CMD ["uvicorn", "celine.mqtt_auth.main:app", "--host", "0.0.0.0", "--port", "8009"]
+CMD [".venv/bin/uvicorn", "celine.mqtt_auth.main:create_app", "--host", "0.0.0.0", "--port", "8009"]
