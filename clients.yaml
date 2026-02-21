@@ -5,6 +5,7 @@ realm: celine
 # =============================================================================
 # Convention: {service}.{resource}.{action} or {service}.{action}
 # Special: {service}.admin grants full access to that service
+# Service prefix always matches the suffix of svc-{service} client_id
 # =============================================================================
 
 scopes:
@@ -47,12 +48,20 @@ scopes:
     description: Write dataset data
 
   # REC Registry
-  - name: rec_registry.admin
-    description: Full administrative access to the REC Registry, including configuration, user management, and destructive operations.
-  - name: rec_registry.import
-    description: Permission to import Renewable Energy Certificate (REC) data into the registry from external systems or bulk files.
-  - name: rec_registry.export
-    description: Permission to export Renewable Energy Certificate (REC) data from the registry for reporting, auditing, or downstream processing.
+  - name: rec-registry.admin
+    description: Full administrative access to the registry
+  - name: rec-registry.import
+    description: Permission to import into the registry
+  - name: rec-registry.export
+    description: Permission to export from the registry
+  - name: rec-registry.lookup
+    description: Permission to lookup data
+
+  # Nudging
+  - name: nudging.admin
+    description: Admin nudging
+  - name: nudging.notify
+    description: Send notifications
 
   # MQTT
   - name: mqtt.admin
@@ -62,24 +71,34 @@ scopes:
 # CLIENTS
 # =============================================================================
 # Each client gets scopes for:
-#   1. Its own resources (what it manages)
+#   1. Its own resources (what it manages) — declared via scopes_prefix
 #   2. Dependencies (other services it needs to call)
+#
+# scopes_prefix: declares ownership of a scope family. The CLI uses this to:
+#   - Validate that "own" scopes belong to the right client
+#   - Automatically add audience mappers on clients that reference foreign scopes
+#
+# Clients without scopes_prefix (mqtt, celine-cli) are exempt from audience mapping.
 # =============================================================================
 
 clients:
   - client_id: svc-digital-twin
     name: Digital Twin Service
     secret: ${SVC_DT_SECRET:-svc-digital-twin}
+    scopes_prefix: digital-twin
     default_scopes:
       # Own resources
       - digital-twin.admin
       # Dependencies
-      - dataset.query # needs to read datasets
-      - pipelines.runs.read # subscribe to pipelines updates
+      - dataset.query # needs to read datasets  → aud: svc-dataset-api
+      - pipelines.runs.read # subscribes to pipeline updates → aud: svc-pipelines
+      - nudging.notify # send notifications
+      - rec-registry.lookup # lookup registry assets
 
   - client_id: svc-pipelines
     name: Pipeline Orchestrator
     secret: ${SVC_PIPELINES_SECRET:-svc-pipelines}
+    scopes_prefix: pipelines
     default_scopes:
       # Own resources
       - pipelines.runs.read
@@ -88,30 +107,32 @@ clients:
   - client_id: svc-dataset-api
     name: Dataset API Service
     secret: ${SVC_DATASET_SECRET:-svc-dataset-api}
+    scopes_prefix: dataset
     default_scopes:
       - dataset.admin # owns datasets
 
   - client_id: svc-nudging
     name: Nudging Service
     secret: ${SVC_NUDGING_SECRET:-svc-nudging}
+    scopes_prefix: nudging
     default_scopes:
-      # Dependencies only
-      - digital-twin.values.read # reads DT state
-      - dataset.query # reads datasets
+      - nudging.admin
 
   - client_id: svc-rec-registry
-    name: REC Registry  Service
-    secret: ${SVC_DT_SECRET:-svc-rec-registry}
+    name: REC Registry Service
+    secret: ${SVC_REC_REGISTRY_SECRET:-svc-rec-registry}
+    scopes_prefix: rec-registry
     default_scopes:
       # Own resources
-      - rec_registry.admin
+      - rec-registry.admin
 
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
+    # No scopes_prefix — sudo client, exempt from audience mapper generation
     default_scopes:
       - digital-twin.admin
       - pipelines.admin
       - dataset.admin
       - mqtt.admin
-      - rec_registry.admin
+      - rec-registry.admin

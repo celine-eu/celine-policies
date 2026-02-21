@@ -14,11 +14,12 @@ Example YAML structure:
         name: Forecast Service
         description: Weather and energy forecasting
         secret: ${SVC_FORECAST_SECRET}  # optional, supports env vars
+        scopes_prefix: forecast         # owns all forecast.* scopes
         default_scopes:
-          - openid
+          - forecast.admin
+          - dataset.query               # foreign scope → audience mapper added for svc-dataset-api
         optional_scopes:
-          - dataset.query
-          - dt.read
+          - digital-twin.values.read
 """
 
 from __future__ import annotations
@@ -95,6 +96,20 @@ class ClientConfig(BaseModel):
         description="Client secret (if not provided, will be generated)",
     )
 
+    # Scope ownership declaration.
+    # Scopes starting with this prefix belong to this client.
+    # Used to derive audience mappers: any other client referencing a foreign
+    # scope prefix gets an audience mapper pointing to the owning client.
+    # Clients without a scopes_prefix (e.g. celine-cli, mqtt-only clients)
+    # are exempt from audience mapper generation entirely.
+    scopes_prefix: str | None = Field(
+        default=None,
+        description=(
+            "Scope prefix this client owns (e.g. 'dataset' owns all 'dataset.*' scopes). "
+            "Drives automatic audience mapper generation for cross-service calls."
+        ),
+    )
+
     # Scope assignments
     default_scopes: list[str] = Field(
         default_factory=list,
@@ -118,6 +133,28 @@ class ClientConfig(BaseModel):
         if not v and info.data.get("client_id"):
             return info.data["client_id"]
         return v or ""
+
+    def scope_prefix_of(self, scope_name: str) -> str:
+        """Extract the service prefix from a scope name (part before first '.')."""
+        return scope_name.split(".")[0]
+
+    def foreign_scope_prefixes(self) -> set[str]:
+        """Return scope prefixes referenced by this client that are not its own.
+
+        These are the services this client needs to call, and therefore the
+        audience mappers that need to be added to its tokens.
+        """
+        if self.scopes_prefix is None:
+            # Exempt clients — no audience mapping
+            return set()
+
+        all_scopes = list(self.default_scopes) + list(self.optional_scopes)
+        prefixes: set[str] = set()
+        for scope in all_scopes:
+            prefix = self.scope_prefix_of(scope)
+            if prefix != self.scopes_prefix:
+                prefixes.add(prefix)
+        return prefixes
 
 
 class KeycloakConfig(BaseModel):
@@ -167,19 +204,33 @@ class KeycloakConfig(BaseModel):
             scopes.update(client.optional_scopes)
         return scopes
 
+    def build_prefix_to_client_map(self) -> dict[str, str]:
+        """Build a mapping from scope prefix to owning client_id.
+
+        Only clients with a scopes_prefix declared are included.
+
+        Example:
+            {"dataset": "svc-dataset-api", "digital-twin": "svc-digital-twin", ...}
+        """
+        return {
+            c.scopes_prefix: c.client_id
+            for c in self.clients
+            if c.scopes_prefix is not None
+        }
+
     def validate_scope_references(self) -> list[str]:
         """Check that all scopes referenced by clients are defined.
-        
+
         Returns list of undefined scope names.
         """
         defined = self.get_scope_names()
         referenced = self.get_all_referenced_scopes()
-        
+
         # Standard Keycloak scopes that don't need to be defined
         builtin_scopes = {
             "openid", "profile", "email", "address", "phone",
             "offline_access", "microprofile-jwt", "acr", "roles", "web-origins",
         }
-        
+
         undefined = referenced - defined - builtin_scopes
         return sorted(undefined)

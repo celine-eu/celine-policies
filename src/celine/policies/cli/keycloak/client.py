@@ -5,6 +5,7 @@ Wraps the Keycloak Admin REST API for managing:
 - Clients
 - Scope-to-client assignments
 - Service account roles
+- Protocol mappers (audience mappers for cross-service calls)
 """
 
 from __future__ import annotations
@@ -20,6 +21,10 @@ import httpx
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 
 logger = logging.getLogger(__name__)
+
+# Name prefix used to tag audience mappers managed by this CLI.
+# This lets us reliably identify and diff our mappers vs. manually created ones.
+AUDIENCE_MAPPER_PREFIX = "aud-"
 
 
 class KeycloakError(Exception):
@@ -80,6 +85,14 @@ class CurrentState:
     client_optional_scopes: dict[str, set[str]] = field(
         default_factory=dict
     )  # client_id -> scope names
+
+    # Audience mappers currently on each client.
+    # Maps client_id -> set of audience values (target client_ids).
+    # Only includes mappers whose name starts with AUDIENCE_MAPPER_PREFIX,
+    # so manually created mappers are never touched.
+    client_audience_mappers: dict[str, dict[str, str]] = field(
+        default_factory=dict
+    )  # client_id -> {audience_client_id -> mapper_id}
 
 
 class KeycloakAdminClient:
@@ -518,6 +531,79 @@ class KeycloakAdminClient:
         await self._delete(f"/clients/{client_uuid}/optional-client-scopes/{scope_id}")
 
     # -------------------------------------------------------------------------
+    # Protocol Mappers (Audience)
+    # -------------------------------------------------------------------------
+
+    async def get_client_protocol_mappers(
+        self, client_uuid: str
+    ) -> list[dict[str, Any]]:
+        """Get all protocol mappers for a client."""
+        return await self._get(f"/clients/{client_uuid}/protocol-mappers/models")
+
+    async def create_audience_mapper(
+        self,
+        client_uuid: str,
+        audience_client_id: str,
+    ) -> str:
+        """Add a hardcoded audience mapper to a client.
+
+        The mapper name follows the AUDIENCE_MAPPER_PREFIX convention so the
+        CLI can distinguish its own mappers from manually created ones.
+
+        Args:
+            client_uuid: UUID of the client to add the mapper to.
+            audience_client_id: The client_id value to embed as audience
+                                 (e.g. 'svc-dataset-api').
+
+        Returns:
+            The mapper ID.
+        """
+        mapper_name = f"{AUDIENCE_MAPPER_PREFIX}{audience_client_id}"
+        payload = {
+            "name": mapper_name,
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-audience-mapper",
+            "config": {
+                "included.client.audience": audience_client_id,
+                "id.token.claim": "false",
+                "access.token.claim": "true",
+            },
+        }
+
+        logger.debug(
+            "Adding audience mapper '%s' to client %s", mapper_name, client_uuid
+        )
+        result = await self._post(
+            f"/clients/{client_uuid}/protocol-mappers/models", json=payload
+        )
+
+        # Keycloak returns the created mapper with its ID on 201
+        if result and isinstance(result, dict):
+            mapper_id = result.get("id", "")
+        else:
+            # Fall back: re-fetch to get the ID
+            mappers = await self.get_client_protocol_mappers(client_uuid)
+            mapper_id = next(
+                (m["id"] for m in mappers if m.get("name") == mapper_name), ""
+            )
+
+        logger.info(
+            "Created audience mapper '%s' on client %s (id=%s)",
+            mapper_name, client_uuid, mapper_id,
+        )
+        return mapper_id
+
+    async def delete_protocol_mapper(
+        self, client_uuid: str, mapper_id: str
+    ) -> None:
+        """Delete a protocol mapper from a client."""
+        logger.debug("Deleting protocol mapper %s from client %s", mapper_id, client_uuid)
+        await self._delete(
+            f"/clients/{client_uuid}/protocol-mappers/models/{mapper_id}"
+        )
+        logger.info("Deleted protocol mapper %s from client %s", mapper_id, client_uuid)
+
+    # -------------------------------------------------------------------------
     # Service Account Roles (for bootstrap)
     # -------------------------------------------------------------------------
 
@@ -622,9 +708,9 @@ class KeycloakAdminClient:
             ):
                 state.clients[client_id] = client
 
-                # Fetch scope assignments
                 client_uuid = client["id"]
 
+                # Fetch scope assignments
                 default_scopes = await self.get_client_default_scopes(client_uuid)
                 state.client_default_scopes[client_id] = {
                     s["name"] for s in default_scopes if s.get("name")
@@ -633,6 +719,16 @@ class KeycloakAdminClient:
                 optional_scopes = await self.get_client_optional_scopes(client_uuid)
                 state.client_optional_scopes[client_id] = {
                     s["name"] for s in optional_scopes if s.get("name")
+                }
+
+                # Fetch audience mappers managed by this CLI
+                mappers = await self.get_client_protocol_mappers(client_uuid)
+                state.client_audience_mappers[client_id] = {
+                    m["config"]["included.client.audience"]: m["id"]
+                    for m in mappers
+                    if m.get("name", "").startswith(AUDIENCE_MAPPER_PREFIX)
+                    and m.get("protocolMapper") == "oidc-audience-mapper"
+                    and m.get("config", {}).get("included.client.audience")
                 }
 
         return state
