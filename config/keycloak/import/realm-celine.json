@@ -110,6 +110,19 @@
                     }
                 },
                 {
+                    "name": "aud-mapper-nudging",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-audience-mapper",
+                    "consentRequired": false,
+                    "config": {
+                        "included.client.audience": "svc-nudging",
+                        "access.token.claim": "true",
+                        "id.token.claim": "false",
+                        "introspection.token.claim": "true",
+                        "lightweight.claim": "false"
+                    }
+                },
+                {
                     "name": "aud-mapper-rec-registry",
                     "protocol": "openid-connect",
                     "protocolMapper": "oidc-audience-mapper",
