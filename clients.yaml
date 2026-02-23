@@ -60,7 +60,7 @@ scopes:
   # Nudging
   - name: nudging.admin
     description: Admin nudging
-  - name: nudging.notify
+  - name: nudging.ingest
     description: Send notifications
 
   # MQTT
@@ -92,7 +92,7 @@ clients:
       # Dependencies
       - dataset.query # needs to read datasets  → aud: svc-dataset-api
       - pipelines.runs.read # subscribes to pipeline updates → aud: svc-pipelines
-      - nudging.notify # send notifications
+      - nudging.ingest # send notifications
       - rec-registry.lookup # lookup registry assets
 
   - client_id: svc-pipelines
