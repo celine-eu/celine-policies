@@ -5,10 +5,19 @@ then applies changes to converge to the desired state.
 
 Audience mapper logic
 ---------------------
-Each client with a `scopes_prefix` declared owns a family of scopes.
-When a client references a scope whose prefix belongs to a *different* client,
-the CLI automatically manages a hardcoded audience mapper on the requesting
-client, so the owning service will accept its tokens.
+Two mechanisms for deriving which audience mappers a client needs:
+
+1. Auto-derived (clients WITH scopes_prefix):
+   When a client references a scope whose prefix belongs to a *different* client,
+   the CLI automatically manages a hardcoded audience mapper on the requesting
+   client, so the owning service will accept its tokens.
+
+2. Explicit (extra_audiences field):
+   Clients without a scopes_prefix (sudo/CLI clients such as celine-cli) cannot
+   rely on scope-prefix derivation. They declare their required audiences
+   explicitly via extra_audiences in the YAML config.
+
+Both paths are unified through ClientConfig.desired_audiences().
 
 Mappers are named with the AUDIENCE_MAPPER_PREFIX sentinel so we never touch
 mappers created manually outside this tool.
@@ -31,7 +40,11 @@ from celine.policies.cli.keycloak.client import (
     KeycloakConflictError,
     KeycloakNotFoundError,
 )
-from celine.policies.cli.keycloak.models import ClientConfig, KeycloakConfig, ScopeConfig
+from celine.policies.cli.keycloak.models import (
+    ClientConfig,
+    KeycloakConfig,
+    ScopeConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +52,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ScopeAction:
     """Action to perform on a scope."""
+
     scope: ScopeConfig
     action: str  # "create", "update"
     current: dict[str, Any] | None = None
@@ -47,6 +61,7 @@ class ScopeAction:
 @dataclass
 class ClientAction:
     """Action to perform on a client."""
+
     client: ClientConfig
     action: str  # "create", "update"
     current: dict[str, Any] | None = None
@@ -55,6 +70,7 @@ class ClientAction:
 @dataclass
 class ScopeAssignmentAction:
     """Action to perform on a scope assignment."""
+
     client_id: str
     scope_name: str
     assignment_type: str  # "default", "optional"
@@ -71,6 +87,7 @@ class AudienceMapperAction:
         action:             "add" or "remove".
         mapper_id:          Keycloak mapper UUID — only set for "remove" actions.
     """
+
     client_id: str
     audience_client_id: str
     action: str  # "add", "remove"
@@ -91,7 +108,9 @@ class SyncPlan:
 
     # Scope assignment actions
     scope_assignments_to_add: list[ScopeAssignmentAction] = field(default_factory=list)
-    scope_assignments_to_remove: list[ScopeAssignmentAction] = field(default_factory=list)
+    scope_assignments_to_remove: list[ScopeAssignmentAction] = field(
+        default_factory=list
+    )
 
     # Audience mapper actions
     audience_mappers_to_add: list[AudienceMapperAction] = field(default_factory=list)
@@ -145,32 +164,52 @@ class SyncPlan:
                 lines.append(f"  ~ {action.client.client_id}")
 
         if self.scope_assignments_to_add:
-            lines.append(f"Scope assignments to add: {len(self.scope_assignments_to_add)}")
+            lines.append(
+                f"Scope assignments to add: {len(self.scope_assignments_to_add)}"
+            )
             for action in self.scope_assignments_to_add:
-                lines.append(f"  + {action.client_id} <- {action.scope_name} ({action.assignment_type})")
+                lines.append(
+                    f"  + {action.client_id} <- {action.scope_name} ({action.assignment_type})"
+                )
 
         if self.scope_assignments_to_remove:
-            lines.append(f"Scope assignments to remove: {len(self.scope_assignments_to_remove)}")
+            lines.append(
+                f"Scope assignments to remove: {len(self.scope_assignments_to_remove)}"
+            )
             for action in self.scope_assignments_to_remove:
-                lines.append(f"  - {action.client_id} <- {action.scope_name} ({action.assignment_type})")
+                lines.append(
+                    f"  - {action.client_id} <- {action.scope_name} ({action.assignment_type})"
+                )
 
         if self.audience_mappers_to_add:
-            lines.append(f"Audience mappers to add: {len(self.audience_mappers_to_add)}")
+            lines.append(
+                f"Audience mappers to add: {len(self.audience_mappers_to_add)}"
+            )
             for action in self.audience_mappers_to_add:
-                lines.append(f"  + {action.client_id} -> aud:{action.audience_client_id}")
+                lines.append(
+                    f"  + {action.client_id} -> aud:{action.audience_client_id}"
+                )
 
         if self.audience_mappers_to_remove:
-            lines.append(f"Audience mappers to remove: {len(self.audience_mappers_to_remove)}")
+            lines.append(
+                f"Audience mappers to remove: {len(self.audience_mappers_to_remove)}"
+            )
             for action in self.audience_mappers_to_remove:
-                lines.append(f"  - {action.client_id} -> aud:{action.audience_client_id}")
+                lines.append(
+                    f"  - {action.client_id} -> aud:{action.audience_client_id}"
+                )
 
         if self.orphan_scopes:
-            lines.append(f"Orphan scopes (use --prune to delete): {len(self.orphan_scopes)}")
+            lines.append(
+                f"Orphan scopes (use --prune to delete): {len(self.orphan_scopes)}"
+            )
             for name in self.orphan_scopes:
                 lines.append(f"  ? {name}")
 
         if self.orphan_clients:
-            lines.append(f"Orphan clients (use --prune to delete): {len(self.orphan_clients)}")
+            lines.append(
+                f"Orphan clients (use --prune to delete): {len(self.orphan_clients)}"
+            )
             for client_id in self.orphan_clients:
                 lines.append(f"  ? {client_id}")
 
@@ -195,8 +234,12 @@ class SyncResult:
     scope_assignments_added: list[tuple[str, str, str]] = field(default_factory=list)
     scope_assignments_removed: list[tuple[str, str, str]] = field(default_factory=list)
 
-    audience_mappers_added: list[tuple[str, str]] = field(default_factory=list)   # (client_id, audience)
-    audience_mappers_removed: list[tuple[str, str]] = field(default_factory=list)  # (client_id, audience)
+    audience_mappers_added: list[tuple[str, str]] = field(
+        default_factory=list
+    )  # (client_id, audience)
+    audience_mappers_removed: list[tuple[str, str]] = field(
+        default_factory=list
+    )  # (client_id, audience)
 
     # Client secrets (client_id -> secret)
     client_secrets: dict[str, str] = field(default_factory=dict)
@@ -213,30 +256,46 @@ class SyncResult:
         lines = []
 
         if self.scopes_created:
-            lines.append(f"Created {len(self.scopes_created)} scopes: {', '.join(self.scopes_created)}")
+            lines.append(
+                f"Created {len(self.scopes_created)} scopes: {', '.join(self.scopes_created)}"
+            )
         if self.scopes_updated:
-            lines.append(f"Updated {len(self.scopes_updated)} scopes: {', '.join(self.scopes_updated)}")
+            lines.append(
+                f"Updated {len(self.scopes_updated)} scopes: {', '.join(self.scopes_updated)}"
+            )
         if self.scopes_deleted:
-            lines.append(f"Deleted {len(self.scopes_deleted)} scopes: {', '.join(self.scopes_deleted)}")
+            lines.append(
+                f"Deleted {len(self.scopes_deleted)} scopes: {', '.join(self.scopes_deleted)}"
+            )
 
         if self.clients_created:
-            lines.append(f"Created {len(self.clients_created)} clients: {', '.join(self.clients_created)}")
+            lines.append(
+                f"Created {len(self.clients_created)} clients: {', '.join(self.clients_created)}"
+            )
         if self.clients_updated:
-            lines.append(f"Updated {len(self.clients_updated)} clients: {', '.join(self.clients_updated)}")
+            lines.append(
+                f"Updated {len(self.clients_updated)} clients: {', '.join(self.clients_updated)}"
+            )
         if self.clients_deleted:
-            lines.append(f"Deleted {len(self.clients_deleted)} clients: {', '.join(self.clients_deleted)}")
+            lines.append(
+                f"Deleted {len(self.clients_deleted)} clients: {', '.join(self.clients_deleted)}"
+            )
 
         if self.scope_assignments_added:
             lines.append(f"Added {len(self.scope_assignments_added)} scope assignments")
         if self.scope_assignments_removed:
-            lines.append(f"Removed {len(self.scope_assignments_removed)} scope assignments")
+            lines.append(
+                f"Removed {len(self.scope_assignments_removed)} scope assignments"
+            )
 
         if self.audience_mappers_added:
             lines.append(f"Added {len(self.audience_mappers_added)} audience mappers")
             for client_id, aud in self.audience_mappers_added:
                 lines.append(f"  + {client_id} -> aud:{aud}")
         if self.audience_mappers_removed:
-            lines.append(f"Removed {len(self.audience_mappers_removed)} audience mappers")
+            lines.append(
+                f"Removed {len(self.audience_mappers_removed)} audience mappers"
+            )
             for client_id, aud in self.audience_mappers_removed:
                 lines.append(f"  - {client_id} -> aud:{aud}")
 
@@ -285,16 +344,20 @@ def compute_sync_plan(
         if scope_config.name in current_scope_names:
             current_scope = current.scopes[scope_config.name]
             if _scope_needs_update(scope_config, current_scope):
-                plan.scopes_to_update.append(ScopeAction(
-                    scope=scope_config,
-                    action="update",
-                    current=current_scope,
-                ))
+                plan.scopes_to_update.append(
+                    ScopeAction(
+                        scope=scope_config,
+                        action="update",
+                        current=current_scope,
+                    )
+                )
         else:
-            plan.scopes_to_create.append(ScopeAction(
-                scope=scope_config,
-                action="create",
-            ))
+            plan.scopes_to_create.append(
+                ScopeAction(
+                    scope=scope_config,
+                    action="create",
+                )
+            )
 
     # Find orphan scopes
     for scope_name in current_scope_names:
@@ -310,16 +373,20 @@ def compute_sync_plan(
         if client_config.client_id in current_client_ids:
             current_client = current.clients[client_config.client_id]
             if _client_needs_update(client_config, current_client):
-                plan.clients_to_update.append(ClientAction(
-                    client=client_config,
-                    action="update",
-                    current=current_client,
-                ))
+                plan.clients_to_update.append(
+                    ClientAction(
+                        client=client_config,
+                        action="update",
+                        current=current_client,
+                    )
+                )
         else:
-            plan.clients_to_create.append(ClientAction(
-                client=client_config,
-                action="create",
-            ))
+            plan.clients_to_create.append(
+                ClientAction(
+                    client=client_config,
+                    action="create",
+                )
+            )
 
     # Find orphan clients
     for client_id in current_client_ids:
@@ -344,103 +411,135 @@ def compute_sync_plan(
         # Default scope changes
         for scope_name in desired_default - current_default:
             if scope_name in current_optional:
-                plan.scope_assignments_to_remove.append(ScopeAssignmentAction(
+                plan.scope_assignments_to_remove.append(
+                    ScopeAssignmentAction(
+                        client_id=client_id,
+                        scope_name=scope_name,
+                        assignment_type="optional",
+                        action="remove",
+                    )
+                )
+            plan.scope_assignments_to_add.append(
+                ScopeAssignmentAction(
                     client_id=client_id,
                     scope_name=scope_name,
-                    assignment_type="optional",
-                    action="remove",
-                ))
-            plan.scope_assignments_to_add.append(ScopeAssignmentAction(
-                client_id=client_id,
-                scope_name=scope_name,
-                assignment_type="default",
-                action="add",
-            ))
+                    assignment_type="default",
+                    action="add",
+                )
+            )
 
         # Optional scope changes
         for scope_name in desired_optional - current_optional:
             if scope_name in current_default:
-                plan.scope_assignments_to_remove.append(ScopeAssignmentAction(
+                plan.scope_assignments_to_remove.append(
+                    ScopeAssignmentAction(
+                        client_id=client_id,
+                        scope_name=scope_name,
+                        assignment_type="default",
+                        action="remove",
+                    )
+                )
+            plan.scope_assignments_to_add.append(
+                ScopeAssignmentAction(
                     client_id=client_id,
                     scope_name=scope_name,
-                    assignment_type="default",
-                    action="remove",
-                ))
-            plan.scope_assignments_to_add.append(ScopeAssignmentAction(
-                client_id=client_id,
-                scope_name=scope_name,
-                assignment_type="optional",
-                action="add",
-            ))
+                    assignment_type="optional",
+                    action="add",
+                )
+            )
 
         # Scopes to remove (in current but not in desired)
         all_desired = desired_default | desired_optional
 
         for scope_name in current_default - all_desired:
             if scope_name not in KeycloakAdminClient.BUILTIN_SCOPES:
-                plan.scope_assignments_to_remove.append(ScopeAssignmentAction(
-                    client_id=client_id,
-                    scope_name=scope_name,
-                    assignment_type="default",
-                    action="remove",
-                ))
+                plan.scope_assignments_to_remove.append(
+                    ScopeAssignmentAction(
+                        client_id=client_id,
+                        scope_name=scope_name,
+                        assignment_type="default",
+                        action="remove",
+                    )
+                )
 
         for scope_name in current_optional - all_desired:
             if scope_name not in KeycloakAdminClient.BUILTIN_SCOPES:
-                plan.scope_assignments_to_remove.append(ScopeAssignmentAction(
-                    client_id=client_id,
-                    scope_name=scope_name,
-                    assignment_type="optional",
-                    action="remove",
-                ))
+                plan.scope_assignments_to_remove.append(
+                    ScopeAssignmentAction(
+                        client_id=client_id,
+                        scope_name=scope_name,
+                        assignment_type="optional",
+                        action="remove",
+                    )
+                )
 
     # -------------------------------------------------------------------------
     # Audience Mappers
     # -------------------------------------------------------------------------
-    # For every client with a scopes_prefix, compute which foreign service
-    # audiences its tokens need, then diff against current mappers.
+    # For every client, compute which service audiences its tokens need, then
+    # diff against current mappers.
+    #
+    # Desired audiences come from ClientConfig.desired_audiences() which merges:
+    #   - foreign_scope_prefixes() — auto-derived for clients WITH scopes_prefix
+    #   - extra_audiences          — explicit list for clients WITHOUT scopes_prefix
+    #
+    # No client is skipped: sudo clients like celine-cli use extra_audiences
+    # instead of scopes_prefix derivation.
+
+    known_client_ids = config.get_client_ids()
 
     for client_config in config.clients:
-        if client_config.scopes_prefix is None:
-            # Exempt clients (celine-cli, mqtt-only, etc.)
-            continue
-
         client_id = client_config.client_id
 
-        # Desired audiences: one per foreign scope prefix that resolves to a
-        # known owning client.
-        desired_audiences: set[str] = set()
-        for prefix in client_config.foreign_scope_prefixes():
-            owning_client = prefix_to_client.get(prefix)
-            if owning_client:
-                desired_audiences.add(owning_client)
-            else:
+        desired_audiences = client_config.desired_audiences(prefix_to_client)
+
+        # Warn about extra_audiences entries that don't map to a managed client_id.
+        # This is not an error — oauth2_proxy and other external audiences are valid.
+        for audience in client_config.extra_audiences:
+            if audience not in known_client_ids:
                 logger.warning(
-                    "Client %s references scope prefix '%s' but no client owns it — "
-                    "skipping audience mapper",
-                    client_id, prefix,
+                    "Client %s declares extra_audience '%s' which is not a managed "
+                    "client_id in this config — mapper will still be created "
+                    "(may be intentional, e.g. oauth2_proxy).",
+                    client_id,
+                    audience,
                 )
 
-        # Current audiences: mappers already on this client
+        # Warn about unresolvable foreign scope prefixes
+        if client_config.scopes_prefix is not None:
+            for prefix in client_config.foreign_scope_prefixes():
+                if prefix not in prefix_to_client:
+                    logger.warning(
+                        "Client %s references scope prefix '%s' but no client owns it — "
+                        "skipping audience mapper for that prefix.",
+                        client_id,
+                        prefix,
+                    )
+
+        # Current audiences: mappers already on this client (managed by this tool)
         current_audience_map = current.client_audience_mappers.get(client_id, {})
         current_audiences = set(current_audience_map.keys())
 
         # Add missing mappers
         for audience in desired_audiences - current_audiences:
-            plan.audience_mappers_to_add.append(AudienceMapperAction(
-                client_id=client_id,
-                audience_client_id=audience,
-                action="add",
-            ))
+            plan.audience_mappers_to_add.append(
+                AudienceMapperAction(
+                    client_id=client_id,
+                    audience_client_id=audience,
+                    action="add",
+                )
+            )
 
         # Remove stale mappers (audience no longer needed)
         for audience in current_audiences - desired_audiences:
-            plan.audience_mappers_to_remove.append(AudienceMapperAction(
-                client_id=client_id,
-                audience_client_id=audience,
-                action="remove",
-                mapper_id=current_audience_map[audience],
-            ))
+            plan.audience_mappers_to_remove.append(
+                AudienceMapperAction(
+                    client_id=client_id,
+                    audience_client_id=audience,
+                    action="remove",
+                    mapper_id=current_audience_map[audience],
+                )
+            )
 
     return plan
 
@@ -580,14 +679,18 @@ async def apply_sync_plan(
             result.clients_created.append(client_config.client_id)
             result.client_secrets[client_config.client_id] = secret
         except KeycloakConflictError:
-            logger.warning("Client already exists (race condition?): %s", client_config.client_id)
+            logger.warning(
+                "Client already exists (race condition?): %s", client_config.client_id
+            )
             existing = await client.get_client_by_client_id(client_config.client_id)
             if existing:
                 client_uuids[client_config.client_id] = existing["id"]
                 secret = await client.get_client_secret(existing["id"])
                 result.client_secrets[client_config.client_id] = secret
         except Exception as e:
-            result.errors.append(f"Failed to create client {client_config.client_id}: {e}")
+            result.errors.append(
+                f"Failed to create client {client_config.client_id}: {e}"
+            )
 
     # -------------------------------------------------------------------------
     # 4. Update existing clients
@@ -615,7 +718,9 @@ async def apply_sync_plan(
             secret = await client.get_client_secret(client_uuid)
             result.client_secrets[client_config.client_id] = secret
         except Exception as e:
-            result.errors.append(f"Failed to update client {client_config.client_id}: {e}")
+            result.errors.append(
+                f"Failed to update client {client_config.client_id}: {e}"
+            )
 
     # -------------------------------------------------------------------------
     # 5. Remove scope assignments (before adding new ones to handle type changes)
@@ -643,7 +748,9 @@ async def apply_sync_plan(
         if dry_run:
             logger.info(
                 "[DRY RUN] Would remove %s scope %s from %s",
-                action.assignment_type, action.scope_name, action.client_id
+                action.assignment_type,
+                action.scope_name,
+                action.client_id,
             )
             result.scope_assignments_removed.append(
                 (action.client_id, action.scope_name, action.assignment_type)
@@ -683,7 +790,9 @@ async def apply_sync_plan(
         scope_id = scope_ids.get(action.scope_name)
 
         if not client_uuid:
-            logger.warning("Client not found for scope assignment: %s", action.client_id)
+            logger.warning(
+                "Client not found for scope assignment: %s", action.client_id
+            )
             continue
 
         if not scope_id:
@@ -694,7 +803,9 @@ async def apply_sync_plan(
         if dry_run:
             logger.info(
                 "[DRY RUN] Would add %s scope %s to %s",
-                action.assignment_type, action.scope_name, action.client_id
+                action.assignment_type,
+                action.scope_name,
+                action.client_id,
             )
             result.scope_assignments_added.append(
                 (action.client_id, action.scope_name, action.assignment_type)
@@ -730,7 +841,8 @@ async def apply_sync_plan(
         if dry_run:
             logger.info(
                 "[DRY RUN] Would add audience mapper %s -> aud:%s",
-                action.client_id, action.audience_client_id,
+                action.client_id,
+                action.audience_client_id,
             )
             result.audience_mappers_added.append(
                 (action.client_id, action.audience_client_id)
@@ -759,20 +871,24 @@ async def apply_sync_plan(
         client_uuid = client_uuids.get(action.client_id)
 
         if not client_uuid:
-            logger.warning("Client not found for audience mapper removal: %s", action.client_id)
+            logger.warning(
+                "Client not found for audience mapper removal: %s", action.client_id
+            )
             continue
 
         if not action.mapper_id:
             logger.warning(
                 "No mapper_id for removal of aud:%s on %s — skipping",
-                action.audience_client_id, action.client_id,
+                action.audience_client_id,
+                action.client_id,
             )
             continue
 
         if dry_run:
             logger.info(
                 "[DRY RUN] Would remove audience mapper %s -> aud:%s",
-                action.client_id, action.audience_client_id,
+                action.client_id,
+                action.audience_client_id,
             )
             result.audience_mappers_removed.append(
                 (action.client_id, action.audience_client_id)

@@ -6,6 +6,10 @@ extensions:
   - .yml
   - .toml
   - .json
+  - .ftl
+  - .html
+  - .css
+  - .conf
 
 dumps:
   - name: all
@@ -13,6 +17,7 @@ dumps:
       - src
       - scripts
       - policies
+      - config
       - tests
       - README.md
       - docker-compose.yaml
@@ -35,3 +40,9 @@ dumps:
   - name: rego-policies
     contents:
       - policies
+
+  - name: docker
+    contents:
+      - config
+      - docker-compose.yaml
+      - Dockerfile

@@ -129,6 +129,12 @@ clients:
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
+    extra_audiences:
+      - svc-digital-twin
+      - svc-dataset-api
+      - svc-rec-registry
+      - svc-nudging
+      - oauth2_proxy
     # No scopes_prefix — sudo client, exempt from audience mapper generation
     default_scopes:
       - digital-twin.admin
@@ -136,3 +142,4 @@ clients:
       - dataset.admin
       - mqtt.admin
       - rec-registry.admin
+      - nudging.admin

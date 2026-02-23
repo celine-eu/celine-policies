@@ -20,6 +20,19 @@ Example YAML structure:
           - dataset.query               # foreign scope → audience mapper added for svc-dataset-api
         optional_scopes:
           - digital-twin.values.read
+
+      - client_id: celine-cli
+        name: CELINE CLI / Services
+        secret: ${CELINE_CLI_SECRET:-celine-cli}
+        # No scopes_prefix — sudo client, exempt from auto audience mapper derivation.
+        # extra_audiences explicitly lists each service this client calls so the
+        # sync tool can still manage the aud-mapper-* protocol mappers for it.
+        extra_audiences:
+          - svc-dataset-api
+          - svc-nudging
+        default_scopes:
+          - dataset.admin
+          - nudging.admin
 """
 
 from __future__ import annotations
@@ -34,11 +47,12 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # Pattern for ${VAR} and ${VAR:-default} interpolation
-_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}")
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\\}")
 
 
 def _resolve_env_str(s: str) -> str:
     """Resolve environment variable placeholders in a string."""
+
     def repl(m: re.Match[str]) -> str:
         var = m.group(1)
         default = m.group(3)
@@ -74,7 +88,9 @@ class ScopeConfig(BaseModel):
 
     name: str = Field(..., description="Scope name (e.g., 'dataset.query')")
     description: str = Field(default="", description="Human-readable description")
-    protocol: str = Field(default="openid-connect", description="Protocol (usually openid-connect)")
+    protocol: str = Field(
+        default="openid-connect", description="Protocol (usually openid-connect)"
+    )
 
     # Additional attributes that can be set
     include_in_token_scope: bool = Field(
@@ -101,12 +117,27 @@ class ClientConfig(BaseModel):
     # Used to derive audience mappers: any other client referencing a foreign
     # scope prefix gets an audience mapper pointing to the owning client.
     # Clients without a scopes_prefix (e.g. celine-cli, mqtt-only clients)
-    # are exempt from audience mapper generation entirely.
+    # are exempt from auto audience mapper derivation.
     scopes_prefix: str | None = Field(
         default=None,
         description=(
             "Scope prefix this client owns (e.g. 'dataset' owns all 'dataset.*' scopes). "
             "Drives automatic audience mapper generation for cross-service calls."
+        ),
+    )
+
+    # Explicit audience mappers for clients without a scopes_prefix.
+    # The sync tool will create one aud-mapper-* protocol mapper per entry,
+    # regardless of scopes_prefix being set or not.
+    # For clients WITH a scopes_prefix, foreign_scope_prefixes() covers this
+    # automatically — extra_audiences is an escape hatch for anything that
+    # cannot be derived from scope names alone.
+    extra_audiences: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Explicit audience client_ids to add as protocol mappers. "
+            "Used for sudo/CLI clients that have no scopes_prefix and cannot "
+            "rely on automatic audience derivation from foreign scope prefixes."
         ),
     )
 
@@ -143,9 +174,11 @@ class ClientConfig(BaseModel):
 
         These are the services this client needs to call, and therefore the
         audience mappers that need to be added to its tokens.
+
+        Returns empty set for clients without a scopes_prefix (they are exempt
+        from auto-derivation; use extra_audiences instead).
         """
         if self.scopes_prefix is None:
-            # Exempt clients — no audience mapping
             return set()
 
         all_scopes = list(self.default_scopes) + list(self.optional_scopes)
@@ -155,6 +188,22 @@ class ClientConfig(BaseModel):
             if prefix != self.scopes_prefix:
                 prefixes.add(prefix)
         return prefixes
+
+    def desired_audiences(self, prefix_to_client: dict[str, str]) -> set[str]:
+        """Return the complete set of audience client_ids this client needs.
+
+        Combines:
+          - Audiences derived from foreign scope prefixes (for clients with scopes_prefix)
+          - Explicitly declared extra_audiences (for all clients, especially sudo clients)
+        """
+        audiences: set[str] = set(self.extra_audiences)
+
+        for prefix in self.foreign_scope_prefixes():
+            owning_client = prefix_to_client.get(prefix)
+            if owning_client:
+                audiences.add(owning_client)
+
+        return audiences
 
 
 class KeycloakConfig(BaseModel):
@@ -228,8 +277,16 @@ class KeycloakConfig(BaseModel):
 
         # Standard Keycloak scopes that don't need to be defined
         builtin_scopes = {
-            "openid", "profile", "email", "address", "phone",
-            "offline_access", "microprofile-jwt", "acr", "roles", "web-origins",
+            "openid",
+            "profile",
+            "email",
+            "address",
+            "phone",
+            "offline_access",
+            "microprofile-jwt",
+            "acr",
+            "roles",
+            "web-origins",
         }
 
         undefined = referenced - defined - builtin_scopes
