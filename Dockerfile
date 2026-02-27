@@ -1,37 +1,51 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    UV_SYSTEM_PYTHON=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
-# Install OS deps (build tools not strictly required for this set, keep lean)
+# ---- builder ---------------------------------------------------------------
+FROM base AS builder
+
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH=".venv/bin:/root/.local/bin:${PATH}"
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy dependency manifests first for better caching
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md uv.lock ./
+
+RUN uv sync --frozen --no-install-project --no-dev
+
 COPY src ./src
-
-RUN uv sync --no-editable
-
 COPY policies ./policies
 
-# Expose port
+RUN uv pip install --no-deps .
+
+# ---- runtime ---------------------------------------------------------------
+FROM base AS runtime
+
+RUN groupadd --gid 1000 app && \
+    useradd --uid 1000 --gid app --no-create-home app
+
+WORKDIR /app
+
+COPY --from=builder --chown=app:app /app/.venv    /app/.venv
+COPY --from=builder --chown=app:app /app/src       /app/src
+COPY --from=builder --chown=app:app /app/policies  /app/policies
+
+COPY ./clients.yaml /app
+
+ENV PATH="/app/.venv/bin:${PATH}" \
+    VIRTUAL_ENV="/app/.venv"
+
+USER app
+
 EXPOSE 8009
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8009/health').raise_for_status()"
-
-# Run application
-CMD [".venv/bin/uvicorn", "celine.mqtt_auth.main:create_app", "--host", "0.0.0.0", "--port", "8009"]
+CMD ["uvicorn", "celine.mqtt_auth.main:create_app", "--factory", \
+    "--host", "0.0.0.0", "--port", "8009"]

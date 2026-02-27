@@ -12,4 +12,3 @@ __pycache__
 # Dumpster output
 sources.txt
 .dumpster
-clients.yaml
