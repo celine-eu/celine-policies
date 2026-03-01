@@ -453,9 +453,9 @@ class KeycloakAdminClient:
         name: str = "",
         description: str = "",
         service_account_enabled: bool = True,
+        secret: str | None = None,  # ← add this
     ) -> None:
         """Update an existing client."""
-        # Get current client to preserve settings
         current = await self.get_client(client_uuid)
 
         payload = {
@@ -464,12 +464,14 @@ class KeycloakAdminClient:
             "name": name or client_id,
             "description": description,
             "serviceAccountsEnabled": service_account_enabled,
-            # Ensure client credentials settings
             "publicClient": False,
             "standardFlowEnabled": False,
             "implicitFlowEnabled": False,
             "directAccessGrantsEnabled": False,
         }
+
+        if secret:
+            payload["secret"] = secret
 
         logger.debug("Updating client: %s", client_id)
         await self._put(f"/clients/{client_uuid}", json=payload)
@@ -589,15 +591,17 @@ class KeycloakAdminClient:
 
         logger.info(
             "Created audience mapper '%s' on client %s (id=%s)",
-            mapper_name, client_uuid, mapper_id,
+            mapper_name,
+            client_uuid,
+            mapper_id,
         )
         return mapper_id
 
-    async def delete_protocol_mapper(
-        self, client_uuid: str, mapper_id: str
-    ) -> None:
+    async def delete_protocol_mapper(self, client_uuid: str, mapper_id: str) -> None:
         """Delete a protocol mapper from a client."""
-        logger.debug("Deleting protocol mapper %s from client %s", mapper_id, client_uuid)
+        logger.debug(
+            "Deleting protocol mapper %s from client %s", mapper_id, client_uuid
+        )
         await self._delete(
             f"/clients/{client_uuid}/protocol-mappers/models/{mapper_id}"
         )

@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # Pattern for ${VAR} and ${VAR:-default} interpolation
-_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\\}")
+_ENV_PATTERN = re.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?}")
 
 
 def _resolve_env_str(s: str) -> str:

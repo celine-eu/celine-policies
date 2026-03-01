@@ -712,7 +712,9 @@ async def apply_sync_plan(
                 name=client_config.name,
                 description=client_config.description,
                 service_account_enabled=client_config.service_account_enabled,
+                secret=client_config.secret,
             )
+
             result.clients_updated.append(client_config.client_id)
 
             secret = await client.get_client_secret(client_uuid)
