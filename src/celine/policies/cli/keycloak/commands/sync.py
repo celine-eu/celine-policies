@@ -26,7 +26,10 @@ from celine.policies.cli.keycloak.sync import (
     compute_sync_plan,
     write_secrets_file,
 )
-from celine.policies.cli.keycloak.commands._utils import configure_logging, build_settings
+from celine.policies.cli.keycloak.commands._utils import (
+    configure_logging,
+    build_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,7 @@ def sync(
         admin_password=admin_password,
         admin_client_id=admin_client_id,
         admin_client_secret=admin_client_secret,
+        secrets_file=secrets_file,
     )
 
     # Load configuration

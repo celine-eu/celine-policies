@@ -89,6 +89,12 @@ class KeycloakSettings(BaseSettings):
         description="Keycloak admin password (for bootstrap)",
     )
 
+    # Secrets file for auto-loading/saving client credentials
+    secrets_file: Path = Field(
+        default=DEFAULT_SECRETS_FILE,
+        description="Path to secrets file for auto-loading client credentials",
+    )
+
     # Service client authentication (preferred for operations)
     admin_client_id: str = Field(
         default=DEFAULT_ADMIN_CLIENT_ID,
@@ -133,6 +139,7 @@ class KeycloakSettings(BaseSettings):
         admin_password: str | None = None,
         admin_client_id: str | None = None,
         admin_client_secret: str | None = None,
+        secrets_file: Path | None = None,
     ) -> "KeycloakSettings":
         """Create a new settings instance with CLI overrides applied."""
         return KeycloakSettings(
@@ -143,27 +150,29 @@ class KeycloakSettings(BaseSettings):
             admin_password=admin_password or self.admin_password,
             admin_client_id=admin_client_id or self.admin_client_id,
             admin_client_secret=admin_client_secret or self.admin_client_secret,
+            secrets_file=secrets_file or self.secrets_file,
         )
 
     def with_auto_secret(
         self,
-        secrets_file: Path = DEFAULT_SECRETS_FILE,
+        secrets_file: Path | None = None,
     ) -> "KeycloakSettings":
-        """Try to auto-load secret from .client.secrets.yaml if not already set.
+        """Try to auto-load secret from the secrets file if not already set.
 
+        Uses self.secrets_file (from env CELINE_KEYCLOAK_SECRETS_FILE or
+        default) unless explicitly overridden.
         Only loads for the default admin client (celine-admin-cli).
         """
         if self.admin_client_secret:
-            # Already have a secret
             return self
 
         if self.admin_client_id != DEFAULT_ADMIN_CLIENT_ID:
-            # Not using default client, don't auto-load
             return self
 
-        secret = _load_secret_from_file(secrets_file, self.admin_client_id)
+        path = secrets_file or self.secrets_file
+        secret = _load_secret_from_file(path, self.admin_client_id)
         if secret:
-            logger.info("Auto-loaded credentials from %s", secrets_file)
+            logger.info("Auto-loaded credentials from %s", path)
             return self.with_overrides(admin_client_secret=secret)
 
         return self

@@ -125,6 +125,10 @@ def sync_users(
             help="Reset password on existing users too (not just newly created ones)",
         ),
     ] = False,
+    secrets_file: Annotated[
+        Optional[Path],
+        typer.Option("--secrets-file", "-s", help="Path to secrets file for auth"),
+    ] = None,
 ) -> None:
     """Ensure Keycloak users exist for every participant in a REC registry YAML.
 
@@ -183,6 +187,7 @@ def sync_users(
         admin_password=admin_password,
         admin_client_id=admin_client_id,
         admin_client_secret=admin_client_secret,
+        secrets_file=secrets_file,
     )
 
     # Resolve YAML path — argument > env var

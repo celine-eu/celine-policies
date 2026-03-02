@@ -12,11 +12,13 @@ services:
     depends_on:
       keycloak:
         condition: service_healthy
+    environment:
+      - CELINE_KEYCLOAK_SECRETS_FILE=/tmp/.secrets.yaml
     entrypoint: ["/bin/sh", "-euc"]
     command:
       - >
-        celine-policies keycloak bootstrap --admin-user admin --admin-password admin --secrets-file /tmp/.secrets.yaml &&
-        celine-policies keycloak sync --secrets-file /tmp/.secrets.yaml
+        celine-policies keycloak bootstrap --admin-user admin --admin-password admin &&
+        celine-policies keycloak sync
     extra_hosts:
       - "keycloak.celine.localhost:172.17.0.1"
       - "api.celine.localhost:172.17.0.1"

@@ -50,9 +50,9 @@ def bootstrap(
         typer.Option("--client-id", help="Client ID for the admin CLI client"),
     ] = "celine-admin-cli",
     secrets_file: Annotated[
-        Path,
+        Optional[Path],
         typer.Option("--secrets-file", "-s", help="Secrets file path"),
-    ] = Path(".client.secrets.yaml"),
+    ] = None,
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Enable verbose output"),
@@ -80,6 +80,9 @@ def bootstrap(
         admin_password=admin_password,
         # DO NOT set admin_client_id/secret - force admin user auth
     )
+
+    # Resolve secrets_file: CLI flag > env var (via settings.secrets_file)
+    resolved_secrets_file = secrets_file or settings.secrets_file
 
     if not settings.has_admin_credentials:
         typer.secho(
@@ -115,7 +118,9 @@ def bootstrap(
         raise typer.Exit(1)
 
     # Update secrets file
-    _update_secrets_file(secrets_file, settings.realm, client_id, secret, created)
+    _update_secrets_file(
+        resolved_secrets_file, settings.realm, client_id, secret, created
+    )
 
     action = "Created" if created else "Retrieved existing"
     typer.secho(f"\n✓ {action} client: {client_id}", fg=typer.colors.GREEN)
@@ -232,4 +237,4 @@ async def _async_bootstrap(
         typer.echo("Assigning realm-management roles...")
         await client.assign_realm_management_roles(client_uuid)
 
-        return secret, True  # Newly created
+        return secret, True

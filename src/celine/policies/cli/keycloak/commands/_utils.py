@@ -30,6 +30,7 @@ def build_settings(
     admin_password: str | None,
     admin_client_id: str | None,
     admin_client_secret: str | None,
+    secrets_file: Path | None = None,
 ) -> KeycloakSettings:
     """Build settings from environment, CLI overrides, and auto-load from secrets file."""
     base = KeycloakSettings()
@@ -42,7 +43,11 @@ def build_settings(
         admin_client_secret=admin_client_secret,
     )
 
-    # Auto-load secret from .client.secrets.yaml if not provided
+    # Propagate explicit secrets_file override into settings so all
+    # downstream calls (with_auto_secret, bootstrap write) use the same path
+    if secrets_file:
+        settings = settings.with_overrides(secrets_file=secrets_file)
+
     settings = settings.with_auto_secret()
 
     return settings

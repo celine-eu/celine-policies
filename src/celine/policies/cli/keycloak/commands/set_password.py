@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
@@ -57,6 +58,10 @@ def set_password(
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Enable verbose output")
     ] = False,
+    secrets_file: Annotated[
+        Optional[Path],
+        typer.Option("--secrets-file", "-s", help="Path to secrets file for auth"),
+    ] = None,
 ) -> None:
     """Set the password for a Keycloak user.
 
@@ -73,6 +78,7 @@ def set_password(
         admin_password=admin_password,
         admin_client_id=admin_client_id,
         admin_client_secret=admin_client_secret,
+        secrets_file=secrets_file,
     )
 
     try:
