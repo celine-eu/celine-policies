@@ -736,3 +736,82 @@ class KeycloakAdminClient:
                 }
 
         return state
+
+    # -------------------------------------------------------------------------
+    # Users
+    # -------------------------------------------------------------------------
+
+    async def get_user_by_id(self, user_id: str) -> "dict[str, Any] | None":
+        """Get a Keycloak user by UUID. Returns None if not found."""
+        try:
+            return await self._get(f"/users/{user_id}")
+        except KeycloakNotFoundError:
+            return None
+
+    async def create_user(
+        self,
+        user_id: str,
+        username: str,
+        *,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        temporary_password: str | None = None,
+        enabled: bool = True,
+    ) -> None:
+        """Create a Keycloak user with an explicit UUID.
+
+        Keycloak accepts a pre-set ``id`` on creation, which keeps user_id
+        values from the REC registry stable across environments.
+
+        If ``temporary_password`` is provided the user is forced to change it
+        on first login (requiredActions: UPDATE_PASSWORD).
+        """
+        payload: dict[str, Any] = {
+            "id": user_id,
+            "username": username,
+            "enabled": enabled,
+        }
+        if email:
+            payload["email"] = email
+            payload["emailVerified"] = False
+        if first_name:
+            payload["firstName"] = first_name
+        if last_name:
+            payload["lastName"] = last_name
+        if temporary_password:
+            payload["requiredActions"] = ["UPDATE_PASSWORD"]
+            payload["credentials"] = [
+                {
+                    "type": "password",
+                    "value": temporary_password,
+                    "temporary": True,
+                }
+            ]
+
+        logger.debug("Creating user: %s (id=%s)", username, user_id)
+        await self._post("/users", json=payload)
+        logger.info("Created user: %s (id=%s)", username, user_id)
+
+    # -------------------------------------------------------------------------
+    # Groups
+    # -------------------------------------------------------------------------
+
+    async def get_group_by_path(self, path: str) -> "dict[str, Any] | None":
+        """Look up a group by its path (e.g. '/viewers').
+
+        Uses the search endpoint then filters by exact path, because Keycloak
+        has no direct GET-by-path endpoint.
+        """
+        name = path.lstrip("/")
+        results = await self._get(f"/groups?search={name}&exact=true")
+        for group in results or []:
+            if group.get("path") == path:
+                return group
+        return None
+
+    async def add_user_to_group(self, user_id: str, group_id: str) -> None:
+        """Add a user to a group."""
+        logger.debug("Adding user %s to group %s", user_id, group_id)
+        await self._put(f"/users/{user_id}/groups/{group_id}")
+        logger.info("Added user %s to group %s", user_id, group_id)

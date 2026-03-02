@@ -16,6 +16,8 @@ import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+import secrets as _secrets
+
 logger = logging.getLogger(__name__)
 
 # Default secrets file path
@@ -165,3 +167,73 @@ class KeycloakSettings(BaseSettings):
             return self.with_overrides(admin_client_secret=secret)
 
         return self
+
+
+class SyncUsersSettings(BaseSettings):  # <<< NEW
+    """Settings for the sync-users command.
+
+    All fields read from env vars under the CELINE_SYNC_USERS_* prefix.
+    CLI flags override these values via with_overrides().
+
+    Environment variables:
+        CELINE_SYNC_USERS_REC_YAML          Path to REC registry YAML
+        CELINE_SYNC_USERS_GROUPS            Space-separated group paths
+                                            default: /viewers
+        CELINE_SYNC_USERS_TEMP_PASSWORD     Fixed temp password for all users.
+                                            Unset → random password per user.
+        CELINE_SYNC_USERS_DRY_RUN           "true" / "1" to enable dry-run
+        CELINE_SYNC_USERS_VERBOSE           "true" / "1" to enable verbose
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="CELINE_SYNC_USERS_",
+        extra="ignore",
+    )
+
+    rec_yaml: Path | None = Field(
+        default=None,
+        description="Path to REC registry YAML file",
+    )
+    groups: list[str] = Field(
+        default=["/viewers"],
+        description="Group paths to assign to every created user",
+    )
+    temp_password: str | None = Field(
+        default=None,
+        description="Fixed temporary password. None → random per user.",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="Show planned changes without applying them",
+    )
+    verbose: bool = Field(
+        default=False,
+        description="Enable verbose / debug output",
+    )
+
+    def with_overrides(
+        self,
+        *,
+        rec_yaml: Path | None = None,
+        groups: list[str] | None = None,
+        temp_password: str | None = None,
+        dry_run: bool | None = None,
+        verbose: bool | None = None,
+    ) -> "SyncUsersSettings":
+        """Return a new instance with any provided CLI overrides applied."""
+        return SyncUsersSettings(
+            rec_yaml=rec_yaml if rec_yaml is not None else self.rec_yaml,
+            groups=groups if groups is not None else self.groups,
+            temp_password=(
+                temp_password if temp_password is not None else self.temp_password
+            ),
+            dry_run=dry_run if dry_run is not None else self.dry_run,
+            verbose=verbose if verbose is not None else self.verbose,
+        )
+
+    def generate_password(self) -> str:
+        """Return the configured temp password, or generate a random one."""
+        if self.temp_password:
+            return self.temp_password
+        alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$"
+        return "".join(_secrets.choice(alphabet) for _ in range(16))

@@ -31,6 +31,13 @@ from celine.policies.cli.keycloak.sync import (
     write_secrets_file,
 )
 
+
+from celine.policies.cli.keycloak.settings import (
+    KeycloakSettings,
+    SyncUsersSettings,
+)
+
+
 logger = logging.getLogger(__name__)
 
 keycloak_app = typer.Typer(
@@ -568,3 +575,341 @@ async def _async_status(settings: KeycloakSettings) -> None:
                 typer.echo(f"      default: {', '.join(sorted(custom_default))}")
             if custom_optional:
                 typer.echo(f"      optional: {', '.join(sorted(custom_optional))}")
+
+
+def _load_rec_participants(rec_yaml: Path) -> list[dict]:
+    """Extract participant records from a REC registry YAML.
+
+    Returns a list of dicts with keys: user_id, key, name.
+    Participants without a user_id are skipped with a warning.
+    """
+    raw = yaml.safe_load(rec_yaml.read_text())
+    participants_raw = raw.get("participants", {})
+
+    participants = []
+    for key, data in participants_raw.items():
+        user_id = data.get("user_id")
+        if not user_id:
+            logger.warning("Participant %s has no user_id — skipping", key)
+            continue
+        participants.append(
+            {
+                "key": key,
+                "user_id": user_id,
+                "name": data.get("name", key),
+            }
+        )
+    return participants
+
+
+def _derive_username(participant_key: str) -> str:
+    """Stable Keycloak username from the participant key (e.g. 'gl-00001').
+
+    Unique within the community, no PII, safe to hand out during demos.
+    """
+    return participant_key.lower()
+
+
+# ---------------------------------------------------------------------------
+# sync-users command                                                      # <<< NEW
+# ---------------------------------------------------------------------------
+
+
+@keycloak_app.command("sync-users")
+def sync_users(
+    # Positional — can also come from CELINE_SYNC_USERS_REC_YAML
+    rec_yaml: Annotated[
+        Optional[Path],
+        typer.Argument(
+            help="Path to REC registry YAML  [env: CELINE_SYNC_USERS_REC_YAML]"
+        ),
+    ] = None,
+    # Keycloak connection — default via CELINE_KEYCLOAK_* (KeycloakSettings)
+    base_url: Annotated[
+        Optional[str],
+        typer.Option(
+            "--base-url",
+            "-u",
+            help="Keycloak base URL  [env: CELINE_KEYCLOAK_BASE_URL]",
+        ),
+    ] = None,
+    realm: Annotated[
+        Optional[str],
+        typer.Option(
+            "--realm", "-r", help="Target realm  [env: CELINE_KEYCLOAK_REALM]"
+        ),
+    ] = None,
+    admin_user: Annotated[
+        Optional[str],
+        typer.Option(
+            "--admin-user", help="Admin username  [env: CELINE_KEYCLOAK_ADMIN_USER]"
+        ),
+    ] = None,
+    admin_password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--admin-password",
+            help="Admin password  [env: CELINE_KEYCLOAK_ADMIN_PASSWORD]",
+        ),
+    ] = None,
+    admin_client_id: Annotated[
+        Optional[str],
+        typer.Option(
+            "--admin-client-id",
+            help="Admin client ID  [env: CELINE_KEYCLOAK_ADMIN_CLIENT_ID]",
+        ),
+    ] = None,
+    admin_client_secret: Annotated[
+        Optional[str],
+        typer.Option(
+            "--admin-client-secret",
+            help="Admin client secret  [env: CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET]",
+        ),
+    ] = None,
+    # Behaviour — default via CELINE_SYNC_USERS_* (SyncUsersSettings)
+    dry_run: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--dry-run",
+            "-n",
+            help="Show planned changes without applying  [env: CELINE_SYNC_USERS_DRY_RUN]",
+        ),
+    ] = None,
+    groups: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--group",
+            "-g",
+            help=(
+                "Group path to assign (repeatable). "
+                "Default: /viewers  [env: CELINE_SYNC_USERS_GROUPS]"
+            ),
+        ),
+    ] = None,
+    temp_password: Annotated[
+        Optional[str],
+        typer.Option(
+            "--temp-password",
+            help=(
+                "Fixed temporary password for all users. "
+                "Omit for a random password per user.  "
+                "[env: CELINE_SYNC_USERS_TEMP_PASSWORD]"
+            ),
+        ),
+    ] = None,
+    verbose: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Enable verbose output  [env: CELINE_SYNC_USERS_VERBOSE]",
+        ),
+    ] = None,
+) -> None:
+    """Ensure Keycloak users exist for every participant in a REC registry YAML.
+
+    Reads the REC YAML, checks each participant's user_id against Keycloak,
+    and creates any missing users with a temporary password (forced reset on
+    first login) and the specified group memberships.
+
+    Group resolution happens before any user is created — the command fails
+    immediately if a group path does not exist, rather than leaving partially
+    provisioned users behind.
+
+    This command is idempotent — safe to run multiple times.
+
+    All options have sensible defaults and can be set via environment variables
+    so the command can run with no flags at all in a configured environment.
+
+    Examples:
+        # zero-flag run if env vars are already set
+        celine-policies keycloak sync-users
+
+        # explicit YAML, dry run
+        celine-policies keycloak sync-users greenland.yaml --dry-run
+
+        # admin-user auth
+        celine-policies keycloak sync-users greenland.yaml \\
+            --admin-user admin --admin-password admin
+
+        # multiple groups, fixed password for a demo handout
+        celine-policies keycloak sync-users greenland.yaml \\
+            --group /viewers --group /community-gl \\
+            --temp-password "Demo@2025"
+
+        # fully env-driven (CI/CD, docker-compose)
+        CELINE_KEYCLOAK_BASE_URL=https://kc.example.com \\
+        CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET=xxx \\
+        CELINE_SYNC_USERS_REC_YAML=greenland.yaml \\
+        CELINE_SYNC_USERS_GROUPS="/viewers /community-gl" \\
+        CELINE_SYNC_USERS_TEMP_PASSWORD="Demo@2025" \\
+        celine-policies keycloak sync-users
+    """
+    # Build settings objects — CLI flags override env/defaults
+    sync_settings = SyncUsersSettings().with_overrides(
+        rec_yaml=rec_yaml,
+        groups=groups,
+        temp_password=temp_password,
+        dry_run=dry_run,
+        verbose=verbose,
+    )
+
+    _configure_logging(sync_settings.verbose)
+
+    kc_settings = _build_settings(
+        base_url=base_url,
+        realm=realm,
+        admin_user=admin_user,
+        admin_password=admin_password,
+        admin_client_id=admin_client_id,
+        admin_client_secret=admin_client_secret,
+    )
+
+    # Resolve YAML path — argument > env var
+    resolved_yaml = sync_settings.rec_yaml
+    if resolved_yaml is None:
+        typer.secho(
+            "Error: REC YAML path required. Pass as argument or set "
+            "CELINE_SYNC_USERS_REC_YAML.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not resolved_yaml.exists():
+        typer.secho(
+            f"Error: file not found: {resolved_yaml}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(1)
+
+    try:
+        participants = _load_rec_participants(resolved_yaml)
+    except Exception as e:
+        typer.secho(f"Error reading REC YAML: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    if not participants:
+        typer.secho(
+            "No participants with user_id found in YAML.", fg=typer.colors.YELLOW
+        )
+        raise typer.Exit(0)
+
+    typer.echo(f"REC YAML : {resolved_yaml} — {len(participants)} participant(s)")
+    typer.echo(f"Keycloak : {kc_settings.base_url}  realm={kc_settings.realm}")
+    typer.echo(f"Groups   : {', '.join(sync_settings.groups)}")
+    typer.echo(
+        f"Password : {'fixed' if sync_settings.temp_password else 'random per user'}"
+    )
+    if sync_settings.dry_run:
+        typer.secho("\n[DRY RUN] No changes will be applied.\n", fg=typer.colors.YELLOW)
+
+    try:
+        created, skipped, errors = asyncio.run(
+            _async_sync_users(
+                kc_settings=kc_settings,
+                sync_settings=sync_settings,
+                participants=participants,
+            )
+        )
+    except KeycloakAuthError as e:
+        typer.secho(f"Authentication failed: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    except KeycloakError as e:
+        typer.secho(f"Keycloak error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        if sync_settings.verbose:
+            import traceback
+
+            traceback.print_exc()
+        raise typer.Exit(1)
+
+    typer.echo("\nDone.")
+    typer.secho(f"  Created : {len(created)}", fg=typer.colors.GREEN)
+    typer.echo(f"  Skipped : {len(skipped)} (already exist)")
+    if errors:
+        typer.secho(f"  Errors  : {len(errors)}", fg=typer.colors.RED)
+        for err in errors:
+            typer.secho(f"    - {err}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+
+async def _async_sync_users(
+    kc_settings: "KeycloakSettings",
+    sync_settings: "SyncUsersSettings",
+    participants: list[dict],
+) -> tuple[list[str], list[str], list[str]]:
+    """Check and create Keycloak users for the given participant list.
+
+    Returns (created, skipped, errors).
+    """
+    created: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    async with KeycloakAdminClient(kc_settings) as kc:
+        await kc.authenticate()
+
+        # Resolve group paths → IDs up front.
+        # Fail fast: better to error before touching any user than to create
+        # users and then silently skip the group assignment.
+        group_ids: dict[str, str] = {}  # path -> keycloak uuid
+        for path in sync_settings.groups:
+            group = await kc.get_group_by_path(path)
+            if not group:
+                raise KeycloakError(
+                    f"Group '{path}' not found in realm '{kc_settings.realm}'. "
+                    f"Create it first or remove it from --group."
+                )
+            group_ids[path] = group["id"]
+            logger.debug("Resolved group %s -> %s", path, group["id"])
+
+        for p in participants:
+            user_id = p["user_id"]
+            key = p["key"]
+            username = _derive_username(key)
+
+            existing = await kc.get_user_by_id(user_id)
+            if existing:
+                typer.echo(
+                    f"  ✓ {key} ({user_id}) — exists as '{existing.get('username')}'"
+                )
+                skipped.append(user_id)
+                continue
+
+            pwd = sync_settings.generate_password()
+
+            if sync_settings.dry_run:
+                typer.secho(
+                    f"  ~ {key} ({user_id})"
+                    f" username='{username}'"
+                    f" groups={list(group_ids.keys())}",
+                    fg=typer.colors.YELLOW,
+                )
+                created.append(user_id)
+                continue
+
+            try:
+                await kc.create_user(
+                    user_id=user_id,
+                    username=username,
+                    temporary_password=pwd,
+                )
+                for path, gid in group_ids.items():
+                    await kc.add_user_to_group(user_id, gid)
+
+                typer.secho(
+                    f"  + {key} ({user_id})"
+                    f" username='{username}'"
+                    f" pwd='{pwd}'"
+                    f" groups={list(group_ids.keys())}",
+                    fg=typer.colors.GREEN,
+                )
+                created.append(user_id)
+
+            except Exception as e:
+                msg = f"{key} ({user_id}): {e}"
+                typer.secho(f"  ✗ {msg}", fg=typer.colors.RED)
+                errors.append(msg)
+
+    return created, skipped, errors

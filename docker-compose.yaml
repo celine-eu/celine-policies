@@ -113,7 +113,7 @@ services:
       KC_PROXY_HEADERS: forwarded
     volumes:
       - ./config/keycloak/import:/opt/keycloak/data/import:ro
-      - ./config/keycloak/themes:/opt/keycloak/themes:ro
+      - ./keycloak/themes/rec:/opt/keycloak/themes/rec:ro
     networks:
       - celine_security_net
     healthcheck:
