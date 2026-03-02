@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.2 (2026-03-02)
+
+### Bug Fixes
+
+- Baiapp warning
+  ([`bb3a43f`](https://github.com/celine-eu/celine-policies/commit/bb3a43fd1c66818e28b56d6d7a483900cc3a52a1))
+
+
 ## v1.1.1 (2026-03-02)
 
 ### Bug Fixes
