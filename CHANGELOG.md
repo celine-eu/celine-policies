@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-03-02)
+
+### Bug Fixes
+
+- Force image build
+  ([`2d6a8d8`](https://github.com/celine-eu/celine-policies/commit/2d6a8d8897992fbc8fa780c0b78d1193dc1fb2a5))
+
+
 ## v1.1.0 (2026-03-02)
 
 ### Bug Fixes
