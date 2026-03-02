@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import typer
 
-from celine.policies.cli.keycloak.commands import keycloak_app
+from celine.policies.cli.keycloak.commands.commands import keycloak_app
 
 app = typer.Typer(
     name="celine-policies",

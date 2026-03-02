@@ -15,8 +15,8 @@ services:
     entrypoint: ["/bin/sh", "-euc"]
     command:
       - >
-        uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin &&
-        uv run celine-policies keycloak sync
+        celine-policies keycloak bootstrap --admin-user admin --admin-password admin --secrets-file /tmp/.secrets.yaml &&
+        celine-policies keycloak sync --secrets-file /tmp/.secrets.yaml
     extra_hosts:
       - "keycloak.celine.localhost:172.17.0.1"
       - "api.celine.localhost:172.17.0.1"

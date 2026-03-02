@@ -6,6 +6,7 @@ Wraps the Keycloak Admin REST API for managing:
 - Scope-to-client assignments
 - Service account roles
 - Protocol mappers (audience mappers for cross-service calls)
+- Users and group memberships
 """
 
 from __future__ import annotations
@@ -73,32 +74,35 @@ class TokenInfo:
 class CurrentState:
     """Current state of Keycloak resources."""
 
-    scopes: dict[str, dict[str, Any]] = field(
-        default_factory=dict
-    )  # name -> scope data
-    clients: dict[str, dict[str, Any]] = field(
-        default_factory=dict
-    )  # client_id -> client data
-    client_default_scopes: dict[str, set[str]] = field(
-        default_factory=dict
-    )  # client_id -> scope names
-    client_optional_scopes: dict[str, set[str]] = field(
-        default_factory=dict
-    )  # client_id -> scope names
+    scopes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    clients: dict[str, dict[str, Any]] = field(default_factory=dict)
+    client_default_scopes: dict[str, set[str]] = field(default_factory=dict)
+    client_optional_scopes: dict[str, set[str]] = field(default_factory=dict)
 
     # Audience mappers currently on each client.
-    # Maps client_id -> set of audience values (target client_ids).
+    # Maps client_id -> {audience_client_id -> mapper_id}.
     # Only includes mappers whose name starts with AUDIENCE_MAPPER_PREFIX,
     # so manually created mappers are never touched.
-    client_audience_mappers: dict[str, dict[str, str]] = field(
-        default_factory=dict
-    )  # client_id -> {audience_client_id -> mapper_id}
+    client_audience_mappers: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 class KeycloakAdminClient:
     """Async client for Keycloak Admin REST API."""
 
-    # Well-known Keycloak built-in scopes to ignore
+    # Roles required on realm-management for celine-admin-cli to operate.
+    # Covers: client/scope sync, user provisioning, group management.
+    REQUIRED_REALM_MGMT_ROLES = [
+        "manage-clients",
+        "manage-realm",
+        "view-clients",
+        "view-realm",
+        "manage-users",
+        "view-users",
+        "query-groups",
+        "query-users",
+    ]
+
+    # Well-known Keycloak built-in scopes to ignore during sync.
     BUILTIN_SCOPES = {
         "openid",
         "profile",
@@ -110,7 +114,7 @@ class KeycloakAdminClient:
         "acr",
         "roles",
         "web-origins",
-        "basic",  # Added in newer Keycloak
+        "basic",
     }
 
     def __init__(self, settings: KeycloakSettings):
@@ -187,7 +191,6 @@ class KeycloakAdminClient:
 
     async def _authenticate_admin_user(self) -> None:
         """Authenticate using admin user credentials (master realm)."""
-        # Admin users authenticate against the master realm
         token_url = f"{self._settings.master_realm_url}/protocol/openid-connect/token"
 
         data = {
@@ -325,10 +328,7 @@ class KeycloakAdminClient:
         protocol: str = "openid-connect",
         include_in_token_scope: bool = True,
     ) -> str:
-        """Create a new client scope.
-
-        Returns the scope ID.
-        """
+        """Create a new client scope. Returns the scope ID."""
         payload = {
             "name": name,
             "description": description,
@@ -342,7 +342,6 @@ class KeycloakAdminClient:
         logger.debug("Creating client scope: %s", name)
         await self._post("/client-scopes", json=payload)
 
-        # Fetch the created scope to get its ID
         scope = await self.get_client_scope_by_name(name)
         if not scope:
             raise KeycloakError(f"Failed to retrieve created scope: {name}")
@@ -417,13 +416,11 @@ class KeycloakAdminClient:
             "description": description,
             "enabled": True,
             "protocol": "openid-connect",
-            # Client credentials flow settings
             "publicClient": False,
             "serviceAccountsEnabled": service_account_enabled,
             "standardFlowEnabled": False,
             "implicitFlowEnabled": False,
             "directAccessGrantsEnabled": False,
-            # Authentication
             "clientAuthenticatorType": "client-secret",
         }
 
@@ -433,14 +430,11 @@ class KeycloakAdminClient:
         logger.debug("Creating client: %s", client_id)
         await self._post("/clients", json=payload)
 
-        # Fetch the created client
         client = await self.get_client_by_client_id(client_id)
         if not client:
             raise KeycloakError(f"Failed to retrieve created client: {client_id}")
 
         client_uuid = client["id"]
-
-        # Get or generate secret
         actual_secret = await self.get_client_secret(client_uuid)
 
         logger.info("Created client: %s (uuid=%s)", client_id, client_uuid)
@@ -453,7 +447,7 @@ class KeycloakAdminClient:
         name: str = "",
         description: str = "",
         service_account_enabled: bool = True,
-        secret: str | None = None,  # ← add this
+        secret: str | None = None,
     ) -> None:
         """Update an existing client."""
         current = await self.get_client(client_uuid)
@@ -532,6 +526,29 @@ class KeycloakAdminClient:
         logger.debug("Removing optional scope %s from client %s", scope_id, client_uuid)
         await self._delete(f"/clients/{client_uuid}/optional-client-scopes/{scope_id}")
 
+    async def ensure_default_scope(self, client_uuid: str, scope_name: str) -> None:
+        """Ensure a named scope is in the client's default scopes.
+
+        Idempotent: no-op if already assigned.
+        Raises KeycloakError if the scope doesn't exist in the realm.
+        """
+        current = await self.get_client_default_scopes(client_uuid)
+        if any(s.get("name") == scope_name for s in current):
+            logger.info("Scope '%s' already in default scopes — skipping", scope_name)
+            return
+
+        scope = await self.get_client_scope_by_name(scope_name)
+        if not scope:
+            raise KeycloakError(
+                f"Scope '{scope_name}' not found in realm. "
+                f"Cannot assign it as a default scope."
+            )
+
+        await self.add_client_default_scope(client_uuid, scope["id"])
+        logger.info(
+            "Added '%s' to default scopes of client %s", scope_name, client_uuid
+        )
+
     # -------------------------------------------------------------------------
     # Protocol Mappers (Audience)
     # -------------------------------------------------------------------------
@@ -552,13 +569,7 @@ class KeycloakAdminClient:
         The mapper name follows the AUDIENCE_MAPPER_PREFIX convention so the
         CLI can distinguish its own mappers from manually created ones.
 
-        Args:
-            client_uuid: UUID of the client to add the mapper to.
-            audience_client_id: The client_id value to embed as audience
-                                 (e.g. 'svc-dataset-api').
-
-        Returns:
-            The mapper ID.
+        Returns the mapper ID.
         """
         mapper_name = f"{AUDIENCE_MAPPER_PREFIX}{audience_client_id}"
         payload = {
@@ -579,11 +590,9 @@ class KeycloakAdminClient:
             f"/clients/{client_uuid}/protocol-mappers/models", json=payload
         )
 
-        # Keycloak returns the created mapper with its ID on 201
         if result and isinstance(result, dict):
             mapper_id = result.get("id", "")
         else:
-            # Fall back: re-fetch to get the ID
             mappers = await self.get_client_protocol_mappers(client_uuid)
             mapper_id = next(
                 (m["id"] for m in mappers if m.get("name") == mapper_name), ""
@@ -608,7 +617,7 @@ class KeycloakAdminClient:
         logger.info("Deleted protocol mapper %s from client %s", mapper_id, client_uuid)
 
     # -------------------------------------------------------------------------
-    # Service Account Roles (for bootstrap)
+    # Service Account / Bootstrap helpers
     # -------------------------------------------------------------------------
 
     async def get_service_account_user(self, client_uuid: str) -> dict[str, Any]:
@@ -623,6 +632,12 @@ class KeycloakAdminClient:
         """Get all roles for a client."""
         return await self._get(f"/clients/{client_uuid}/roles")
 
+    async def get_user_client_roles(
+        self, user_id: str, client_uuid: str
+    ) -> list[dict[str, Any]]:
+        """Get client roles currently assigned to a user."""
+        return await self._get(f"/users/{user_id}/role-mappings/clients/{client_uuid}")
+
     async def assign_client_roles_to_user(
         self,
         user_id: str,
@@ -636,48 +651,103 @@ class KeycloakAdminClient:
             json=roles,
         )
 
-    async def assign_realm_management_roles(self, client_uuid: str) -> None:
-        """Assign realm-management roles to a client's service account.
+    async def ensure_realm_management_audience_mapper(self, client_uuid: str) -> None:
+        """Ensure the client token includes realm-management in its audience.
 
-        Grants:
-        - manage-clients
-        - manage-realm (for client scopes)
-        - view-clients
-        - view-realm
+        Without this mapper, Keycloak won't surface the realm-management role
+        mappings in the token — resource_access will be empty and every Admin
+        API call returns 403, even if the service account has the roles.
+
+        Idempotent: checks for an existing mapper before creating.
         """
-        # Get the service account user
+        mapper_name = "realm-management-audience"
+
+        mappers = await self.get_client_protocol_mappers(client_uuid)
+        existing = next((m for m in mappers if m.get("name") == mapper_name), None)
+        if existing:
+            logger.info("realm-management audience mapper already present — skipping")
+            return
+
+        payload = {
+            "name": mapper_name,
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-audience-mapper",
+            "config": {
+                "included.client.audience": "realm-management",
+                "id.token.claim": "false",
+                "access.token.claim": "true",
+            },
+        }
+
+        logger.info("Adding realm-management audience mapper to client %s", client_uuid)
+        await self._post(
+            f"/clients/{client_uuid}/protocol-mappers/models", json=payload
+        )
+        logger.info("realm-management audience mapper created")
+
+    async def assign_realm_management_roles(self, client_uuid: str) -> None:
+        """Ensure the service account has all required realm-management roles.
+
+        Idempotent: fetches currently assigned roles first and only assigns
+        what is missing. Raises if any required role is missing or cannot be
+        verified after assignment.
+        """
         sa_user = await self.get_service_account_user(client_uuid)
         user_id = sa_user["id"]
 
-        # Get realm-management client
         rm_client = await self.get_realm_management_client()
         if not rm_client:
             raise KeycloakError("realm-management client not found")
-
         rm_client_uuid = rm_client["id"]
 
-        # Get available roles
         all_roles = await self.get_client_roles(rm_client_uuid)
         role_map = {r["name"]: r for r in all_roles}
 
-        # Roles we need
-        needed_roles = ["manage-clients", "manage-realm", "view-clients", "view-realm"]
-        roles_to_assign = []
+        for role_name in self.REQUIRED_REALM_MGMT_ROLES:
+            if role_name not in role_map:
+                raise KeycloakError(
+                    f"Required role '{role_name}' not found in realm-management. "
+                    f"Available: {sorted(role_map.keys())}"
+                )
 
-        for role_name in needed_roles:
-            if role_name in role_map:
-                roles_to_assign.append(role_map[role_name])
-            else:
-                logger.warning("Role not found: %s", role_name)
+        current_roles = await self.get_user_client_roles(user_id, rm_client_uuid)
+        current_role_names = {r["name"] for r in current_roles}
 
-        if roles_to_assign:
-            await self.assign_client_roles_to_user(
-                user_id, rm_client_uuid, roles_to_assign
-            )
+        missing_roles = [
+            role_map[name]
+            for name in self.REQUIRED_REALM_MGMT_ROLES
+            if name not in current_role_names
+        ]
+
+        if not missing_roles:
             logger.info(
-                "Assigned realm-management roles to service account: %s",
-                [r["name"] for r in roles_to_assign],
+                "Service account already has all required realm-management roles"
             )
+            return
+
+        logger.info(
+            "Assigning missing roles to service account: %s",
+            [r["name"] for r in missing_roles],
+        )
+        await self.assign_client_roles_to_user(user_id, rm_client_uuid, missing_roles)
+
+        # Verify assignment succeeded
+        assigned_roles = await self.get_user_client_roles(user_id, rm_client_uuid)
+        assigned_names = {r["name"] for r in assigned_roles}
+        still_missing = [
+            name
+            for name in self.REQUIRED_REALM_MGMT_ROLES
+            if name not in assigned_names
+        ]
+        if still_missing:
+            raise KeycloakError(
+                f"Role assignment failed — still missing after assign: {still_missing}"
+            )
+
+        logger.info(
+            "Successfully assigned realm-management roles: %s",
+            [r["name"] for r in missing_roles],
+        )
 
     # -------------------------------------------------------------------------
     # State Fetching
@@ -687,18 +757,15 @@ class KeycloakAdminClient:
         """Fetch the current state of all relevant resources."""
         state = CurrentState()
 
-        # Fetch all scopes
         scopes = await self.list_client_scopes()
         for scope in scopes:
             name = scope.get("name", "")
             if name and name not in self.BUILTIN_SCOPES:
                 state.scopes[name] = scope
 
-        # Fetch all clients
         clients = await self.list_clients()
         for client in clients:
             client_id = client.get("clientId", "")
-            # Skip Keycloak internal clients
             if (
                 client_id
                 and not client_id.startswith("account")
@@ -711,10 +778,8 @@ class KeycloakAdminClient:
                 }
             ):
                 state.clients[client_id] = client
-
                 client_uuid = client["id"]
 
-                # Fetch scope assignments
                 default_scopes = await self.get_client_default_scopes(client_uuid)
                 state.client_default_scopes[client_id] = {
                     s["name"] for s in default_scopes if s.get("name")
@@ -725,7 +790,6 @@ class KeycloakAdminClient:
                     s["name"] for s in optional_scopes if s.get("name")
                 }
 
-                # Fetch audience mappers managed by this CLI
                 mappers = await self.get_client_protocol_mappers(client_uuid)
                 state.client_audience_mappers[client_id] = {
                     m["config"]["included.client.audience"]: m["id"]
@@ -748,9 +812,56 @@ class KeycloakAdminClient:
         except KeycloakNotFoundError:
             return None
 
+    async def get_user_by_username(self, username: str) -> "dict[str, Any] | None":
+        """Get a Keycloak user by exact username. Returns None if not found."""
+        results = await self._get(f"/users?username={username}&exact=true")
+        if results:
+            return results[0]
+        return None
+
+    async def ensure_user(
+        self,
+        username: str,
+        *,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        temporary_password: str | None = None,
+        enabled: bool = True,
+    ) -> tuple[str, bool]:
+        """Ensure a user exists, creating it if necessary.
+
+        Username is the stable identity. Keycloak assigns its own UUID —
+        we never pre-set it. This avoids all UUID mismatch issues.
+
+        Returns:
+            (keycloak_uuid, created) where created=True if the user was newly
+            created. Always use the returned UUID for subsequent operations.
+        """
+        existing = await self.get_user_by_username(username)
+        if existing:
+            logger.debug("User already exists: %s (%s)", username, existing["id"])
+            return existing["id"], False
+
+        await self.create_user(
+            username=username,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            temporary_password=temporary_password,
+            enabled=enabled,
+        )
+
+        # Fetch back to get the Keycloak-assigned UUID
+        created_user = await self.get_user_by_username(username)
+        if not created_user:
+            raise KeycloakError(f"Failed to retrieve user after creation: {username}")
+
+        logger.info("Created user: %s (%s)", username, created_user["id"])
+        return created_user["id"], True
+
     async def create_user(
         self,
-        user_id: str,
         username: str,
         *,
         email: str | None = None,
@@ -759,16 +870,15 @@ class KeycloakAdminClient:
         temporary_password: str | None = None,
         enabled: bool = True,
     ) -> None:
-        """Create a Keycloak user with an explicit UUID.
+        """Create a Keycloak user, letting Keycloak assign the UUID.
 
-        Keycloak accepts a pre-set ``id`` on creation, which keeps user_id
-        values from the REC registry stable across environments.
+        Prefer ensure_user() for idempotent provisioning — it checks for
+        an existing user by username before creating.
 
         If ``temporary_password`` is provided the user is forced to change it
         on first login (requiredActions: UPDATE_PASSWORD).
         """
         payload: dict[str, Any] = {
-            "id": user_id,
             "username": username,
             "enabled": enabled,
         }
@@ -789,9 +899,8 @@ class KeycloakAdminClient:
                 }
             ]
 
-        logger.debug("Creating user: %s (id=%s)", username, user_id)
+        logger.debug("Creating user: %s", username)
         await self._post("/users", json=payload)
-        logger.info("Created user: %s (id=%s)", username, user_id)
 
     # -------------------------------------------------------------------------
     # Groups
@@ -815,3 +924,54 @@ class KeycloakAdminClient:
         logger.debug("Adding user %s to group %s", user_id, group_id)
         await self._put(f"/users/{user_id}/groups/{group_id}")
         logger.info("Added user %s to group %s", user_id, group_id)
+
+    async def set_user_password(
+        self,
+        user_id: str,
+        password: str,
+        temporary: bool = True,
+    ) -> None:
+        """Set (or reset) a user's password.
+
+        If temporary=True the user is forced to change it on next login.
+        """
+        payload = {
+            "type": "password",
+            "value": password,
+            "temporary": temporary,
+        }
+        logger.debug("Setting password for user %s", user_id)
+        await self._put(f"/users/{user_id}/reset-password", json=payload)
+        logger.info("Password set for user %s", user_id)
+
+    async def add_user_to_group_with_retry(
+        self,
+        user_id: str,
+        group_id: str,
+        retries: int = 5,
+        delay: float = 0.5,
+    ) -> None:
+        """Add a user to a group, retrying on 404.
+
+        Keycloak can return 404 immediately after user creation due to
+        eventual consistency — the user record is committed but not yet
+        visible to all endpoints. Retrying with a small delay resolves this.
+
+        Raises KeycloakNotFoundError if still failing after all retries.
+        """
+        for attempt in range(retries):
+            try:
+                await self.add_user_to_group(user_id, group_id)
+                return
+            except KeycloakNotFoundError:
+                if attempt < retries - 1:
+                    logger.debug(
+                        "User %s not yet available for group assignment, "
+                        "retrying (%d/%d)...",
+                        user_id,
+                        attempt + 1,
+                        retries,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    raise
