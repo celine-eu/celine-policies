@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.3 (2026-03-03)
+
+### Bug Fixes
+
+- Keycloak style
+  ([`ae601a1`](https://github.com/celine-eu/celine-policies/commit/ae601a1cb122efd1eab71e03a07f5a9b6e7b24f2))
+
+
 ## v1.1.2 (2026-03-02)
 
 ### Bug Fixes
