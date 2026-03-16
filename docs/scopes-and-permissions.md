@@ -9,30 +9,10 @@ Authorization in CELINE requires **both** of the following to pass:
 1. **User must have sufficient group level** (for user tokens)
 2. **Client must have the required scope** (for all tokens)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│   User Token                    Service Token               │
-│   ══════════                    ═════════════               │
-│                                                             │
-│   ┌─────────────┐               ┌─────────────┐            │
-│   │ User Groups │               │   Scopes    │            │
-│   │  (roles)    │               │   only      │            │
-│   └──────┬──────┘               └──────┬──────┘            │
-│          │                             │                    │
-│          ▼                             │                    │
-│   ┌─────────────┐                      │                    │
-│   │Client Scopes│                      │                    │
-│   └──────┬──────┘                      │                    │
-│          │                             │                    │
-│          ▼                             ▼                    │
-│   ┌─────────────────────────────────────────┐              │
-│   │              Authorization              │              │
-│   │         (intersection of both)          │              │
-│   └─────────────────────────────────────────┘              │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+| Token Type | Check 1 | Check 2 | Authorization |
+|---|---|---|---|
+| User token | User group level sufficient? | Client scopes include required scope? | Both must pass (intersection) |
+| Service token | N/A (no user groups) | Client scopes include required scope? | Scope check only |
 
 ---
 

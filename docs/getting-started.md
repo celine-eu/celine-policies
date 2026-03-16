@@ -15,12 +15,7 @@ Your service will:
 2. Call the policy service with the JWT to check authorization
 3. Proceed or deny based on the response
 
-```
-┌─────────────┐      ┌──────────────┐      ┌────────────────┐
-│ Your Service│─────▶│Policy Service│─────▶│ Allow / Deny   │
-│  + JWT      │      │              │      │ + Reason       │
-└─────────────┘      └──────────────┘      └────────────────┘
-```
+Your service sends the JWT to the Policy Service, which returns an allow/deny decision with a reason string.
 
 ## Step 1: Configure Your OAuth Client
 

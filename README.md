@@ -36,12 +36,12 @@ curl -X POST http://localhost:8009/authorize \
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](docs/getting-started.md) | Developer quickstart guide |
-| [Architecture](docs/architecture.md) | Authorization model and system design |
-| [API Reference](docs/api-reference.md) | Complete endpoint documentation |
-| [Scopes & Permissions](docs/scopes-and-permissions.md) | OAuth scopes and access control |
-| [MQTT Integration](docs/mqtt-integration.md) | Topic patterns and broker setup |
-| [Deployment](docs/deployment.md) | Configuration and production deployment |
+| [Getting Started](https://celine-eu.github.io/projects/celine-policies/docs/getting-started.md) | Developer quickstart guide |
+| [Architecture](https://celine-eu.github.io/projects/celine-policies/docs/architecture.md) | Authorization model and system design |
+| [API Reference](https://celine-eu.github.io/projects/celine-policies/docs/api-reference.md) | Complete endpoint documentation |
+| [Scopes & Permissions](https://celine-eu.github.io/projects/celine-policies/docs/scopes-and-permissions.md) | OAuth scopes and access control |
+| [MQTT Integration](https://celine-eu.github.io/projects/celine-policies/docs/mqtt-integration.md) | Topic patterns and broker setup |
+| [Deployment](https://celine-eu.github.io/projects/celine-policies/docs/deployment.md) | Configuration and production deployment |
 
 ## Platform Services
 
@@ -56,26 +56,14 @@ The policy service authorizes requests for the following CELINE services:
 
 ## Authorization Model Overview
 
-```
-┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Client     │────▶│  Policy Service  │────▶│  OPA (regorus)  │
-│  (with JWT)  │     │                  │     │                 │
-└──────────────┘     └──────────────────┘     └─────────────────┘
-                              │
-                     ┌────────┴────────┐
-                     ▼                 ▼
-              ┌────────────┐    ┌────────────┐
-              │ User Groups│    │Client Scope│
-              │  (roles)   │    │ (OAuth)    │
-              └────────────┘    └────────────┘
-                     │                 │
-                     └────────┬────────┘
-                              ▼
-                     ┌────────────────┐
-                     │   Decision:    │
-                     │ groups ∩ scope │
-                     └────────────────┘
-```
+Each authorization request passes through the Policy Service to OPA (regorus). OPA evaluates two independent checks and intersects the results:
+
+| Check | Source | Description |
+|---|---|---|
+| User groups | JWT `groups` claim | Role hierarchy: admins > managers > editors > viewers |
+| Client scopes | JWT `scope` claim | OAuth scopes granted to the calling service client |
+
+Both checks must pass. A high-trust user calling through a low-trust client is denied. A high-trust client acting on behalf of a low-privilege user is also denied.
 
 Authorization requires **both**:
 1. **User** must have sufficient group level (admins > managers > editors > viewers)

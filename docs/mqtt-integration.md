@@ -6,14 +6,7 @@ This document covers MQTT authorization, topic patterns, and broker configuratio
 
 The policy service provides MQTT authorization via HTTP backend endpoints compatible with [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth).
 
-```
-┌─────────────┐        ┌─────────────┐        ┌─────────────────┐
-│ MQTT Client │───────▶│  Mosquitto  │───────▶│ Policy Service  │
-│  (+ JWT)    │        │   Broker    │  HTTP  │  /mqtt/user     │
-└─────────────┘        └─────────────┘        │  /mqtt/acl      │
-                                              │  /mqtt/superuser│
-                                              └─────────────────┘
-```
+The MQTT client connects to Mosquitto with a JWT. Mosquitto calls the Policy Service via HTTP (mosquitto-go-auth backend) on `/mqtt/user`, `/mqtt/acl`, and `/mqtt/superuser` to validate credentials and check topic permissions.
 
 ## Authentication Flow
 

@@ -205,15 +205,14 @@ Validate a pipeline state transition.
 
 **Valid Transitions:**
 
-```
-pending ──▶ started ──▶ running ──▶ completed
-   │           │           │
-   │           │           └──▶ failed
-   │           │
-   │           └──▶ cancelled
-   │
-   └──▶ cancelled
-```
+| From | To | Description |
+|---|---|---|
+| `pending` | `started` | Pipeline begins execution |
+| `pending` | `cancelled` | Pipeline cancelled before start |
+| `started` | `running` | Execution proceeds |
+| `started` | `cancelled` | Pipeline cancelled after start |
+| `running` | `completed` | Successful completion |
+| `running` | `failed` | Execution error |
 
 ---
 
