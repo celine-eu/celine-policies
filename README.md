@@ -36,12 +36,12 @@ curl -X POST http://localhost:8009/authorize \
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](https://celine-eu.github.io/projects/celine-policies/docs/getting-started.md) | Developer quickstart guide |
-| [Architecture](https://celine-eu.github.io/projects/celine-policies/docs/architecture.md) | Authorization model and system design |
-| [API Reference](https://celine-eu.github.io/projects/celine-policies/docs/api-reference.md) | Complete endpoint documentation |
-| [Scopes & Permissions](https://celine-eu.github.io/projects/celine-policies/docs/scopes-and-permissions.md) | OAuth scopes and access control |
-| [MQTT Integration](https://celine-eu.github.io/projects/celine-policies/docs/mqtt-integration.md) | Topic patterns and broker setup |
-| [Deployment](https://celine-eu.github.io/projects/celine-policies/docs/deployment.md) | Configuration and production deployment |
+| [Getting Started](https://celine-eu.github.io/projects/celine-policies/docs/getting-started) | Developer quickstart guide |
+| [Architecture](https://celine-eu.github.io/projects/celine-policies/docs/architecture) | Authorization model and system design |
+| [API Reference](https://celine-eu.github.io/projects/celine-policies/docs/api-reference) | Complete endpoint documentation |
+| [Scopes & Permissions](https://celine-eu.github.io/projects/celine-policies/docs/scopes-and-permissions) | OAuth scopes and access control |
+| [MQTT Integration](https://celine-eu.github.io/projects/celine-policies/docs/mqtt-integration) | Topic patterns and broker setup |
+| [Deployment](https://celine-eu.github.io/projects/celine-policies/docs/deployment) | Configuration and production deployment |
 
 ## Platform Services
 
