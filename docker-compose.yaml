@@ -18,10 +18,11 @@ services:
     command:
       - >
         celine-policies keycloak bootstrap --admin-user admin --admin-password admin &&
-        celine-policies keycloak sync
+        celine-policies keycloak sync --secrets-file /tmp/.secrets.yaml
     extra_hosts:
-      - "keycloak.celine.localhost:172.17.0.1"
-      - "api.celine.localhost:172.17.0.1"
+      - "host.docker.internal:host-gateway"
+      - "keycloak.celine.localhost:host-gateway"
+      - "api.celine.localhost:host-gateway"
 
   mqtt_auth:
     build:
@@ -52,8 +53,9 @@ services:
     networks:
       - celine_security_net
     extra_hosts:
-      - "keycloak.celine.localhost:172.17.0.1"
-      - "api.celine.localhost:172.17.0.1"
+      - "host.docker.internal:host-gateway"
+      - "keycloak.celine.localhost:host-gateway"
+      - "api.celine.localhost:host-gateway"
 
   mosquitto:
     image: ghcr.io/lhns/mosquitto-go-auth:3.3.0-mosquitto_2.0.22
@@ -72,8 +74,9 @@ services:
     networks:
       - celine_security_net
     extra_hosts:
-      - "keycloak.celine.localhost:172.17.0.1"
-      - "api.celine.localhost:172.17.0.1"
+      - "host.docker.internal:host-gateway"
+      - "keycloak.celine.localhost:host-gateway"
+      - "api.celine.localhost:host-gateway"
 
   redis:
     image: redis:7.2-alpine
@@ -139,6 +142,7 @@ services:
       keycloak:
         condition: service_healthy
     extra_hosts:
-      - "keycloak.celine.localhost:172.17.0.1"
+      - "host.docker.internal:host-gateway"
+      - "keycloak.celine.localhost:host-gateway"
     ports:
       - 4180:4180
