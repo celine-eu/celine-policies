@@ -24,6 +24,27 @@ services:
       - "keycloak.celine.localhost:host-gateway"
       - "api.celine.localhost:host-gateway"
 
+  sync-users:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    volumes:
+      - ../rec-registry/recs/rec-example.yaml:/app/rec-example.yaml:ro
+    depends_on:
+      keycloak-sync:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - >
+        celine-policies keycloak sync-users /app/rec-example.yaml
+        --admin-user admin --admin-password admin
+        --password test --no-temporary --mock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "keycloak.celine.localhost:host-gateway"
+      - "api.celine.localhost:host-gateway"
+
   mqtt_auth:
     build:
       context: .
@@ -49,6 +70,8 @@ services:
       retries: 5
     depends_on:
       keycloak-sync:
+        condition: service_completed_successfully
+      sync-users:
         condition: service_completed_successfully
     networks:
       - celine_security_net

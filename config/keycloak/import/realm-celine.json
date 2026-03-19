@@ -64,7 +64,9 @@
             "secret": "oauth2_proxy",
             "redirectUris": [
                 "http://sso.celine.localhost/*",
-                "http://superset.celine.localhost/*"
+                "http://superset.celine.localhost/*",
+                "http://webapp.celine.localhost/*",
+                "http://assistant.celine.localhost/*"
             ],
             "webOrigins": [
                 "+"

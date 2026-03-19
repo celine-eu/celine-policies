@@ -103,10 +103,21 @@ def sync_users(
         Optional[str],
         typer.Option(
             "--temp-password",
+            "--password",
             help=(
-                "Fixed temporary password for all users. "
+                "Fixed password for all users (also: --password). "
                 "Omit for a random password per user.  "
                 "[env: CELINE_SYNC_USERS_TEMP_PASSWORD]"
+            ),
+        ),
+    ] = None,
+    temporary: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--temporary/--no-temporary",
+            help=(
+                "Temporary password (forced reset on first login). "
+                "Default: true  [env: CELINE_SYNC_USERS_TEMPORARY]"
             ),
         ),
     ] = None,
@@ -123,6 +134,13 @@ def sync_users(
         typer.Option(
             "--reset-password",
             help="Reset password on existing users too (not just newly created ones)",
+        ),
+    ] = False,
+    mock: Annotated[
+        bool,
+        typer.Option(
+            "--mock",
+            help="Fill email (<username>@celine.localhost), firstName, lastName, emailVerified for dev convenience.",
         ),
     ] = False,
     secrets_file: Annotated[
@@ -174,6 +192,7 @@ def sync_users(
         rec_yaml=rec_yaml,
         groups=groups,
         temp_password=temp_password,
+        temporary=temporary,
         dry_run=dry_run,
         verbose=verbose,
     )
@@ -234,6 +253,8 @@ def sync_users(
                 sync_settings=sync_settings,
                 participants=participants,
                 reset_password=reset_password,
+                temporary=sync_settings.temporary,
+                mock=mock,
             )
         )
     except KeycloakAuthError as e:
@@ -265,6 +286,8 @@ async def _async_sync_users(
     sync_settings: "SyncUsersSettings",
     participants: list[dict],
     reset_password: bool = False,
+    temporary: bool = True,
+    mock: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
     """Check and create Keycloak users for the given participant list.
 
@@ -312,14 +335,21 @@ async def _async_sync_users(
                 continue
 
             try:
+                email = f"{username}@celine.localhost" if mock else None
+                name = username if mock else None
                 kc_uuid, was_created = await kc.ensure_user(
                     username=username,
+                    email=email,
+                    first_name=name,
+                    last_name=name,
+                    email_verified=mock,
                     temporary_password=pwd,
+                    temporary=temporary,
                 )
 
                 if not was_created:
                     if reset_password and not sync_settings.dry_run:
-                        await kc.set_user_password(kc_uuid, pwd, temporary=True)
+                        await kc.set_user_password(kc_uuid, pwd, temporary=temporary)
                         typer.echo(
                             f"  ✓ {key} — already exists ({kc_uuid}), password reset"
                         )

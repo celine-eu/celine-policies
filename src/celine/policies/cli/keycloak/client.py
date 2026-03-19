@@ -828,6 +828,8 @@ class KeycloakAdminClient:
         last_name: str | None = None,
         temporary_password: str | None = None,
         enabled: bool = True,
+        temporary: bool = True,
+        email_verified: bool = False,
     ) -> tuple[str, bool]:
         """Ensure a user exists, creating it if necessary.
 
@@ -850,6 +852,8 @@ class KeycloakAdminClient:
             last_name=last_name,
             temporary_password=temporary_password,
             enabled=enabled,
+            temporary=temporary,
+            email_verified=email_verified,
         )
 
         # Fetch back to get the Keycloak-assigned UUID
@@ -869,14 +873,18 @@ class KeycloakAdminClient:
         last_name: str | None = None,
         temporary_password: str | None = None,
         enabled: bool = True,
+        temporary: bool = True,
+        email_verified: bool = False,
     ) -> None:
         """Create a Keycloak user, letting Keycloak assign the UUID.
 
         Prefer ensure_user() for idempotent provisioning — it checks for
         an existing user by username before creating.
 
-        If ``temporary_password`` is provided the user is forced to change it
-        on first login (requiredActions: UPDATE_PASSWORD).
+        If ``temporary_password`` is provided the credential is set immediately.
+        When ``temporary=True`` (default) the user is forced to change it on
+        first login (requiredActions: UPDATE_PASSWORD). When ``temporary=False``
+        the password is set without forcing a reset.
         """
         payload: dict[str, Any] = {
             "username": username,
@@ -884,18 +892,19 @@ class KeycloakAdminClient:
         }
         if email:
             payload["email"] = email
-            payload["emailVerified"] = False
+            payload["emailVerified"] = email_verified
         if first_name:
             payload["firstName"] = first_name
         if last_name:
             payload["lastName"] = last_name
         if temporary_password:
-            payload["requiredActions"] = ["UPDATE_PASSWORD"]
+            if temporary:
+                payload["requiredActions"] = ["UPDATE_PASSWORD"]
             payload["credentials"] = [
                 {
                     "type": "password",
                     "value": temporary_password,
-                    "temporary": True,
+                    "temporary": temporary,
                 }
             ]
 

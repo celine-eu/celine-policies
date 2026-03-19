@@ -211,6 +211,10 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
         default=None,
         description="Fixed temporary password. None → random per user.",
     )
+    temporary: bool = Field(
+        default=True,
+        description="Whether passwords are temporary (forced reset on first login)",
+    )
     dry_run: bool = Field(
         default=False,
         description="Show planned changes without applying them",
@@ -226,6 +230,7 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
         rec_yaml: Path | None = None,
         groups: list[str] | None = None,
         temp_password: str | None = None,
+        temporary: bool | None = None,
         dry_run: bool | None = None,
         verbose: bool | None = None,
     ) -> "SyncUsersSettings":
@@ -236,6 +241,7 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
             temp_password=(
                 temp_password if temp_password is not None else self.temp_password
             ),
+            temporary=temporary if temporary is not None else self.temporary,
             dry_run=dry_run if dry_run is not None else self.dry_run,
             verbose=verbose if verbose is not None else self.verbose,
         )
