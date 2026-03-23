@@ -99,7 +99,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cachetools", specifier = ">=5.5.0" },
-    { name = "celine-regorus", specifier = ">=0.5.0.post20260129052409" },
+    { name = "celine-regorus", specifier = ">=0.9.1.post20260227075446" },
     { name = "celine-sdk", specifier = ">=1.4.3" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.28.0" },
