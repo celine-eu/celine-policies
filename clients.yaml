@@ -63,6 +63,12 @@ scopes:
   - name: nudging.ingest
     description: Send notifications
 
+  # Flexibility events (MQTT)
+  - name: flexibility.committed.write
+    description: Publish flexibility commitment events to MQTT
+  - name: flexibility.committed.read
+    description: Subscribe to flexibility commitment events from MQTT
+
   # MQTT
   - name: mqtt.admin
     description: MQTT superuser access
@@ -94,6 +100,8 @@ clients:
       - pipelines.runs.read # subscribes to pipeline updates → aud: svc-pipelines
       - nudging.ingest # send notifications
       - rec-registry.lookup # lookup registry assets
+      - flexibility.committed.write # publish commitment events to MQTT
+      - flexibility.committed.read  # subscribe to commitment events from MQTT
 
   - client_id: svc-pipelines
     name: Pipeline Orchestrator
