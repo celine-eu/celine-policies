@@ -541,6 +541,47 @@ def compute_sync_plan(
                 )
             )
 
+    # -------------------------------------------------------------------------
+    # oauth2_proxy audience mappers
+    # -------------------------------------------------------------------------
+    # When oauth2_proxy_client is set, ensure the oauth2-proxy Keycloak client
+    # has a hardcoded audience mapper for every service client (those with a
+    # scopes_prefix). This makes user JWTs carry all service audiences so they
+    # pass audience validation on each service without disabling aud checks.
+    #
+    # The oauth2_proxy client is external (not in config.clients), but
+    # fetch_current_state() fetches all Keycloak clients, so its UUID and
+    # current mappers are available in `current`.
+
+    if config.oauth2_proxy_client:
+        proxy_client_id = config.oauth2_proxy_client
+        # Include the proxy client itself so aud:oauth2_proxy is always present.
+        desired_proxy_audiences = config.get_service_client_ids() | {proxy_client_id}
+        current_proxy_mappers = current.client_audience_mappers.get(proxy_client_id, {})
+        current_proxy_audiences = set(current_proxy_mappers.keys())
+
+        for audience in desired_proxy_audiences - current_proxy_audiences:
+            plan.audience_mappers_to_add.append(
+                AudienceMapperAction(
+                    client_id=proxy_client_id,
+                    audience_client_id=audience,
+                    action="add",
+                )
+            )
+
+        # Only remove mappers whose target is a managed service client.
+        # Leave any other mappers (e.g. self-referential aud:oauth2_proxy) untouched.
+        for audience in current_proxy_audiences - desired_proxy_audiences:
+            if audience in known_client_ids:
+                plan.audience_mappers_to_remove.append(
+                    AudienceMapperAction(
+                        client_id=proxy_client_id,
+                        audience_client_id=audience,
+                        action="remove",
+                        mapper_id=current_proxy_mappers[audience],
+                    )
+                )
+
     return plan
 
 

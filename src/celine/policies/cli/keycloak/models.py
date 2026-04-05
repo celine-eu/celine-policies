@@ -221,6 +221,17 @@ class KeycloakConfig(BaseModel):
         description="Clients to create/sync",
     )
 
+    # If set, the sync tool will ensure this client (typically oauth2-proxy) has
+    # hardcoded audience mappers for every service client (those with scopes_prefix),
+    # so user JWTs pass audience validation on all services.
+    oauth2_proxy_client: str | None = Field(
+        default=None,
+        description=(
+            "Client ID of the oauth2-proxy Keycloak client. "
+            "Audience mappers for all service clients are synced onto it."
+        ),
+    )
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "KeycloakConfig":
         """Load configuration from a YAML file with env var interpolation."""
@@ -252,6 +263,14 @@ class KeycloakConfig(BaseModel):
             scopes.update(client.default_scopes)
             scopes.update(client.optional_scopes)
         return scopes
+
+    def get_service_client_ids(self) -> set[str]:
+        """Return client_ids of all service clients (those with a scopes_prefix).
+
+        These are the clients that validate the 'aud' claim in incoming JWTs,
+        so oauth2_proxy needs a mapper for each of them.
+        """
+        return {c.client_id for c in self.clients if c.scopes_prefix is not None}
 
     def build_prefix_to_client_map(self) -> dict[str, str]:
         """Build a mapping from scope prefix to owning client_id.

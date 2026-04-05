@@ -1,5 +1,11 @@
 realm: celine
 
+# Client ID of the oauth2-proxy Keycloak client.
+# The sync tool adds audience mappers for every service client (those with a
+# scopes_prefix) so that user JWTs issued through oauth2-proxy carry all
+# service audiences and pass audience validation on each service.
+oauth2_proxy_client: oauth2_proxy
+
 # =============================================================================
 # SCOPES
 # =============================================================================
@@ -63,6 +69,14 @@ scopes:
   - name: nudging.ingest
     description: Send notifications
 
+  # Flexibility API
+  - name: flexibility.admin
+    description: Full access to the Flexibility API
+  - name: flexibility.commitments.read
+    description: Read flexibility commitments (service-to-service)
+  - name: flexibility.commitments.write
+    description: Write and settle flexibility commitments (service-to-service)
+
   # Flexibility events (MQTT)
   - name: flexibility.committed.write
     description: Publish flexibility commitment events to MQTT
@@ -100,8 +114,9 @@ clients:
       - pipelines.runs.read # subscribes to pipeline updates → aud: svc-pipelines
       - nudging.ingest # send notifications
       - rec-registry.lookup # lookup registry assets
-      - flexibility.committed.write # publish commitment events to MQTT
       - flexibility.committed.read  # subscribe to commitment events from MQTT
+      # TODO: remove after Phase 4 — commitment publishing moves to svc-flexibility
+      - flexibility.committed.write # publish commitment events to MQTT (legacy; svc-flexibility owns this now)
 
   - client_id: svc-pipelines
     name: Pipeline Orchestrator
@@ -134,6 +149,21 @@ clients:
       # Own resources
       - rec-registry.admin
 
+  - client_id: svc-flexibility
+    name: Flexibility API Service
+    secret: ${SVC_FLEXIBILITY_SECRET:-svc-flexibility}
+    scopes_prefix: flexibility
+    default_scopes:
+      # Own resources
+      - flexibility.admin
+      # Dependencies
+      - digital-twin.values.read    # fetch rec_flexibility_windows + rec_gamification_summary via DT
+      - dataset.query               # token passthrough DT→dataset-api for internal datasets (rec_gamification_summary)
+      - nudging.ingest               # send flexibility_reminder + flexibility_opportunity nudges
+      - rec-registry.lookup          # lookup community members for opportunity nudges
+      - flexibility.committed.write  # publish flexibility.committed events to MQTT
+      - pipelines.runs.read          # subscribe to pipeline run completion events on MQTT
+
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
@@ -142,6 +172,7 @@ clients:
       - svc-dataset-api
       - svc-rec-registry
       - svc-nudging
+      - svc-flexibility
       - oauth2_proxy
     # No scopes_prefix — sudo client, exempt from audience mapper generation
     default_scopes:
