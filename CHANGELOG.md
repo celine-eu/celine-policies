@@ -2,6 +2,42 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-04-07)
+
+### Bug Fixes
+
+- Allow to mock users for local dev
+  ([`38abdea`](https://github.com/celine-eu/celine-policies/commit/38abdea549d90b72948bbc86c3b1b611cf91b305))
+
+- Correct signout
+  ([`dc6ba9d`](https://github.com/celine-eu/celine-policies/commit/dc6ba9da8bceaa1b6bb7473401de31fc51a779be))
+
+- Review template
+  ([`60ccd62`](https://github.com/celine-eu/celine-policies/commit/60ccd624ce86591d005baf66650c5b752ab5f4c2))
+
+- Update regorus
+  ([`65d4f37`](https://github.com/celine-eu/celine-policies/commit/65d4f37b0aaf1c9515a892bc3a3dc05452f4da48))
+
+### Chores
+
+- Upgrade celine-sdk to 1.4.3
+  ([`1d2043e`](https://github.com/celine-eu/celine-policies/commit/1d2043e1599a39fa560367033227e277ab7b5a30))
+
+- Upgrade celine-sdk to 1.5.0
+  ([`0d0cf7e`](https://github.com/celine-eu/celine-policies/commit/0d0cf7e63268b3014f50f004ab5a0dbb5ed0272a))
+
+- Upgrade celine-sdk to 1.6.0
+  ([`c42cced`](https://github.com/celine-eu/celine-policies/commit/c42cced75316c1adab1270329f5f0cca21e2df54))
+
+### Features
+
+- Add flexibility API
+  ([`c5b1750`](https://github.com/celine-eu/celine-policies/commit/c5b17506779562faa49032988b46a03e12032f39))
+
+- Add flexibilty commitment scope
+  ([`71355a8`](https://github.com/celine-eu/celine-policies/commit/71355a8405afd87585157e71c144ba003b059234))
+
+
 ## v1.1.3 (2026-03-03)
 
 ### Bug Fixes
