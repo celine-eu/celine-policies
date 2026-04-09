@@ -337,11 +337,12 @@ async def _async_sync_users(
             if enabled:
                 typer.echo("  ! Organizations enabled on realm")
 
+            org_type = "rec"
             org_id, org_created = await kc.ensure_organization(
                 alias=community["id"],
                 name=community["name"],
                 description=community["description"],
-                attributes={"type": ["rec"]},
+                attributes={"type": [org_type]},
             )
             if org_created:
                 typer.secho(
@@ -350,6 +351,8 @@ async def _async_sync_users(
                 )
             else:
                 logger.debug("Organization '%s' already exists (%s)", community["id"], org_id)
+
+            await kc.ensure_org_role(org_id, org_type)
 
             if oauth2_proxy_client:
                 oauth2_client = await kc.get_client_by_client_id(oauth2_proxy_client)
@@ -416,8 +419,9 @@ async def _async_sync_users(
                     temporary=temporary,
                 )
 
-                # Always ensure org membership — idempotent for existing users
+                # Always ensure org membership + type role — idempotent for existing users
                 org_added = await kc.ensure_user_in_organization(org_id, kc_uuid)
+                await kc.ensure_member_org_role(org_id, kc_uuid, org_type)
 
                 if not was_created:
                     if reset_password:

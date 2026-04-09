@@ -1096,3 +1096,58 @@ class KeycloakAdminClient:
             return False
         await self.add_user_to_organization(org_id, user_id)
         return True
+
+    async def list_org_roles(self, org_id: str) -> list[dict[str, Any]]:
+        """List roles defined on an organization."""
+        return await self._get(f"/organizations/{org_id}/roles") or []
+
+    async def ensure_org_role(self, org_id: str, role_name: str) -> dict[str, Any]:
+        """Ensure a role exists on an organization, creating it if necessary.
+
+        Returns the role representation. Idempotent.
+        """
+        roles = await self.list_org_roles(org_id)
+        existing = next((r for r in roles if r.get("name") == role_name), None)
+        if existing:
+            logger.debug("Org role '%s' already exists on %s", role_name, org_id)
+            return existing
+        await self._post(f"/organizations/{org_id}/roles", json={"name": role_name})
+        roles = await self.list_org_roles(org_id)
+        role = next((r for r in roles if r.get("name") == role_name), None)
+        if not role:
+            raise KeycloakError(f"Failed to retrieve created org role: {role_name}")
+        logger.info("Created org role '%s' on organization %s", role_name, org_id)
+        return role
+
+    async def get_member_org_roles(self, org_id: str, user_id: str) -> list[dict[str, Any]]:
+        """Get org roles assigned to a specific member."""
+        return await self._get(f"/organizations/{org_id}/members/{user_id}/roles") or []
+
+    async def assign_org_role_to_member(
+        self, org_id: str, user_id: str, role: dict[str, Any]
+    ) -> None:
+        """Assign an org role to a member."""
+        logger.debug("Assigning org role '%s' to user %s in org %s", role.get("name"), user_id, org_id)
+        await self._post(f"/organizations/{org_id}/members/{user_id}/roles", json=[role])
+        logger.info("Assigned org role '%s' to user %s", role.get("name"), user_id)
+
+    async def ensure_member_org_role(
+        self, org_id: str, user_id: str, role_name: str
+    ) -> bool:
+        """Ensure a member has a specific org role, assigning it if missing.
+
+        Idempotent. Returns True if the role was just assigned.
+        """
+        current = await self.get_member_org_roles(org_id, user_id)
+        if any(r.get("name") == role_name for r in current):
+            logger.debug("User %s already has org role '%s'", user_id, role_name)
+            return False
+        roles = await self.list_org_roles(org_id)
+        role = next((r for r in roles if r.get("name") == role_name), None)
+        if not role:
+            raise KeycloakError(
+                f"Org role '{role_name}' not found on organization {org_id}. "
+                f"Call ensure_org_role first."
+            )
+        await self.assign_org_role_to_member(org_id, user_id, role)
+        return True
