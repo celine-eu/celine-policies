@@ -18,10 +18,12 @@ from celine.policies.cli.keycloak.client import (
     KeycloakAuthError,
     KeycloakError,
 )
+from celine.policies.cli.keycloak.models import KeycloakConfig
 from celine.policies.cli.keycloak.settings import KeycloakSettings, SyncUsersSettings
 from celine.policies.cli.keycloak.commands._utils import (
     configure_logging,
     build_settings,
+    load_rec_community_info,
     load_rec_participants,
     derive_username,
 )
@@ -147,6 +149,14 @@ def sync_users(
         Optional[Path],
         typer.Option("--secrets-file", "-s", help="Path to secrets file for auth"),
     ] = None,
+    clients_config: Annotated[
+        Path,
+        typer.Option(
+            "--clients-config",
+            "-c",
+            help="Path to clients YAML (oauth2_proxy_client field used for org scope assignment)",
+        ),
+    ] = Path("./clients.yaml"),
 ) -> None:
     """Ensure Keycloak users exist for every participant in a REC registry YAML.
 
@@ -227,6 +237,7 @@ def sync_users(
 
     try:
         participants = load_rec_participants(resolved_yaml)
+        community = load_rec_community_info(resolved_yaml)
     except Exception as e:
         typer.secho(f"Error reading REC YAML: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
@@ -237,8 +248,21 @@ def sync_users(
         )
         raise typer.Exit(0)
 
+    oauth2_proxy_client: str | None = None
+    if clients_config.exists():
+        try:
+            kc_config = KeycloakConfig.from_yaml(clients_config)
+            oauth2_proxy_client = kc_config.oauth2_proxy_client
+        except Exception as e:
+            typer.secho(
+                f"Warning: could not load clients config {clients_config}: {e}",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+
     typer.echo(f"REC YAML : {resolved_yaml} — {len(participants)} participant(s)")
     typer.echo(f"Keycloak : {kc_settings.base_url}  realm={kc_settings.realm}")
+    typer.echo(f"Org      : {community['id']} ({community['name']})")
     typer.echo(f"Groups   : {', '.join(sync_settings.groups)}")
     typer.echo(
         f"Password : {'fixed' if sync_settings.temp_password else 'random per user'}"
@@ -252,6 +276,8 @@ def sync_users(
                 kc_settings=kc_settings,
                 sync_settings=sync_settings,
                 participants=participants,
+                community=community,
+                oauth2_proxy_client=oauth2_proxy_client,
                 reset_password=reset_password,
                 temporary=sync_settings.temporary,
                 mock=mock,
@@ -285,11 +311,16 @@ async def _async_sync_users(
     kc_settings: "KeycloakSettings",
     sync_settings: "SyncUsersSettings",
     participants: list[dict],
+    community: dict,
+    oauth2_proxy_client: str | None = None,
     reset_password: bool = False,
     temporary: bool = True,
     mock: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
     """Check and create Keycloak users for the given participant list.
+
+    Ensures organizations are enabled, the REC organization exists, and every
+    participant user is a member of it.
 
     Returns (created, skipped, errors).
     """
@@ -300,9 +331,41 @@ async def _async_sync_users(
     async with KeycloakAdminClient(kc_settings) as kc:
         await kc.authenticate()
 
-        # Resolve group paths → IDs up front.
-        # Fail fast: better to error before touching any user than to create
-        # users and then silently skip the group assignment.
+        # --- Organization setup (idempotent) ---------------------------------
+        if not sync_settings.dry_run:
+            enabled = await kc.ensure_organizations_enabled()
+            if enabled:
+                typer.echo("  ! Organizations enabled on realm")
+
+            org_id, org_created = await kc.ensure_organization(
+                alias=community["id"],
+                name=community["name"],
+                description=community["description"],
+                attributes={"type": ["rec"]},
+            )
+            if org_created:
+                typer.secho(
+                    f"  + Organization '{community['id']}' created ({org_id})",
+                    fg=typer.colors.GREEN,
+                )
+            else:
+                logger.debug("Organization '%s' already exists (%s)", community["id"], org_id)
+
+            if oauth2_proxy_client:
+                oauth2_client = await kc.get_client_by_client_id(oauth2_proxy_client)
+                if oauth2_client:
+                    await kc.ensure_default_scope(oauth2_client["id"], "organization")
+                else:
+                    logger.warning(
+                        "Client '%s' not found — skipping organization scope assignment",
+                        oauth2_proxy_client,
+                    )
+            else:
+                logger.debug("No oauth2_proxy_client configured — skipping organization scope assignment")
+        else:
+            org_id = None
+
+        # --- Group resolution (fail fast) ------------------------------------
         group_ids: dict[str, str] = {}  # path -> keycloak uuid
         for path in sync_settings.groups:
             group = await kc.get_group_by_path(path)
@@ -314,6 +377,7 @@ async def _async_sync_users(
             group_ids[path] = group["id"]
             logger.debug("Resolved group %s -> %s", path, group["id"])
 
+        # --- Per-participant sync ---------------------------------------------
         for p in participants:
             user_id = p["user_id"]
             key = p["key"]
@@ -324,11 +388,16 @@ async def _async_sync_users(
             if sync_settings.dry_run:
                 existing = await kc.get_user_by_username(username)
                 if existing:
-                    typer.echo(f"  ✓ {key} — exists as '{existing.get('username')}'")
+                    typer.echo(
+                        f"  ✓ {key} — exists as '{existing.get('username')}'"
+                        f" (org: {community['id']})"
+                    )
                     skipped.append(username)
                 else:
                     typer.secho(
-                        f"  ~ {key} username='{username}' groups={list(group_ids.keys())}",
+                        f"  ~ {key} username='{username}'"
+                        f" groups={list(group_ids.keys())}"
+                        f" org={community['id']}",
                         fg=typer.colors.YELLOW,
                     )
                     created.append(username)
@@ -347,14 +416,21 @@ async def _async_sync_users(
                     temporary=temporary,
                 )
 
+                # Always ensure org membership — idempotent for existing users
+                org_added = await kc.ensure_user_in_organization(org_id, kc_uuid)
+
                 if not was_created:
-                    if reset_password and not sync_settings.dry_run:
+                    if reset_password:
                         await kc.set_user_password(kc_uuid, pwd, temporary=temporary)
                         typer.echo(
                             f"  ✓ {key} — already exists ({kc_uuid}), password reset"
+                            + (" [org joined]" if org_added else "")
                         )
                     else:
-                        typer.echo(f"  ✓ {key} — already exists ({kc_uuid})")
+                        typer.echo(
+                            f"  ✓ {key} — already exists ({kc_uuid})"
+                            + (" [org joined]" if org_added else "")
+                        )
                     skipped.append(username)
                     continue
 
@@ -363,7 +439,7 @@ async def _async_sync_users(
 
                 typer.secho(
                     f"  + {key} username='{username}' uuid={kc_uuid} pwd='{pwd}'"
-                    f" groups={list(group_ids.keys())}",
+                    f" groups={list(group_ids.keys())} org={community['id']}",
                     fg=typer.colors.GREEN,
                 )
                 created.append(username)

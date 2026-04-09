@@ -80,6 +80,24 @@ def load_rec_participants(rec_yaml: Path) -> list[dict]:
     return participants
 
 
+def load_rec_community_info(rec_yaml: Path) -> dict:
+    """Extract community metadata from a REC registry YAML.
+
+    Returns a dict with keys: id, name, description.
+    Raises ValueError if community.id is missing.
+    """
+    raw = yaml.safe_load(rec_yaml.read_text())
+    community = raw.get("community", {})
+    rec_id = community.get("id")
+    if not rec_id:
+        raise ValueError(f"YAML {rec_yaml} is missing community.id")
+    return {
+        "id": rec_id,
+        "name": community.get("name", rec_id),
+        "description": community.get("description", ""),
+    }
+
+
 def derive_username(participant_key: str) -> str:
     """Stable Keycloak username from the participant key (e.g. 'gl-00001').
 

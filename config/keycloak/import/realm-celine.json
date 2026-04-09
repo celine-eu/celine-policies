@@ -8,6 +8,7 @@
   "emailTheme": "keycloak",
   "displayName": "CELINE",
   "editUsernameAllowed": false,
+  "organizationsEnabled": true,
   "roles": {
     "realm": [
       {
@@ -74,7 +75,8 @@
       "defaultClientScopes": [
         "basic",
         "profile",
-        "email"
+        "email",
+        "organization"
       ],
       "optionalClientScopes": [
         "offline_access"
@@ -242,6 +244,40 @@
       "groups": [
         "/viewers"
       ]
+    }
+  ],
+  "organizations": [
+    {
+      "id": "aaaaaaaa-0001-0001-0001-000000000001",
+      "name": "Greenland Renewable Community",
+      "alias": "example_rec",
+      "enabled": true,
+      "description": "REC community - Greenland",
+      "redirectUrl": "",
+      "attributes": {
+        "type": [
+          "rec"
+        ]
+      },
+      "domains": [],
+      "members": [],
+      "identityProviders": []
+    },
+    {
+      "id": "bbbbbbbb-0002-0002-0002-000000000002",
+      "name": "Example DSO",
+      "alias": "example",
+      "enabled": true,
+      "description": "DSO example",
+      "redirectUrl": "",
+      "attributes": {
+        "type": [
+          "dso"
+        ]
+      },
+      "domains": [],
+      "members": [],
+      "identityProviders": []
     }
   ],
   "clientScopes": [

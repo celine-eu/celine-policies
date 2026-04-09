@@ -243,7 +243,7 @@ class KeycloakAdminClient:
         response = await self._client.get(url, headers=headers)
         return self._handle_response(response)
 
-    async def _post(self, path: str, json: list | dict | None = None) -> Any:
+    async def _post(self, path: str, json: list | dict | str | None = None) -> Any:
         """Make POST request to admin API."""
         url = f"{self._settings.admin_url}{path}"
         headers = await self._headers()
@@ -984,3 +984,115 @@ class KeycloakAdminClient:
                     await asyncio.sleep(delay)
                 else:
                     raise
+
+    # -------------------------------------------------------------------------
+    # Organizations
+    # -------------------------------------------------------------------------
+
+    async def get_realm_settings(self) -> dict[str, Any]:
+        """Get the full realm representation."""
+        return await self._get("")
+
+    async def update_realm_settings(self, settings: dict[str, Any]) -> None:
+        """Update the realm representation."""
+        await self._put("", json=settings)
+
+    async def ensure_organizations_enabled(self) -> bool:
+        """Enable organizations on the realm if not already enabled.
+
+        Idempotent. Returns True if organizations were just enabled.
+        """
+        realm = await self.get_realm_settings()
+        if realm.get("organizationsEnabled"):
+            logger.info("Organizations already enabled on realm")
+            return False
+        realm["organizationsEnabled"] = True
+        await self.update_realm_settings(realm)
+        logger.info("Organizations enabled on realm")
+        return True
+
+    async def list_organizations(
+        self, search: str | None = None, exact: bool = False
+    ) -> list[dict[str, Any]]:
+        """List organizations, optionally filtered by search query."""
+        path = "/organizations"
+        params: list[str] = []
+        if search:
+            params.append(f"search={search}")
+        if exact:
+            params.append("exact=true")
+        if params:
+            path += "?" + "&".join(params)
+        return await self._get(path) or []
+
+    async def get_organization_by_alias(self, alias: str) -> dict[str, Any] | None:
+        """Get an organization by exact alias. Returns None if not found."""
+        orgs = await self.list_organizations(search=alias, exact=True)
+        for org in orgs:
+            if org.get("alias") == alias:
+                return org
+        return None
+
+    async def create_organization(
+        self,
+        alias: str,
+        name: str,
+        description: str = "",
+        attributes: dict[str, list[str]] | None = None,
+    ) -> str:
+        """Create an organization. Returns the organization ID."""
+        payload: dict[str, Any] = {
+            "alias": alias,
+            "name": name,
+            "description": description,
+            "enabled": True,
+            "attributes": attributes or {},
+            "domains": [],
+        }
+        await self._post("/organizations", json=payload)
+        org = await self.get_organization_by_alias(alias)
+        if not org:
+            raise KeycloakError(f"Failed to retrieve created organization: {alias}")
+        logger.info("Created organization: %s (id=%s)", alias, org["id"])
+        return org["id"]
+
+    async def ensure_organization(
+        self,
+        alias: str,
+        name: str,
+        description: str = "",
+        attributes: dict[str, list[str]] | None = None,
+    ) -> tuple[str, bool]:
+        """Ensure an organization exists, creating it if necessary.
+
+        Returns (org_id, created) where created=True if newly created.
+        Idempotent.
+        """
+        org = await self.get_organization_by_alias(alias)
+        if org:
+            logger.debug("Organization already exists: %s (%s)", alias, org["id"])
+            return org["id"], False
+        org_id = await self.create_organization(alias, name, description, attributes)
+        return org_id, True
+
+    async def get_organization_members(self, org_id: str) -> list[dict[str, Any]]:
+        """Get all members of an organization."""
+        return await self._get(f"/organizations/{org_id}/members") or []
+
+    async def add_user_to_organization(self, org_id: str, user_id: str) -> None:
+        """Add a user to an organization by Keycloak user UUID."""
+        logger.debug("Adding user %s to organization %s", user_id, org_id)
+        await self._post(f"/organizations/{org_id}/members", json=user_id)
+        logger.info("Added user %s to organization %s", user_id, org_id)
+
+    async def ensure_user_in_organization(self, org_id: str, user_id: str) -> bool:
+        """Ensure a user is a member of an organization.
+
+        Idempotent. Returns True if the user was just added.
+        """
+        members = await self.get_organization_members(org_id)
+        if any(m.get("id") == user_id for m in members):
+            logger.debug("User %s already in organization %s", user_id, org_id)
+            return False
+        await self.add_user_to_organization(org_id, user_id)
+        return True
