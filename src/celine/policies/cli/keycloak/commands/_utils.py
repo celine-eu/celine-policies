@@ -48,7 +48,11 @@ def build_settings(
     if secrets_file:
         settings = settings.with_overrides(secrets_file=secrets_file)
 
-    settings = settings.with_auto_secret()
+    # Only auto-load client secret when admin user credentials were not explicitly
+    # provided. If --admin-user/--admin-password are set, honour them as-is so
+    # the caller can override a stale or missing client secret.
+    if not (admin_user and admin_password):
+        settings = settings.with_auto_secret()
 
     return settings
 
@@ -78,6 +82,54 @@ def load_rec_participants(rec_yaml: Path) -> list[dict]:
             }
         )
     return participants
+
+
+def load_owners(owner_yamls: list[Path]) -> list[dict]:
+    """Load and merge owner registries from one or more YAML files.
+
+    Later files shadow earlier entries on id collision, allowing local
+    overrides to extend or replace entries from the base owners.yaml.
+
+    Returns a list of owner dicts. Entries without an 'id' are skipped.
+    """
+    logger = logging.getLogger(__name__)
+    merged: dict[str, dict] = {}
+    for path in owner_yamls:
+        raw = yaml.safe_load(path.read_text())
+        for entry in raw.get("owners", []):
+            owner_id = entry.get("id")
+            if not owner_id:
+                logger.warning("Owner entry without id in %s — skipping", path)
+                continue
+            if owner_id in merged:
+                logger.debug("Owner '%s' shadowed by entry from %s", owner_id, path)
+            merged[owner_id] = entry
+    return list(merged.values())
+
+
+def load_rec_operators(rec_yaml: Path) -> list[dict]:
+    """Extract DSO operator records from a REC registry YAML (community.operators).
+
+    Returns a list of dicts: id, name, country, contact.
+    Operators without an id are skipped.
+    """
+    logger = logging.getLogger(__name__)
+    raw = yaml.safe_load(rec_yaml.read_text())
+    operators_raw = raw.get("community", {}).get("operators", {})
+    operators = []
+    for op_id, data in (operators_raw or {}).items():
+        if not op_id:
+            logger.warning("Operator entry without id — skipping")
+            continue
+        operators.append(
+            {
+                "id": op_id,
+                "name": data.get("name", op_id),
+                "country": data.get("country"),
+                "contact": data.get("contact"),
+            }
+        )
+    return operators
 
 
 def load_rec_community_info(rec_yaml: Path) -> dict:

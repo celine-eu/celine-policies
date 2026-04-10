@@ -1011,23 +1011,17 @@ class KeycloakAdminClient:
         logger.info("Organizations enabled on realm")
         return True
 
-    async def list_organizations(
-        self, search: str | None = None, exact: bool = False
-    ) -> list[dict[str, Any]]:
-        """List organizations, optionally filtered by search query."""
-        path = "/organizations"
-        params: list[str] = []
-        if search:
-            params.append(f"search={search}")
-        if exact:
-            params.append("exact=true")
-        if params:
-            path += "?" + "&".join(params)
-        return await self._get(path) or []
+    async def list_organizations(self, max_results: int = 1000) -> list[dict[str, Any]]:
+        """List all organizations in the realm."""
+        return await self._get(f"/organizations?max={max_results}") or []
 
     async def get_organization_by_alias(self, alias: str) -> dict[str, Any] | None:
-        """Get an organization by exact alias. Returns None if not found."""
-        orgs = await self.list_organizations(search=alias, exact=True)
+        """Get an organization by exact alias. Returns None if not found.
+
+        KC's search param matches on name, not alias, so we list all and filter
+        client-side for a reliable alias lookup.
+        """
+        orgs = await self.list_organizations()
         for org in orgs:
             if org.get("alias") == alias:
                 return org
@@ -1098,30 +1092,54 @@ class KeycloakAdminClient:
         return True
 
     async def list_org_roles(self, org_id: str) -> list[dict[str, Any]]:
-        """List roles defined on an organization."""
-        return await self._get(f"/organizations/{org_id}/roles") or []
+        """List roles defined on an organization.
 
-    async def ensure_org_role(self, org_id: str, role_name: str) -> dict[str, Any]:
+        Returns an empty list if the endpoint is not supported by this KC version.
+        """
+        try:
+            return await self._get(f"/organizations/{org_id}/roles") or []
+        except KeycloakNotFoundError:
+            logger.debug("Org roles endpoint not available (KC version may not support it)")
+            return []
+
+    async def ensure_org_role(self, org_id: str, role_name: str) -> dict[str, Any] | None:
         """Ensure a role exists on an organization, creating it if necessary.
 
-        Returns the role representation. Idempotent.
+        Returns the role representation, or None if org roles are not supported
+        by this KC version (graceful degradation on 404/405). Idempotent.
         """
-        roles = await self.list_org_roles(org_id)
-        existing = next((r for r in roles if r.get("name") == role_name), None)
-        if existing:
-            logger.debug("Org role '%s' already exists on %s", role_name, org_id)
-            return existing
-        await self._post(f"/organizations/{org_id}/roles", json={"name": role_name})
-        roles = await self.list_org_roles(org_id)
-        role = next((r for r in roles if r.get("name") == role_name), None)
-        if not role:
-            raise KeycloakError(f"Failed to retrieve created org role: {role_name}")
-        logger.info("Created org role '%s' on organization %s", role_name, org_id)
-        return role
+        try:
+            roles = await self.list_org_roles(org_id)
+            existing = next((r for r in roles if r.get("name") == role_name), None)
+            if existing:
+                logger.debug("Org role '%s' already exists on %s", role_name, org_id)
+                return existing
+            await self._post(f"/organizations/{org_id}/roles", json={"name": role_name})
+            roles = await self.list_org_roles(org_id)
+            role = next((r for r in roles if r.get("name") == role_name), None)
+            if not role:
+                logger.warning("Created org role '%s' but could not retrieve it", role_name)
+                return None
+            logger.info("Created org role '%s' on organization %s", role_name, org_id)
+            return role
+        except KeycloakError as e:
+            logger.warning(
+                "Org roles not supported by this KC version (HTTP %s) — "
+                "role '%s' will not appear in the token",
+                getattr(e, "status_code", "?"), role_name,
+            )
+            return None
 
     async def get_member_org_roles(self, org_id: str, user_id: str) -> list[dict[str, Any]]:
-        """Get org roles assigned to a specific member."""
-        return await self._get(f"/organizations/{org_id}/members/{user_id}/roles") or []
+        """Get org roles assigned to a specific member.
+
+        Returns an empty list if the endpoint is not supported by this KC version.
+        """
+        try:
+            return await self._get(f"/organizations/{org_id}/members/{user_id}/roles") or []
+        except KeycloakNotFoundError:
+            logger.debug("Org member roles endpoint not available")
+            return []
 
     async def assign_org_role_to_member(
         self, org_id: str, user_id: str, role: dict[str, Any]
@@ -1137,17 +1155,27 @@ class KeycloakAdminClient:
         """Ensure a member has a specific org role, assigning it if missing.
 
         Idempotent. Returns True if the role was just assigned.
+        Returns False silently if org roles are not supported by this KC version.
         """
-        current = await self.get_member_org_roles(org_id, user_id)
-        if any(r.get("name") == role_name for r in current):
-            logger.debug("User %s already has org role '%s'", user_id, role_name)
-            return False
-        roles = await self.list_org_roles(org_id)
-        role = next((r for r in roles if r.get("name") == role_name), None)
-        if not role:
-            raise KeycloakError(
-                f"Org role '{role_name}' not found on organization {org_id}. "
-                f"Call ensure_org_role first."
+        try:
+            current = await self.get_member_org_roles(org_id, user_id)
+            if any(r.get("name") == role_name for r in current):
+                logger.debug("User %s already has org role '%s'", user_id, role_name)
+                return False
+            roles = await self.list_org_roles(org_id)
+            role = next((r for r in roles if r.get("name") == role_name), None)
+            if not role:
+                logger.warning(
+                    "Org role '%s' not found on organization %s — skipping assignment",
+                    role_name, org_id,
+                )
+                return False
+            await self.assign_org_role_to_member(org_id, user_id, role)
+            return True
+        except KeycloakError as e:
+            logger.warning(
+                "Org member roles not supported by this KC version (HTTP %s) — "
+                "role '%s' will not appear in the token",
+                getattr(e, "status_code", "?"), role_name,
             )
-        await self.assign_org_role_to_member(org_id, user_id, role)
-        return True
+            return False

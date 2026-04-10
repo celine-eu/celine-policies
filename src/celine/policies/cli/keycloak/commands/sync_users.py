@@ -24,6 +24,7 @@ from celine.policies.cli.keycloak.commands._utils import (
     configure_logging,
     build_settings,
     load_rec_community_info,
+    load_rec_operators,
     load_rec_participants,
     derive_username,
 )
@@ -238,6 +239,7 @@ def sync_users(
     try:
         participants = load_rec_participants(resolved_yaml)
         community = load_rec_community_info(resolved_yaml)
+        operators = load_rec_operators(resolved_yaml)
     except Exception as e:
         typer.secho(f"Error reading REC YAML: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
@@ -262,7 +264,9 @@ def sync_users(
 
     typer.echo(f"REC YAML : {resolved_yaml} — {len(participants)} participant(s)")
     typer.echo(f"Keycloak : {kc_settings.base_url}  realm={kc_settings.realm}")
-    typer.echo(f"Org      : {community['id']} ({community['name']})")
+    typer.echo(f"REC org  : {community['id']} ({community['name']})")
+    if operators:
+        typer.echo(f"DSO orgs : {', '.join(op['id'] for op in operators)}")
     typer.echo(f"Groups   : {', '.join(sync_settings.groups)}")
     typer.echo(
         f"Password : {'fixed' if sync_settings.temp_password else 'random per user'}"
@@ -277,6 +281,7 @@ def sync_users(
                 sync_settings=sync_settings,
                 participants=participants,
                 community=community,
+                operators=operators,
                 oauth2_proxy_client=oauth2_proxy_client,
                 reset_password=reset_password,
                 temporary=sync_settings.temporary,
@@ -312,6 +317,7 @@ async def _async_sync_users(
     sync_settings: "SyncUsersSettings",
     participants: list[dict],
     community: dict,
+    operators: list[dict] | None = None,
     oauth2_proxy_client: str | None = None,
     reset_password: bool = False,
     temporary: bool = True,
@@ -336,6 +342,23 @@ async def _async_sync_users(
             enabled = await kc.ensure_organizations_enabled()
             if enabled:
                 typer.echo("  ! Organizations enabled on realm")
+
+            # Provision DSO organizations from community.operators
+            for op in (operators or []):
+                dso_id, dso_created = await kc.ensure_organization(
+                    alias=op["id"],
+                    name=op["name"],
+                    description=op.get("contact") or "",
+                    attributes={"type": ["dso"]},
+                )
+                await kc.ensure_org_role(dso_id, "dso")
+                if dso_created:
+                    typer.secho(
+                        f"  + DSO org '{op['id']}' created ({dso_id})",
+                        fg=typer.colors.GREEN,
+                    )
+                else:
+                    logger.debug("DSO org '%s' already exists (%s)", op["id"], dso_id)
 
             org_type = "rec"
             org_id, org_created = await kc.ensure_organization(
@@ -366,6 +389,16 @@ async def _async_sync_users(
             else:
                 logger.debug("No oauth2_proxy_client configured — skipping organization scope assignment")
         else:
+            # Dry-run: report DSO orgs that would be provisioned
+            for op in (operators or []):
+                existing_dso = await kc.get_organization_by_alias(op["id"])
+                if existing_dso:
+                    typer.echo(f"  ✓ DSO '{op['id']}' — already exists ({existing_dso['id']})")
+                else:
+                    typer.secho(
+                        f"  ~ DSO '{op['id']}' — would create organization (role=dso)",
+                        fg=typer.colors.YELLOW,
+                    )
             org_id = None
 
         # --- Group resolution (fail fast) ------------------------------------
