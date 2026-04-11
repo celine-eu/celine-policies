@@ -248,10 +248,18 @@ async def _async_sync_orgs(
         if oauth2_proxy_client:
             client = await kc.get_client_by_client_id(oauth2_proxy_client)
             if client:
-                await kc.ensure_default_scope(client["id"], "organization")
+                _, scope_changed = await kc.ensure_org_client_scope()
+                if scope_changed:
+                    typer.echo("  ! organization client scope provisioned")
+                assigned = await kc.ensure_org_scope_on_client(client["id"])
+                if assigned:
+                    typer.echo(f"  ! organization scope assigned to client '{oauth2_proxy_client}'")
+                aud_added = await kc.ensure_audience_mapper(client["id"], oauth2_proxy_client)
+                if aud_added:
+                    typer.echo(f"  ! audience mapper added to client '{oauth2_proxy_client}'")
             else:
                 logger.warning(
-                    "Client '%s' not found — skipping organization scope assignment",
+                    "Client '%s' not found — skipping mapper setup",
                     oauth2_proxy_client,
                 )
 
@@ -268,7 +276,6 @@ async def _async_sync_orgs(
                     description=owner.get("url", ""),
                     attributes={"type": [role]},
                 )
-                await kc.ensure_org_role(org_id, role)
 
                 if org_created:
                     typer.secho(

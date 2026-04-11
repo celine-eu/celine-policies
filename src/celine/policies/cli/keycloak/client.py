@@ -373,6 +373,129 @@ class KeycloakAdminClient:
         await self._put(f"/client-scopes/{scope_id}", json=payload)
         logger.info("Updated client scope: %s", name)
 
+    async def get_scope_protocol_mappers(self, scope_id: str) -> list[dict[str, Any]]:
+        """List all protocol mappers for a client scope."""
+        return (
+            await self._get(f"/client-scopes/{scope_id}/protocol-mappers/models") or []
+        )
+
+    async def update_scope_protocol_mapper(
+        self, scope_id: str, mapper: dict[str, Any]
+    ) -> None:
+        """Update an existing protocol mapper on a client scope."""
+        await self._put(
+            f"/client-scopes/{scope_id}/protocol-mappers/models/{mapper['id']}",
+            json=mapper,
+        )
+
+    async def ensure_org_client_scope(self) -> tuple[str, bool]:
+        """Ensure the 'organization' client scope exists with its membership mapper.
+
+        Creates the scope and/or mapper if absent; updates the mapper config if
+        it drifts from the desired state.
+
+        The mapper emits an ``organization`` claim in id/access/userinfo tokens
+        using the ``oidc-organization-membership-mapper`` provider, matching the
+        payload documented in the Keycloak org token claim guide.
+
+        Returns ``(scope_id, changed)`` where *changed* is True if anything was
+        created or updated.
+        """
+        changed = False
+
+        scope = await self.get_client_scope_by_name("organization")
+        if not scope:
+            scope_id = await self.create_client_scope(
+                name="organization",
+                description="Organization membership claims",
+            )
+            changed = True
+            logger.info("Created 'organization' client scope (%s)", scope_id)
+        else:
+            scope_id = scope["id"]
+
+        DESIRED = {
+            "introspection.token.claim": "true",
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "addOrganizationAttributes": "true",
+            "id.token.claim": "true",
+            "lightweight.claim": "false",
+            "access.token.claim": "true",
+            "claim.name": "organization",
+            "jsonType.label": "JSON",
+            "addOrganizationId": "false",
+        }
+
+        mappers = await self.get_scope_protocol_mappers(scope_id)
+        existing = next(
+            (
+                m
+                for m in mappers
+                if m.get("protocolMapper") == "oidc-organization-membership-mapper"
+            ),
+            None,
+        )
+        if existing:
+            config = existing.get("config", {})
+            needs_update = any(config.get(k) != v for k, v in DESIRED.items())
+            if needs_update:
+                config.update(DESIRED)
+                existing["config"] = config
+                await self.update_scope_protocol_mapper(scope_id, existing)
+                logger.info(
+                    "Updated organization membership mapper on scope %s", scope_id
+                )
+                changed = True
+            else:
+                logger.info(
+                    "Organization membership mapper already correct on scope %s",
+                    scope_id,
+                )
+        else:
+            payload = {
+                "name": "organization",
+                "protocol": "openid-connect",
+                "protocolMapper": "oidc-organization-membership-mapper",
+                "consentRequired": False,
+                "config": DESIRED,
+            }
+            await self._post(
+                f"/client-scopes/{scope_id}/protocol-mappers/models", json=payload
+            )
+            logger.info(
+                "Added organization membership mapper to scope %s", scope_id
+            )
+            changed = True
+
+        return scope_id, changed
+
+    async def ensure_org_scope_on_client(self, client_uuid: str) -> bool:
+        """Ensure the 'organization' scope is a default scope on the given client.
+
+        Idempotent — no-op if already assigned.
+        Returns True if the scope was just assigned.
+        """
+        current = await self.get_client_default_scopes(client_uuid)
+        if any(s.get("name") == "organization" for s in current):
+            logger.info(
+                "'organization' scope already in default scopes of client %s",
+                client_uuid,
+            )
+            return False
+
+        scope = await self.get_client_scope_by_name("organization")
+        if not scope:
+            raise KeycloakError(
+                "'organization' scope not found — call ensure_org_client_scope() first"
+            )
+
+        await self.add_client_default_scope(client_uuid, scope["id"])
+        logger.info(
+            "Added 'organization' to default scopes of client %s", client_uuid
+        )
+        return True
+
     async def delete_client_scope(self, scope_id: str) -> None:
         """Delete a client scope."""
         logger.debug("Deleting client scope: %s", scope_id)
@@ -605,6 +728,22 @@ class KeycloakAdminClient:
             mapper_id,
         )
         return mapper_id
+
+    async def ensure_audience_mapper(
+        self, client_uuid: str, audience_client_id: str
+    ) -> bool:
+        """Ensure a hardcoded audience mapper exists on a client.
+
+        Idempotent — no-op if a mapper with the expected name already exists.
+        Returns True if the mapper was just created.
+        """
+        mapper_name = f"{AUDIENCE_MAPPER_PREFIX}{audience_client_id}"
+        mappers = await self.get_client_protocol_mappers(client_uuid)
+        if any(m.get("name") == mapper_name for m in mappers):
+            logger.info("Audience mapper '%s' already present — skipping", mapper_name)
+            return False
+        await self.create_audience_mapper(client_uuid, audience_client_id)
+        return True
 
     async def delete_protocol_mapper(self, client_uuid: str, mapper_id: str) -> None:
         """Delete a protocol mapper from a client."""
@@ -1057,15 +1196,27 @@ class KeycloakAdminClient:
         description: str = "",
         attributes: dict[str, list[str]] | None = None,
     ) -> tuple[str, bool]:
-        """Ensure an organization exists, creating it if necessary.
+        """Ensure an organization exists with up-to-date attributes.
+
+        Creates the org if it doesn't exist; updates (upserts) attributes on
+        existing orgs so re-running sync always converges.
 
         Returns (org_id, created) where created=True if newly created.
-        Idempotent.
         """
         org = await self.get_organization_by_alias(alias)
         if org:
-            logger.debug("Organization already exists: %s (%s)", alias, org["id"])
-            return org["id"], False
+            org_id = org["id"]
+            if attributes:
+                current_attrs = org.get("attributes") or {}
+                if current_attrs != attributes:
+                    org["attributes"] = attributes
+                    await self._put(f"/organizations/{org_id}", json=org)
+                    logger.info(
+                        "Updated attributes on organization %s: %s", alias, attributes
+                    )
+                else:
+                    logger.debug("Organization already exists: %s (%s)", alias, org_id)
+            return org_id, False
         org_id = await self.create_organization(alias, name, description, attributes)
         return org_id, True
 
@@ -1083,70 +1234,97 @@ class KeycloakAdminClient:
         """Ensure a user is a member of an organization.
 
         Idempotent. Returns True if the user was just added.
+        Uses a direct membership check rather than listing all members to avoid
+        pagination gaps on large organizations.
         """
-        members = await self.get_organization_members(org_id)
-        if any(m.get("id") == user_id for m in members):
+        try:
+            await self._get(f"/organizations/{org_id}/members/{user_id}")
             logger.debug("User %s already in organization %s", user_id, org_id)
             return False
-        await self.add_user_to_organization(org_id, user_id)
-        return True
+        except KeycloakNotFoundError:
+            pass
+        try:
+            await self.add_user_to_organization(org_id, user_id)
+            return True
+        except KeycloakConflictError:
+            # Race condition: another process added the user between the check and add
+            logger.debug(
+                "User %s already in organization %s (conflict)", user_id, org_id
+            )
+            return False
 
     async def list_org_roles(self, org_id: str) -> list[dict[str, Any]]:
         """List roles defined on an organization.
 
-        Returns an empty list if the endpoint is not supported by this KC version.
+        Returns an empty list on 404 — KC 26 does not expose this endpoint;
+        custom org roles require KC 27+.
         """
         try:
             return await self._get(f"/organizations/{org_id}/roles") or []
         except KeycloakNotFoundError:
-            logger.debug("Org roles endpoint not available (KC version may not support it)")
             return []
 
-    async def ensure_org_role(self, org_id: str, role_name: str) -> dict[str, Any] | None:
+    async def ensure_org_role(
+        self, org_id: str, role_name: str
+    ) -> dict[str, Any] | None:
         """Ensure a role exists on an organization, creating it if necessary.
 
-        Returns the role representation, or None if org roles are not supported
-        by this KC version (graceful degradation on 404/405). Idempotent.
+        Returns the role representation, or None if the KC version does not support
+        custom org role creation (POST returns 405 — available from KC 27+).
+        Idempotent.
         """
+        roles = await self.list_org_roles(org_id)
+        existing = next((r for r in roles if r.get("name") == role_name), None)
+        if existing:
+            logger.debug("Org role '%s' already exists on %s", role_name, org_id)
+            return existing
         try:
-            roles = await self.list_org_roles(org_id)
-            existing = next((r for r in roles if r.get("name") == role_name), None)
-            if existing:
-                logger.debug("Org role '%s' already exists on %s", role_name, org_id)
-                return existing
             await self._post(f"/organizations/{org_id}/roles", json={"name": role_name})
-            roles = await self.list_org_roles(org_id)
-            role = next((r for r in roles if r.get("name") == role_name), None)
-            if not role:
-                logger.warning("Created org role '%s' but could not retrieve it", role_name)
-                return None
-            logger.info("Created org role '%s' on organization %s", role_name, org_id)
-            return role
         except KeycloakError as e:
-            logger.warning(
-                "Org roles not supported by this KC version (HTTP %s) — "
-                "role '%s' will not appear in the token",
-                getattr(e, "status_code", "?"), role_name,
+            if getattr(e, "status_code", None) in (404, 405):
+                logger.debug(
+                    "Org role creation not supported (HTTP %s) — skipping",
+                    e.status_code,
+                )
+                return None
+            raise
+        roles = await self.list_org_roles(org_id)
+        role = next((r for r in roles if r.get("name") == role_name), None)
+        if not role:
+            raise KeycloakError(
+                f"Created org role '{role_name}' but could not retrieve it from {org_id}"
             )
-            return None
+        logger.info("Created org role '%s' on organization %s", role_name, org_id)
+        return role
 
-    async def get_member_org_roles(self, org_id: str, user_id: str) -> list[dict[str, Any]]:
+    async def get_member_org_roles(
+        self, org_id: str, user_id: str
+    ) -> list[dict[str, Any]]:
         """Get org roles assigned to a specific member.
 
-        Returns an empty list if the endpoint is not supported by this KC version.
+        Returns an empty list on 404 — KC 26 does not expose this endpoint.
         """
         try:
-            return await self._get(f"/organizations/{org_id}/members/{user_id}/roles") or []
+            return (
+                await self._get(f"/organizations/{org_id}/members/{user_id}/roles")
+                or []
+            )
         except KeycloakNotFoundError:
-            logger.debug("Org member roles endpoint not available")
             return []
 
     async def assign_org_role_to_member(
         self, org_id: str, user_id: str, role: dict[str, Any]
     ) -> None:
         """Assign an org role to a member."""
-        logger.debug("Assigning org role '%s' to user %s in org %s", role.get("name"), user_id, org_id)
-        await self._post(f"/organizations/{org_id}/members/{user_id}/roles", json=[role])
+        logger.debug(
+            "Assigning org role '%s' to user %s in org %s",
+            role.get("name"),
+            user_id,
+            org_id,
+        )
+        await self._post(
+            f"/organizations/{org_id}/members/{user_id}/roles", json=[role]
+        )
         logger.info("Assigned org role '%s' to user %s", role.get("name"), user_id)
 
     async def ensure_member_org_role(
@@ -1155,27 +1333,21 @@ class KeycloakAdminClient:
         """Ensure a member has a specific org role, assigning it if missing.
 
         Idempotent. Returns True if the role was just assigned.
-        Returns False silently if org roles are not supported by this KC version.
+        Returns False if the role does not exist on the org (e.g. KC version does
+        not support custom org roles — see ensure_org_role).
         """
-        try:
-            current = await self.get_member_org_roles(org_id, user_id)
-            if any(r.get("name") == role_name for r in current):
-                logger.debug("User %s already has org role '%s'", user_id, role_name)
-                return False
-            roles = await self.list_org_roles(org_id)
-            role = next((r for r in roles if r.get("name") == role_name), None)
-            if not role:
-                logger.warning(
-                    "Org role '%s' not found on organization %s — skipping assignment",
-                    role_name, org_id,
-                )
-                return False
-            await self.assign_org_role_to_member(org_id, user_id, role)
-            return True
-        except KeycloakError as e:
-            logger.warning(
-                "Org member roles not supported by this KC version (HTTP %s) — "
-                "role '%s' will not appear in the token",
-                getattr(e, "status_code", "?"), role_name,
+        current = await self.get_member_org_roles(org_id, user_id)
+        if any(r.get("name") == role_name for r in current):
+            logger.debug("User %s already has org role '%s'", user_id, role_name)
+            return False
+        roles = await self.list_org_roles(org_id)
+        role = next((r for r in roles if r.get("name") == role_name), None)
+        if not role:
+            logger.debug(
+                "Org role '%s' not present on organization %s — skipping member assignment",
+                role_name,
+                org_id,
             )
             return False
+        await self.assign_org_role_to_member(org_id, user_id, role)
+        return True

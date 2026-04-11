@@ -246,40 +246,7 @@
       ]
     }
   ],
-  "organizations": [
-    {
-      "id": "aaaaaaaa-0001-0001-0001-000000000001",
-      "name": "Greenland Renewable Community",
-      "alias": "example_rec",
-      "enabled": true,
-      "description": "REC community - Greenland",
-      "redirectUrl": "",
-      "attributes": {
-        "type": [
-          "rec"
-        ]
-      },
-      "domains": [],
-      "members": [],
-      "identityProviders": []
-    },
-    {
-      "id": "bbbbbbbb-0002-0002-0002-000000000002",
-      "name": "Example DSO",
-      "alias": "example",
-      "enabled": true,
-      "description": "DSO example",
-      "redirectUrl": "",
-      "attributes": {
-        "type": [
-          "dso"
-        ]
-      },
-      "domains": [],
-      "members": [],
-      "identityProviders": []
-    }
-  ],
+  "organizations": [],
   "clientScopes": [
     {
       "id": "61985753-a09b-4b1e-9376-a91307cdd48b",

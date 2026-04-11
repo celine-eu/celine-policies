@@ -337,13 +337,31 @@ async def _async_sync_users(
     async with KeycloakAdminClient(kc_settings) as kc:
         await kc.authenticate()
 
-        # --- Organization setup (idempotent) ---------------------------------
+        # --- Realm + client setup (idempotent) --------------------------------
         if not sync_settings.dry_run:
             enabled = await kc.ensure_organizations_enabled()
             if enabled:
                 typer.echo("  ! Organizations enabled on realm")
 
-            # Provision DSO organizations from community.operators
+            if oauth2_proxy_client:
+                oauth2_client = await kc.get_client_by_client_id(oauth2_proxy_client)
+                if oauth2_client:
+                    _, scope_changed = await kc.ensure_org_client_scope()
+                    if scope_changed:
+                        typer.echo("  ! organization client scope provisioned")
+                    assigned = await kc.ensure_org_scope_on_client(oauth2_client["id"])
+                    if assigned:
+                        typer.echo(f"  ! organization scope assigned to client '{oauth2_proxy_client}'")
+                    aud_added = await kc.ensure_audience_mapper(oauth2_client["id"], oauth2_proxy_client)
+                    if aud_added:
+                        typer.echo(f"  ! audience mapper added to client '{oauth2_proxy_client}'")
+                else:
+                    logger.warning(
+                        "Client '%s' not found — skipping mapper setup",
+                        oauth2_proxy_client,
+                    )
+
+            # Ensure DSO organizations with correct attributes
             for op in (operators or []):
                 dso_id, dso_created = await kc.ensure_organization(
                     alias=op["id"],
@@ -351,7 +369,6 @@ async def _async_sync_users(
                     description=op.get("contact") or "",
                     attributes={"type": ["dso"]},
                 )
-                await kc.ensure_org_role(dso_id, "dso")
                 if dso_created:
                     typer.secho(
                         f"  + DSO org '{op['id']}' created ({dso_id})",
@@ -360,45 +377,39 @@ async def _async_sync_users(
                 else:
                     logger.debug("DSO org '%s' already exists (%s)", op["id"], dso_id)
 
-            org_type = "rec"
+            # Ensure REC organization with correct attributes
             org_id, org_created = await kc.ensure_organization(
                 alias=community["id"],
                 name=community["name"],
-                description=community["description"],
-                attributes={"type": [org_type]},
+                description=community.get("description", ""),
+                attributes={"type": ["rec"]},
             )
             if org_created:
                 typer.secho(
-                    f"  + Organization '{community['id']}' created ({org_id})",
+                    f"  + REC org '{community['id']}' created ({org_id})",
                     fg=typer.colors.GREEN,
                 )
             else:
-                logger.debug("Organization '%s' already exists (%s)", community["id"], org_id)
-
-            await kc.ensure_org_role(org_id, org_type)
-
-            if oauth2_proxy_client:
-                oauth2_client = await kc.get_client_by_client_id(oauth2_proxy_client)
-                if oauth2_client:
-                    await kc.ensure_default_scope(oauth2_client["id"], "organization")
-                else:
-                    logger.warning(
-                        "Client '%s' not found — skipping organization scope assignment",
-                        oauth2_proxy_client,
-                    )
-            else:
-                logger.debug("No oauth2_proxy_client configured — skipping organization scope assignment")
+                logger.debug("REC org '%s' already exists (%s)", community["id"], org_id)
         else:
-            # Dry-run: report DSO orgs that would be provisioned
+            # Dry-run: report orgs that would be provisioned
             for op in (operators or []):
                 existing_dso = await kc.get_organization_by_alias(op["id"])
                 if existing_dso:
                     typer.echo(f"  ✓ DSO '{op['id']}' — already exists ({existing_dso['id']})")
                 else:
                     typer.secho(
-                        f"  ~ DSO '{op['id']}' — would create organization (role=dso)",
+                        f"  ~ DSO '{op['id']}' — would create organization",
                         fg=typer.colors.YELLOW,
                     )
+            existing_rec = await kc.get_organization_by_alias(community["id"])
+            if existing_rec:
+                typer.echo(f"  ✓ REC '{community['id']}' — already exists ({existing_rec['id']})")
+            else:
+                typer.secho(
+                    f"  ~ REC '{community['id']}' — would create organization",
+                    fg=typer.colors.YELLOW,
+                )
             org_id = None
 
         # --- Group resolution (fail fast) ------------------------------------
@@ -452,9 +463,8 @@ async def _async_sync_users(
                     temporary=temporary,
                 )
 
-                # Always ensure org membership + type role — idempotent for existing users
+                # Always ensure org membership — idempotent for existing users
                 org_added = await kc.ensure_user_in_organization(org_id, kc_uuid)
-                await kc.ensure_member_org_role(org_id, kc_uuid, org_type)
 
                 if not was_created:
                     if reset_password:
