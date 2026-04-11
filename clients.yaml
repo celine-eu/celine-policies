@@ -114,7 +114,7 @@ clients:
       - pipelines.runs.read # subscribes to pipeline updates → aud: svc-pipelines
       - nudging.ingest # send notifications
       - rec-registry.lookup # lookup registry assets
-      - flexibility.committed.read  # subscribe to commitment events from MQTT
+      - flexibility.committed.read # subscribe to commitment events from MQTT
       # TODO: remove after Phase 4 — commitment publishing moves to svc-flexibility
       - flexibility.committed.write # publish commitment events to MQTT (legacy; svc-flexibility owns this now)
 
@@ -126,6 +126,7 @@ clients:
       # Own resources
       - pipelines.runs.read
       - pipelines.runs.write
+      - rec-registry.export
 
   - client_id: svc-dataset-api
     name: Dataset API Service
@@ -157,12 +158,12 @@ clients:
       # Own resources
       - flexibility.admin
       # Dependencies
-      - digital-twin.values.read    # fetch rec_flexibility_windows + rec_gamification_summary via DT
-      - dataset.query               # token passthrough DT→dataset-api for internal datasets (rec_gamification_summary)
-      - nudging.ingest               # send flexibility_reminder + flexibility_opportunity nudges
-      - rec-registry.lookup          # lookup community members for opportunity nudges
-      - flexibility.committed.write  # publish flexibility.committed events to MQTT
-      - pipelines.runs.read          # subscribe to pipeline run completion events on MQTT
+      - digital-twin.values.read # fetch rec_flexibility_windows + rec_gamification_summary via DT
+      - dataset.query # token passthrough DT→dataset-api for internal datasets (rec_gamification_summary)
+      - nudging.ingest # send flexibility_reminder + flexibility_opportunity nudges
+      - rec-registry.lookup # lookup community members for opportunity nudges
+      - flexibility.committed.write # publish flexibility.committed events to MQTT
+      - pipelines.runs.read # subscribe to pipeline run completion events on MQTT
 
   - client_id: celine-cli
     name: CELINE Admin CLI
