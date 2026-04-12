@@ -14,7 +14,7 @@ dependencies = [
     "cachetools>=5.5.0",
     "structlog>=25.5.0",
     "celine-regorus>=0.9.1.post20260227075446",
-    "celine-sdk>=1.7.0",
+    "celine-sdk>=1.8.0",
     "typer>=0.23.1",
 ]
 
