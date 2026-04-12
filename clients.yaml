@@ -76,6 +76,8 @@ scopes:
     description: Read flexibility commitments (service-to-service)
   - name: flexibility.commitments.write
     description: Write and settle flexibility commitments (service-to-service)
+  - name: flexibility.commitments.export
+    description: Export flexibility commitments (service-to-service)
 
   # Flexibility events (MQTT)
   - name: flexibility.committed.write
@@ -127,6 +129,7 @@ clients:
       - pipelines.runs.read
       - pipelines.runs.write
       - rec-registry.export
+      - flexibility.commitments.export
 
   - client_id: svc-dataset-api
     name: Dataset API Service
