@@ -27,14 +27,27 @@ tasks:
       - git push
       - git push --tags
 
-  keycloak:sync:
+  keycloak:bootstrap:
     cmds:
-      - uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin
       - uv run celine-policies keycloak sync
 
+  keycloak:sync:
+    deps: [keycloak:bootstrap]
+    cmds:
+      - uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin
+
   keycloak:sync-users:
+    deps: [keycloak:bootstrap]
     desc: "Sync Keycloak users from REC registry YAML"
     vars:
       REC_YAML: '{{.CLI_ARGS | default "../rec-registry/recs/rec-example.yaml"}}'
     cmds:
       - uv run celine-policies keycloak sync-users {{.REC_YAML}}
+
+  keycloak:sync-orgs:
+    deps: [keycloak:bootstrap]
+    desc: "Sync Keycloak organizations from owners yaml"
+    vars:
+      REC_YAML: '{{.CLI_ARGS | default "../dataset-api/owners.yaml"}}'
+    cmds:
+      - uv run celine-policies keycloak sync-orgs {{.REC_YAML}}

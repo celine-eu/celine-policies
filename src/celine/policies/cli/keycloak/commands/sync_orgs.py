@@ -82,15 +82,15 @@ def sync_orgs(
         typer.Option("--verbose", "-v", help="Enable verbose output"),
     ] = False,
 ) -> None:
-    """Ensure Keycloak organizations exist for every owner entry that has a role.
+    """Ensure Keycloak organizations exist for every owner entry with organization.create=true.
 
     Reads one or more owners YAML files (later files shadow earlier entries on
-    id collision), filters to entries with a 'role' field, and idempotently
-    provisions the corresponding Keycloak organization with:
+    id collision), filters to entries where organization.create is true, and
+    idempotently provisions the corresponding Keycloak organization with:
 
       - organizations feature enabled on the realm
-      - organization created (alias=id, name=name, attributes.type=[role])
-      - org-level role matching the role value (e.g. 'rec', 'dso')
+      - organization created (alias=id, name=name, attributes.type=[organization.role])
+      - any extra key/value pairs from organization.attributes set on the KC org
       - 'organization' scope set as default on the oauth2_proxy client
 
     This command is idempotent — safe to run multiple times.
@@ -137,7 +137,7 @@ def sync_orgs(
         typer.secho(f"Error reading owners YAML: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    org_owners = owners
+    org_owners = [o for o in owners if o.get("organization", {}).get("create")]
     if not org_owners:
         typer.secho("No owners found in YAML — nothing to sync.", fg=typer.colors.YELLOW)
         raise typer.Exit(0)
@@ -165,7 +165,7 @@ def sync_orgs(
             )
 
     typer.echo(f"Owners   : {', '.join(str(p) for p in resolved_yamls)}")
-    typer.echo(f"Orgs     : {len(org_owners)} owner(s) with role")
+    typer.echo(f"Orgs     : {len(org_owners)} owner(s) with organization.create=true")
     typer.echo(f"Keycloak : {kc_settings.base_url}  realm={kc_settings.realm}")
     if dry_run:
         typer.secho("\n[DRY RUN] No changes will be applied.\n", fg=typer.colors.YELLOW)
@@ -227,7 +227,8 @@ async def _async_sync_orgs(
         if dry_run:
             for owner in org_owners:
                 alias = owner["id"]
-                role = owner.get("role") or "org"
+                org_block = owner.get("organization", {})
+                role = org_block.get("role") or "org"
                 org = await kc.get_organization_by_alias(alias)
                 if org:
                     typer.echo(f"  ✓ {alias} ({role}) — already exists ({org['id']})")
@@ -267,14 +268,17 @@ async def _async_sync_orgs(
         for owner in org_owners:
             alias = owner["id"]
             name = owner.get("name", alias)
-            role = owner.get("role") or "org"
+            org_block = owner.get("organization", {})
+            role = org_block.get("role") or "org"
+            extra_attrs = org_block.get("attributes") or {}
+            kc_attributes = {"type": [role], **{k: [v] for k, v in extra_attrs.items()}}
 
             try:
                 org_id, org_created = await kc.ensure_organization(
                     alias=alias,
                     name=name,
                     description=owner.get("url", ""),
-                    attributes={"type": [role]},
+                    attributes=kc_attributes,
                 )
 
                 if org_created:
