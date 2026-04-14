@@ -115,7 +115,7 @@ services:
 
   keycloak:
     # Keycloak is an open-source identity and access management solution.
-    image: quay.io/keycloak/keycloak:26.4.0
+    image: quay.io/keycloak/keycloak:26.6.0
     command: start-dev --import-realm
     environment:
       KC_DB: dev-file

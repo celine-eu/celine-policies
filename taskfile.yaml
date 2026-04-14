@@ -29,12 +29,12 @@ tasks:
 
   keycloak:bootstrap:
     cmds:
-      - uv run celine-policies keycloak sync
+      - uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin
 
   keycloak:sync:
     deps: [keycloak:bootstrap]
     cmds:
-      - uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin
+      - uv run celine-policies keycloak sync
 
   keycloak:sync-users:
     deps: [keycloak:bootstrap]
@@ -42,7 +42,7 @@ tasks:
     vars:
       REC_YAML: '{{.CLI_ARGS | default "../rec-registry/recs/rec-example.yaml"}}'
     cmds:
-      - uv run celine-policies keycloak sync-users {{.REC_YAML}}
+      - uv run celine-policies keycloak sync-users {{.REC_YAML}} --password "demo" --mock
 
   keycloak:sync-orgs:
     deps: [keycloak:bootstrap]

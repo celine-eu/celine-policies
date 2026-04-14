@@ -85,6 +85,16 @@ scopes:
   - name: flexibility.committed.read
     description: Subscribe to flexibility commitment events from MQTT
 
+  # Grid API
+  - name: grid.read
+    description: Read DT grid resilience data (maps, trends, distributions)
+  - name: grid.alerts.read
+    description: Read own alert rules and notification settings
+  - name: grid.alerts.write
+    description: Create, update, and delete own alert rules and notification settings
+  - name: grid.admin
+    description: Full access to the Grid API (all of the above, cross-user)
+
   # MQTT
   - name: mqtt.admin
     description: MQTT superuser access
@@ -168,6 +178,19 @@ clients:
       - flexibility.committed.write # publish flexibility.committed events to MQTT
       - pipelines.runs.read # subscribe to pipeline run completion events on MQTT
 
+  - client_id: svc-grid
+    name: Grid API Service
+    secret: ${SVC_GRID_SECRET:-svc-grid}
+    scopes_prefix: grid
+    default_scopes:
+      # Own resources — users get grid.read / grid.alerts.* via oauth2-proxy audience mapper
+      - grid.admin
+      # Dependencies (service-to-service outbound)
+      - digital-twin.values.read # fetch wind/heat alert distributions → aud: svc-digital-twin
+      - dataset.query             # DT passes svc-grid token through to dataset-api → aud: svc-dataset-api
+      - nudging.ingest            # send grid_alert nudges
+      - pipelines.runs.read       # subscribe to pipeline run completion events on MQTT
+
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
@@ -177,6 +200,7 @@ clients:
       - svc-rec-registry
       - svc-nudging
       - svc-flexibility
+      - svc-grid
       - oauth2_proxy
     # No scopes_prefix — sudo client, exempt from audience mapper generation
     default_scopes:
