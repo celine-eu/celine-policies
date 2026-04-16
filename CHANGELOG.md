@@ -2,6 +2,60 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-04-16)
+
+### Bug Fixes
+
+- Corrected org mapper creation
+  ([`8f0325d`](https://github.com/celine-eu/celine-policies/commit/8f0325df41a8fafd5b9962c1161fc29f01db380f))
+
+- Review sync org
+  ([`38dc21a`](https://github.com/celine-eu/celine-policies/commit/38dc21ac42645a528b03c481607fac4c64af1a3e))
+
+### Chores
+
+- Add rec registry export scope to pipelines
+  ([`c9ca98c`](https://github.com/celine-eu/celine-policies/commit/c9ca98c342782b66de8a784cf2f4b9ea2a332be4))
+
+- Update AGENTS
+  ([`dc3a848`](https://github.com/celine-eu/celine-policies/commit/dc3a848f76393baa93103e5d83c39143cbce9e3f))
+
+- Upgrade celine-sdk to 1.10.0
+  ([`b1c5267`](https://github.com/celine-eu/celine-policies/commit/b1c5267ddfcbdba4d7b7cea8d209390216def3e7))
+
+- Upgrade celine-sdk to 1.7.0
+  ([`a996fdc`](https://github.com/celine-eu/celine-policies/commit/a996fdc102a2be5ae1c58022ada82cd5cf94c5e4))
+
+- Upgrade celine-sdk to 1.8.0
+  ([`1fde7c1`](https://github.com/celine-eu/celine-policies/commit/1fde7c12400d820780f00ed2c3f751878a1d6dae))
+
+- Upgrade celine-sdk to 1.9.0
+  ([`4290a48`](https://github.com/celine-eu/celine-policies/commit/4290a4899624b74fdd7607e06a5ac6563d9106e0))
+
+- Upgrade keycloak version
+  ([`3c3e1ef`](https://github.com/celine-eu/celine-policies/commit/3c3e1efa47a0f346e01a0767dd7b2ce87d27c232))
+
+### Features
+
+- Add flexibility export scope
+  ([`3b20b11`](https://github.com/celine-eu/celine-policies/commit/3b20b1170bcee80077a1af8d1206f226e651e145))
+
+- Add grid svc, upgrade keycloak
+  ([`aa85331`](https://github.com/celine-eu/celine-policies/commit/aa85331d5f093dfa3c1aeeb89e36425b37c03e51))
+
+- Add organization management
+  ([`af66127`](https://github.com/celine-eu/celine-policies/commit/af66127379c29305caeb345ce2369e3ad2a82d06))
+
+- Add organization support
+  ([`7f321fa`](https://github.com/celine-eu/celine-policies/commit/7f321fa5d63f01398dddc54afb413704f14725cc))
+
+- Add REC members to REC organization and assign group participant
+  ([`a0cc710`](https://github.com/celine-eu/celine-policies/commit/a0cc7107bccb786bd9985c22446427bbace21d76))
+
+- Ensure organization mapping on user import
+  ([`96afe51`](https://github.com/celine-eu/celine-policies/commit/96afe51419d42f32c57d7f7101bcaf4a20fe17f3))
+
+
 ## v1.2.0 (2026-04-07)
 
 ### Bug Fixes
