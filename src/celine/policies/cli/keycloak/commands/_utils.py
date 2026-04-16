@@ -135,7 +135,7 @@ def load_rec_operators(rec_yaml: Path) -> list[dict]:
 def load_rec_community_info(rec_yaml: Path) -> dict:
     """Extract community metadata from a REC registry YAML.
 
-    Returns a dict with keys: id, name, description.
+    Returns a dict with keys: id, name, description, type.
     Raises ValueError if community.id is missing.
     """
     raw = yaml.safe_load(rec_yaml.read_text())
@@ -147,6 +147,7 @@ def load_rec_community_info(rec_yaml: Path) -> dict:
         "id": rec_id,
         "name": community.get("name", rec_id),
         "description": community.get("description", ""),
+        "type": community.get("type", "rec"),
     }
 
 

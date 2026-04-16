@@ -204,8 +204,8 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
         description="Path to REC registry YAML file",
     )
     groups: list[str] = Field(
-        default=["/viewers"],
-        description="Group paths to assign to every created user",
+        default=[],
+        description="Group paths to assign to every created user (derived from community type if empty)",
     )
     temp_password: str | None = Field(
         default=None,

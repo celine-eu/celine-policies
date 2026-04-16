@@ -1067,6 +1067,29 @@ class KeycloakAdminClient:
                 return group
         return None
 
+    async def create_group(self, name: str) -> str:
+        """Create a top-level realm group. Returns the group ID."""
+        await self._post("/groups", json={"name": name})
+        group = await self.get_group_by_path(f"/{name}")
+        if not group:
+            raise KeycloakError(f"Failed to retrieve created group: /{name}")
+        logger.info("Created group: /%s (%s)", name, group["id"])
+        return group["id"]
+
+    async def ensure_group(self, path: str) -> tuple[str, bool]:
+        """Ensure a top-level realm group exists, creating it if absent.
+
+        Only supports top-level groups (no parent). Returns (group_id, created).
+        Idempotent.
+        """
+        existing = await self.get_group_by_path(path)
+        if existing:
+            logger.debug("Group '%s' already exists (%s)", path, existing["id"])
+            return existing["id"], False
+        name = path.lstrip("/")
+        group_id = await self.create_group(name)
+        return group_id, True
+
     async def add_user_to_group(self, user_id: str, group_id: str) -> None:
         """Add a user to a group."""
         logger.debug("Adding user %s to group %s", user_id, group_id)
@@ -1351,3 +1374,65 @@ class KeycloakAdminClient:
             return False
         await self.assign_org_role_to_member(org_id, user_id, role)
         return True
+
+    # -------------------------------------------------------------------------
+    # Organization Groups
+    # -------------------------------------------------------------------------
+
+    async def list_org_groups(self, org_id: str) -> list[dict[str, Any]]:
+        """List groups defined on an organization."""
+        try:
+            return await self._get(f"/organizations/{org_id}/groups") or []
+        except KeycloakNotFoundError:
+            return []
+
+    async def get_org_group_by_name(
+        self, org_id: str, name: str
+    ) -> dict[str, Any] | None:
+        """Find an organization group by name. Returns None if not found."""
+        groups = await self.list_org_groups(org_id)
+        return next((g for g in groups if g.get("name") == name), None)
+
+    async def ensure_org_group(self, org_id: str, name: str) -> tuple[str, bool]:
+        """Ensure an organization group exists, creating it if absent.
+
+        Returns (group_id, created). Idempotent.
+        """
+        existing = await self.get_org_group_by_name(org_id, name)
+        if existing:
+            logger.debug("Org group '%s' already exists on %s (%s)", name, org_id, existing["id"])
+            return existing["id"], False
+        await self._post(f"/organizations/{org_id}/groups", json={"name": name})
+        group = await self.get_org_group_by_name(org_id, name)
+        if not group:
+            raise KeycloakError(f"Failed to retrieve created org group '{name}' on {org_id}")
+        logger.info("Created org group '%s' on organization %s (%s)", name, org_id, group["id"])
+        return group["id"], True
+
+    async def ensure_user_in_org_group(
+        self, org_id: str, group_id: str, user_id: str
+    ) -> bool:
+        """Ensure a user is a member of an organization group.
+
+        Returns True if the user was just added. Idempotent.
+        """
+        try:
+            await self._get(
+                f"/organizations/{org_id}/groups/{group_id}/members/{user_id}"
+            )
+            logger.debug(
+                "User %s already in org group %s/%s", user_id, org_id, group_id
+            )
+            return False
+        except KeycloakNotFoundError:
+            pass
+        try:
+            await self._put(
+                f"/organizations/{org_id}/groups/{group_id}/members/{user_id}"
+            )
+            logger.info(
+                "Added user %s to org group %s/%s", user_id, org_id, group_id
+            )
+            return True
+        except KeycloakConflictError:
+            return False

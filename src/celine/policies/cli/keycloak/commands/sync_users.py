@@ -250,6 +250,8 @@ def sync_users(
         )
         raise typer.Exit(0)
 
+    community_type = community.get("type", "rec")
+
     oauth2_proxy_client: str | None = None
     if clients_config.exists():
         try:
@@ -264,10 +266,15 @@ def sync_users(
 
     typer.echo(f"REC YAML : {resolved_yaml} — {len(participants)} participant(s)")
     typer.echo(f"Keycloak : {kc_settings.base_url}  realm={kc_settings.realm}")
-    typer.echo(f"REC org  : {community['id']} ({community['name']})")
+    typer.echo(f"REC org  : {community['id']} ({community['name']}) [type={community_type}]")
     if operators:
         typer.echo(f"DSO orgs : {', '.join(op['id'] for op in operators)}")
-    typer.echo(f"Groups   : {', '.join(sync_settings.groups)}")
+    if community_type == "rec":
+        typer.echo("Org groups: participant (assigned), manager (provisioned)")
+    elif community_type == "dso":
+        typer.echo("Org groups: operator (assigned), manager (provisioned)")
+    if sync_settings.groups:
+        typer.echo(f"Extra groups: {', '.join(sync_settings.groups)}")
     typer.echo(
         f"Password : {'fixed' if sync_settings.temp_password else 'random per user'}"
     )
@@ -279,6 +286,7 @@ def sync_users(
             _async_sync_users(
                 kc_settings=kc_settings,
                 sync_settings=sync_settings,
+                community_type=community_type,
                 participants=participants,
                 community=community,
                 operators=operators,
@@ -315,6 +323,7 @@ def sync_users(
 async def _async_sync_users(
     kc_settings: "KeycloakSettings",
     sync_settings: "SyncUsersSettings",
+    community_type: str,
     participants: list[dict],
     community: dict,
     operators: list[dict] | None = None,
@@ -361,7 +370,7 @@ async def _async_sync_users(
                         oauth2_proxy_client,
                     )
 
-            # Ensure DSO organizations with correct attributes
+            # Ensure DSO organizations with correct attributes and org roles
             for op in (operators or []):
                 dso_id, dso_created = await kc.ensure_organization(
                     alias=op["id"],
@@ -376,13 +385,15 @@ async def _async_sync_users(
                     )
                 else:
                     logger.debug("DSO org '%s' already exists (%s)", op["id"], dso_id)
+                await kc.ensure_org_role(dso_id, "operator")
+                await kc.ensure_org_role(dso_id, "manager")
 
-            # Ensure REC organization with correct attributes
+            # Ensure REC organization with correct attributes and org roles
             org_id, org_created = await kc.ensure_organization(
                 alias=community["id"],
                 name=community["name"],
                 description=community.get("description", ""),
-                attributes={"type": ["rec"]},
+                attributes={"type": [community_type]},
             )
             if org_created:
                 typer.secho(
@@ -391,6 +402,24 @@ async def _async_sync_users(
                 )
             else:
                 logger.debug("REC org '%s' already exists (%s)", community["id"], org_id)
+
+            # Ensure org groups exist: participant+manager (rec) or operator+manager (dso)
+            if community_type == "rec":
+                member_grp_id, gc = await kc.ensure_org_group(org_id, "participant")
+                if gc:
+                    typer.secho(f"  + org group 'participant' created", fg=typer.colors.GREEN)
+                _, gc = await kc.ensure_org_group(org_id, "manager")
+                if gc:
+                    typer.secho(f"  + org group 'manager' created", fg=typer.colors.GREEN)
+            elif community_type == "dso":
+                member_grp_id, gc = await kc.ensure_org_group(org_id, "operator")
+                if gc:
+                    typer.secho(f"  + org group 'operator' created", fg=typer.colors.GREEN)
+                _, gc = await kc.ensure_org_group(org_id, "manager")
+                if gc:
+                    typer.secho(f"  + org group 'manager' created", fg=typer.colors.GREEN)
+            else:
+                member_grp_id = None
         else:
             # Dry-run: report orgs that would be provisioned
             for op in (operators or []):
@@ -411,9 +440,10 @@ async def _async_sync_users(
                     fg=typer.colors.YELLOW,
                 )
             org_id = None
+            member_grp_id = None
 
-        # --- Group resolution (fail fast) ------------------------------------
-        group_ids: dict[str, str] = {}  # path -> keycloak uuid
+        # --- Explicit realm groups from --group (fail fast if missing) ----------
+        extra_group_ids: dict[str, str] = {}
         for path in sync_settings.groups:
             group = await kc.get_group_by_path(path)
             if not group:
@@ -421,12 +451,11 @@ async def _async_sync_users(
                     f"Group '{path}' not found in realm '{kc_settings.realm}'. "
                     f"Create it first or remove it from --group."
                 )
-            group_ids[path] = group["id"]
+            extra_group_ids[path] = group["id"]
             logger.debug("Resolved group %s -> %s", path, group["id"])
 
         # --- Per-participant sync ---------------------------------------------
         for p in participants:
-            user_id = p["user_id"]
             key = p["key"]
             username = derive_username(key)
 
@@ -434,17 +463,22 @@ async def _async_sync_users(
 
             if sync_settings.dry_run:
                 existing = await kc.get_user_by_username(username)
+                member_group_name = (
+                    "participant" if community_type == "rec"
+                    else "operator" if community_type == "dso"
+                    else None
+                )
+                group_hint = f" org-group={member_group_name}" if member_group_name else ""
                 if existing:
                     typer.echo(
                         f"  ✓ {key} — exists as '{existing.get('username')}'"
-                        f" (org: {community['id']})"
+                        f" (org: {community['id']}{group_hint})"
                     )
                     skipped.append(username)
                 else:
                     typer.secho(
                         f"  ~ {key} username='{username}'"
-                        f" groups={list(group_ids.keys())}"
-                        f" org={community['id']}",
+                        f" org={community['id']}{group_hint}",
                         fg=typer.colors.YELLOW,
                     )
                     created.append(username)
@@ -463,8 +497,18 @@ async def _async_sync_users(
                     temporary=temporary,
                 )
 
-                # Always ensure org membership — idempotent for existing users
+                assert org_id is not None  # guaranteed in live (non-dry-run) path
+
+                # Ensure org membership
                 org_added = await kc.ensure_user_in_organization(org_id, kc_uuid)
+
+                # Add to org member group (participant / operator) — idempotent
+                if member_grp_id:
+                    await kc.ensure_user_in_org_group(org_id, member_grp_id, kc_uuid)
+
+                # Add to any explicitly requested realm groups
+                for path, gid in extra_group_ids.items():
+                    await kc.add_user_to_group_with_retry(kc_uuid, gid)
 
                 if not was_created:
                     if reset_password:
@@ -481,12 +525,9 @@ async def _async_sync_users(
                     skipped.append(username)
                     continue
 
-                for path, gid in group_ids.items():
-                    await kc.add_user_to_group_with_retry(kc_uuid, gid)
-
                 typer.secho(
                     f"  + {key} username='{username}' uuid={kc_uuid} pwd='{pwd}'"
-                    f" groups={list(group_ids.keys())} org={community['id']}",
+                    f" org={community['id']}",
                     fg=typer.colors.GREEN,
                 )
                 created.append(username)
