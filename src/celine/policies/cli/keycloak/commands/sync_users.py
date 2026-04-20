@@ -17,6 +17,7 @@ from celine.policies.cli.keycloak.client import (
     KeycloakAdminClient,
     KeycloakAuthError,
     KeycloakError,
+    ROLE_HIERARCHY,
 )
 from celine.policies.cli.keycloak.models import KeycloakConfig
 from celine.policies.cli.keycloak.settings import KeycloakSettings, SyncUsersSettings
@@ -269,10 +270,7 @@ def sync_users(
     typer.echo(f"REC org  : {community['id']} ({community['name']}) [type={community_type}]")
     if operators:
         typer.echo(f"DSO orgs : {', '.join(op['id'] for op in operators)}")
-    if community_type == "rec":
-        typer.echo("Org groups: participant (assigned), manager (provisioned)")
-    elif community_type == "dso":
-        typer.echo("Org groups: operator (assigned), manager (provisioned)")
+    typer.echo(f"Org groups: {' > '.join(ROLE_HIERARCHY)} (viewers assigned to members)")
     if sync_settings.groups:
         typer.echo(f"Extra groups: {', '.join(sync_settings.groups)}")
     typer.echo(
@@ -352,15 +350,14 @@ async def _async_sync_users(
             if enabled:
                 typer.echo("  ! Organizations enabled on realm")
 
+            # Provision realm claim scopes (organization, groups) — same as keycloak sync
+            claim_changed = await kc.ensure_realm_claim_scopes(oauth2_proxy_client)
+            if claim_changed:
+                typer.echo("  ! realm claim scopes (organization, groups) provisioned")
+
             if oauth2_proxy_client:
                 oauth2_client = await kc.get_client_by_client_id(oauth2_proxy_client)
                 if oauth2_client:
-                    _, scope_changed = await kc.ensure_org_client_scope()
-                    if scope_changed:
-                        typer.echo("  ! organization client scope provisioned")
-                    assigned = await kc.ensure_org_scope_on_client(oauth2_client["id"])
-                    if assigned:
-                        typer.echo(f"  ! organization scope assigned to client '{oauth2_proxy_client}'")
                     aud_added = await kc.ensure_audience_mapper(oauth2_client["id"], oauth2_proxy_client)
                     if aud_added:
                         typer.echo(f"  ! audience mapper added to client '{oauth2_proxy_client}'")
@@ -385,8 +382,12 @@ async def _async_sync_users(
                     )
                 else:
                     logger.debug("DSO org '%s' already exists (%s)", op["id"], dso_id)
-                await kc.ensure_org_role(dso_id, "operator")
-                await kc.ensure_org_role(dso_id, "manager")
+                for role_name in ROLE_HIERARCHY:
+                    await kc.ensure_org_role(dso_id, role_name)
+                for grp_name in ROLE_HIERARCHY:
+                    _, gc = await kc.ensure_org_group(dso_id, grp_name)
+                    if gc:
+                        typer.secho(f"  + DSO org group '{grp_name}' created", fg=typer.colors.GREEN)
 
             # Ensure REC organization with correct attributes and org roles
             org_id, org_created = await kc.ensure_organization(
@@ -403,23 +404,22 @@ async def _async_sync_users(
             else:
                 logger.debug("REC org '%s' already exists (%s)", community["id"], org_id)
 
-            # Ensure org groups exist: participant+manager (rec) or operator+manager (dso)
-            if community_type == "rec":
-                member_grp_id, gc = await kc.ensure_org_group(org_id, "participant")
+            # Ensure org roles and groups use the uniform hierarchy
+            for role_name in ROLE_HIERARCHY:
+                await kc.ensure_org_role(org_id, role_name)
+
+            member_grp_id = None
+            for grp_name in ROLE_HIERARCHY:
+                grp_id, gc = await kc.ensure_org_group(org_id, grp_name)
                 if gc:
-                    typer.secho(f"  + org group 'participant' created", fg=typer.colors.GREEN)
-                _, gc = await kc.ensure_org_group(org_id, "manager")
-                if gc:
-                    typer.secho(f"  + org group 'manager' created", fg=typer.colors.GREEN)
-            elif community_type == "dso":
-                member_grp_id, gc = await kc.ensure_org_group(org_id, "operator")
-                if gc:
-                    typer.secho(f"  + org group 'operator' created", fg=typer.colors.GREEN)
-                _, gc = await kc.ensure_org_group(org_id, "manager")
-                if gc:
-                    typer.secho(f"  + org group 'manager' created", fg=typer.colors.GREEN)
-            else:
-                member_grp_id = None
+                    typer.secho(f"  + org group '{grp_name}' created", fg=typer.colors.GREEN)
+                if grp_name == "viewers":
+                    member_grp_id = grp_id
+
+            # Ensure realm-level groups exist
+            realm_groups_changed = await kc.ensure_realm_groups()
+            if realm_groups_changed:
+                typer.echo("  ! realm groups (admins, managers, editors, viewers) provisioned")
         else:
             # Dry-run: report orgs that would be provisioned
             for op in (operators or []):
@@ -463,11 +463,7 @@ async def _async_sync_users(
 
             if sync_settings.dry_run:
                 existing = await kc.get_user_by_username(username)
-                member_group_name = (
-                    "participant" if community_type == "rec"
-                    else "operator" if community_type == "dso"
-                    else None
-                )
+                member_group_name = "viewers"
                 group_hint = f" org-group={member_group_name}" if member_group_name else ""
                 if existing:
                     typer.echo(

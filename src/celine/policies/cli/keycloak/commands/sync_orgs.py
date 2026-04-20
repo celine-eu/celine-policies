@@ -246,16 +246,15 @@ async def _async_sync_orgs(
         if enabled:
             typer.echo("  ! Organizations enabled on realm")
 
+        # Provision realm claim scopes (organization, groups) — same as keycloak sync
+        claim_changed = await kc.ensure_realm_claim_scopes(oauth2_proxy_client)
+        if claim_changed:
+            typer.echo("  ! realm claim scopes (organization, groups) provisioned")
+
         if oauth2_proxy_client:
-            client = await kc.get_client_by_client_id(oauth2_proxy_client)
-            if client:
-                _, scope_changed = await kc.ensure_org_client_scope()
-                if scope_changed:
-                    typer.echo("  ! organization client scope provisioned")
-                assigned = await kc.ensure_org_scope_on_client(client["id"])
-                if assigned:
-                    typer.echo(f"  ! organization scope assigned to client '{oauth2_proxy_client}'")
-                aud_added = await kc.ensure_audience_mapper(client["id"], oauth2_proxy_client)
+            proxy = await kc.get_client_by_client_id(oauth2_proxy_client)
+            if proxy:
+                aud_added = await kc.ensure_audience_mapper(proxy["id"], oauth2_proxy_client)
                 if aud_added:
                     typer.echo(f"  ! audience mapper added to client '{oauth2_proxy_client}'")
             else:

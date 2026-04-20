@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 # This lets us reliably identify and diff our mappers vs. manually created ones.
 AUDIENCE_MAPPER_PREFIX = "aud-"
 
+# Standard role hierarchy used at both realm and organisation level.
+# Order: most-privileged first.
+ROLE_HIERARCHY: list[str] = ["admins", "managers", "editors", "viewers"]
+
 
 class KeycloakError(Exception):
     """Base exception for Keycloak API errors."""
@@ -103,6 +107,8 @@ class KeycloakAdminClient:
     ]
 
     # Well-known Keycloak built-in scopes to ignore during sync.
+    # 'organization' and 'groups' are managed via ensure_*_client_scope() helpers
+    # rather than through clients.yaml — exclude from orphan detection.
     BUILTIN_SCOPES = {
         "openid",
         "profile",
@@ -115,6 +121,8 @@ class KeycloakAdminClient:
         "roles",
         "web-origins",
         "basic",
+        "organization",
+        "groups",
     }
 
     def __init__(self, settings: KeycloakSettings):
@@ -389,17 +397,16 @@ class KeycloakAdminClient:
         )
 
     async def ensure_org_client_scope(self) -> tuple[str, bool]:
-        """Ensure the 'organization' client scope exists with its membership mapper.
+        """Ensure the 'organization' client scope exists with its required mappers.
 
-        Creates the scope and/or mapper if absent; updates the mapper config if
-        it drifts from the desired state.
+        Manages two mappers on the scope (per KC docs — both are required for
+        org group membership to appear in tokens):
+          1. oidc-organization-membership-mapper  → 'organization' claim with attributes
+          2. oidc-organization-group-membership-mapper → adds 'groups' key inside
+             each org entry in the 'organization' claim
 
-        The mapper emits an ``organization`` claim in id/access/userinfo tokens
-        using the ``oidc-organization-membership-mapper`` provider, matching the
-        payload documented in the Keycloak org token claim guide.
-
-        Returns ``(scope_id, changed)`` where *changed* is True if anything was
-        created or updated.
+        Creates/updates either mapper if absent or config drifts.
+        Returns (scope_id, changed).
         """
         changed = False
 
@@ -414,7 +421,10 @@ class KeycloakAdminClient:
         else:
             scope_id = scope["id"]
 
-        DESIRED = {
+        mappers = await self.get_scope_protocol_mappers(scope_id)
+
+        # --- mapper 1: organization membership ---
+        DESIRED_MEMBERSHIP = {
             "introspection.token.claim": "true",
             "multivalued": "true",
             "userinfo.token.claim": "true",
@@ -426,75 +436,225 @@ class KeycloakAdminClient:
             "jsonType.label": "JSON",
             "addOrganizationId": "false",
         }
-
-        mappers = await self.get_scope_protocol_mappers(scope_id)
-        existing = next(
-            (
-                m
-                for m in mappers
-                if m.get("protocolMapper") == "oidc-organization-membership-mapper"
-            ),
+        existing_membership = next(
+            (m for m in mappers if m.get("protocolMapper") == "oidc-organization-membership-mapper"),
             None,
         )
-        if existing:
-            config = existing.get("config", {})
-            needs_update = any(config.get(k) != v for k, v in DESIRED.items())
-            if needs_update:
-                config.update(DESIRED)
-                existing["config"] = config
-                await self.update_scope_protocol_mapper(scope_id, existing)
-                logger.info(
-                    "Updated organization membership mapper on scope %s", scope_id
-                )
+        if existing_membership:
+            config = existing_membership.get("config", {})
+            if any(config.get(k) != v for k, v in DESIRED_MEMBERSHIP.items()):
+                config.update(DESIRED_MEMBERSHIP)
+                existing_membership["config"] = config
+                await self.update_scope_protocol_mapper(scope_id, existing_membership)
+                logger.info("Updated organization membership mapper on scope %s", scope_id)
                 changed = True
-            else:
-                logger.info(
-                    "Organization membership mapper already correct on scope %s",
-                    scope_id,
-                )
         else:
-            payload = {
-                "name": "organization",
-                "protocol": "openid-connect",
-                "protocolMapper": "oidc-organization-membership-mapper",
-                "consentRequired": False,
-                "config": DESIRED,
-            }
             await self._post(
-                f"/client-scopes/{scope_id}/protocol-mappers/models", json=payload
+                f"/client-scopes/{scope_id}/protocol-mappers/models",
+                json={
+                    "name": "organization",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-organization-membership-mapper",
+                    "consentRequired": False,
+                    "config": DESIRED_MEMBERSHIP,
+                },
             )
-            logger.info(
-                "Added organization membership mapper to scope %s", scope_id
+            logger.info("Added organization membership mapper to scope %s", scope_id)
+            changed = True
+
+        # --- mapper 2: organization group membership ---
+        # Adds a 'groups' key inside each org entry so org group membership appears
+        # in the token. Requires the membership mapper above to also be present.
+        DESIRED_GROUPS = {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false",
+        }
+        existing_groups = next(
+            (m for m in mappers if m.get("protocolMapper") == "oidc-organization-group-membership-mapper"),
+            None,
+        )
+        if existing_groups:
+            config = existing_groups.get("config", {})
+            if any(config.get(k) != v for k, v in DESIRED_GROUPS.items()):
+                config.update(DESIRED_GROUPS)
+                existing_groups["config"] = config
+                await self.update_scope_protocol_mapper(scope_id, existing_groups)
+                logger.info("Updated organization group membership mapper on scope %s", scope_id)
+                changed = True
+        else:
+            await self._post(
+                f"/client-scopes/{scope_id}/protocol-mappers/models",
+                json={
+                    "name": "organization group membership",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-organization-group-membership-mapper",
+                    "consentRequired": False,
+                    "config": DESIRED_GROUPS,
+                },
             )
+            logger.info("Added organization group membership mapper to scope %s", scope_id)
             changed = True
 
         return scope_id, changed
 
-    async def ensure_org_scope_on_client(self, client_uuid: str) -> bool:
-        """Ensure the 'organization' scope is a default scope on the given client.
+    # -------------------------------------------------------------------------
+    # Realm-level claim scopes (groups, organization)
+    #
+    # These scopes carry OIDC claim mappers (groups, org membership).
+    # Policy: realm Assigned type = None (not auto-applied to every client),
+    # explicitly assigned as Default on the oauth2_proxy client only.
+    #
+    # Single entry point: ensure_realm_claim_scopes(oauth2_proxy_client_id).
+    # Call it from any command that needs realm claim scopes to be correct —
+    # idempotent, safe to call multiple times from different commands.
+    # -------------------------------------------------------------------------
 
-        Idempotent — no-op if already assigned.
-        Returns True if the scope was just assigned.
+    async def _get_realm_default_client_scopes(self) -> list[dict[str, Any]]:
+        return await self._get("/default-default-client-scopes") or []
+
+    async def _get_realm_optional_client_scopes(self) -> list[dict[str, Any]]:
+        return await self._get("/default-optional-client-scopes") or []
+
+    async def _ensure_scope_not_realm_default(self, scope_id: str, name: str) -> bool:
+        """Remove scope from realm default/optional lists (Assigned type → None).
+
+        Returns True if anything was removed.
+        """
+        changed = False
+        defaults = await self._get_realm_default_client_scopes()
+        if any(s.get("id") == scope_id for s in defaults):
+            await self._delete(f"/default-default-client-scopes/{scope_id}")
+            logger.info("Removed '%s' from realm-level default client scopes", name)
+            changed = True
+        optionals = await self._get_realm_optional_client_scopes()
+        if any(s.get("id") == scope_id for s in optionals):
+            await self._delete(f"/default-optional-client-scopes/{scope_id}")
+            logger.info("Removed '%s' from realm-level optional client scopes", name)
+            changed = True
+        return changed
+
+    async def _ensure_scope_default_on_client(
+        self, client_uuid: str, scope_name: str
+    ) -> bool:
+        """Ensure a named scope is assigned as Default on a client.
+
+        Returns True if it was just assigned.
         """
         current = await self.get_client_default_scopes(client_uuid)
-        if any(s.get("name") == "organization" for s in current):
-            logger.info(
-                "'organization' scope already in default scopes of client %s",
-                client_uuid,
-            )
+        if any(s.get("name") == scope_name for s in current):
+            logger.debug("'%s' already a default scope on client %s", scope_name, client_uuid)
             return False
-
-        scope = await self.get_client_scope_by_name("organization")
+        scope = await self.get_client_scope_by_name(scope_name)
         if not scope:
-            raise KeycloakError(
-                "'organization' scope not found — call ensure_org_client_scope() first"
-            )
-
+            raise KeycloakError(f"Scope '{scope_name}' not found in realm")
         await self.add_client_default_scope(client_uuid, scope["id"])
-        logger.info(
-            "Added 'organization' to default scopes of client %s", client_uuid
-        )
+        logger.info("Assigned '%s' as default scope on client %s", scope_name, client_uuid)
         return True
+
+    async def _ensure_groups_client_scope(self) -> tuple[str, bool]:
+        """Ensure the 'groups' client scope exists with its group membership mapper.
+
+        Creates scope and/or mapper if absent; updates mapper config on drift.
+        Does NOT set realm-level assignment — caller decides Default/Optional/None.
+        Returns (scope_id, changed).
+        """
+        DESIRED = {
+            "claim.name": "groups",
+            "full.path": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true",
+        }
+        changed = False
+
+        scope = await self.get_client_scope_by_name("groups")
+        if not scope:
+            scope_id = await self.create_client_scope(
+                name="groups", description="Group membership claims"
+            )
+            changed = True
+            logger.info("Created 'groups' client scope (%s)", scope_id)
+        else:
+            scope_id = scope["id"]
+
+        mappers = await self.get_scope_protocol_mappers(scope_id)
+        existing = next(
+            (m for m in mappers if m.get("protocolMapper") == "oidc-group-membership-mapper"),
+            None,
+        )
+        if existing:
+            config = existing.get("config", {})
+            if any(config.get(k) != v for k, v in DESIRED.items()):
+                config.update(DESIRED)
+                existing["config"] = config
+                await self.update_scope_protocol_mapper(scope_id, existing)
+                logger.info("Updated groups mapper on scope %s", scope_id)
+                changed = True
+        else:
+            await self._post(
+                f"/client-scopes/{scope_id}/protocol-mappers/models",
+                json={
+                    "name": "groups",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-group-membership-mapper",
+                    "consentRequired": False,
+                    "config": DESIRED,
+                },
+            )
+            logger.info("Added groups mapper to scope %s", scope_id)
+            changed = True
+
+        return scope_id, changed
+
+    async def ensure_realm_claim_scopes(
+        self, oauth2_proxy_client_id: str | None = None
+    ) -> bool:
+        """Idempotently provision realm-level claim scopes (organization, groups).
+
+        For each scope:
+          1. Ensure the scope + protocol mapper exist (create/update on drift)
+          2. Set realm Assigned type = None (remove from realm defaults/optionals)
+          3. Assign as Default on the oauth2_proxy client (if provided and found)
+
+        Safe to call from any command (sync, sync-users, etc.) — all paths
+        converge to the same desired state.
+
+        Returns True if anything was created or updated.
+        """
+        changed = False
+
+        # --- organization scope ---
+        org_id, c = await self.ensure_org_client_scope()
+        changed = changed or c
+        c = await self._ensure_scope_not_realm_default(org_id, "organization")
+        changed = changed or c
+
+        # --- groups scope ---
+        groups_id, c = await self._ensure_groups_client_scope()
+        changed = changed or c
+        c = await self._ensure_scope_not_realm_default(groups_id, "groups")
+        changed = changed or c
+
+        # --- assign both as Default on oauth2_proxy ---
+        if oauth2_proxy_client_id:
+            proxy = await self.get_client_by_client_id(oauth2_proxy_client_id)
+            if proxy:
+                proxy_uuid = proxy["id"]
+                c = await self._ensure_scope_default_on_client(proxy_uuid, "organization")
+                changed = changed or c
+                c = await self._ensure_scope_default_on_client(proxy_uuid, "groups")
+                changed = changed or c
+            else:
+                logger.warning(
+                    "Client '%s' not found — skipping claim scope assignment",
+                    oauth2_proxy_client_id,
+                )
+
+        return changed
 
     async def delete_client_scope(self, scope_id: str) -> None:
         """Delete a client scope."""
@@ -1089,6 +1249,18 @@ class KeycloakAdminClient:
         name = path.lstrip("/")
         group_id = await self.create_group(name)
         return group_id, True
+
+    async def ensure_realm_groups(self) -> bool:
+        """Ensure the standard role-hierarchy groups exist at realm level.
+
+        Creates admins, managers, editors, viewers if absent.
+        Returns True if anything was created.
+        """
+        changed = False
+        for name in ROLE_HIERARCHY:
+            _, created = await self.ensure_group(f"/{name}")
+            changed = changed or created
+        return changed
 
     async def add_user_to_group(self, user_id: str, group_id: str) -> None:
         """Add a user to a group."""
