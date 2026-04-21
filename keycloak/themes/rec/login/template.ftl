@@ -74,7 +74,7 @@
                 <!-- Logo -->
                 <div id="kc-logo-wrapper">
                     <div id="kc-logo">
-                        <span class="kc-logo-text">REC</span>
+                        <span class="kc-logo-text">${realm.displayName!'REC'}</span>
                     </div>
                 </div>
 
@@ -156,8 +156,12 @@
         <!-- Footer -->
         <footer class="pf-c-login__footer">
             <ul class="pf-c-login__footer-list">
-                <li><a href="#">${msg("termsText", "Terms")}</a></li>
-                <li><a href="#">${msg("privacyText", "Privacy")}</a></li>
+                <#if properties.termsUrl?has_content && properties.termsUrl != '#'>
+                    <li><a href="${properties.termsUrl}">${msg("termsText", "Terms")}</a></li>
+                </#if>
+                <#if properties.privacyUrl?has_content && properties.privacyUrl != '#'>
+                    <li><a href="${properties.privacyUrl}">${msg("privacyText", "Privacy")}</a></li>
+                </#if>
             </ul>
         </footer>
     </div>

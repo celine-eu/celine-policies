@@ -4,7 +4,7 @@ networks:
 services:
   keycloak-sync:
     build:
-      context: .
+      context: ./keycloak
       dockerfile: Dockerfile
     restart: "no"
     volumes:
@@ -114,8 +114,10 @@ services:
       - celine_security_net
 
   keycloak:
-    # Keycloak is an open-source identity and access management solution.
-    image: quay.io/keycloak/keycloak:26.6.0
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile
+
     command: start-dev --import-realm
     environment:
       KC_DB: dev-file
