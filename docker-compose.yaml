@@ -4,7 +4,7 @@ networks:
 services:
   keycloak-sync:
     build:
-      context: ./keycloak
+      context: .
       dockerfile: Dockerfile
     restart: "no"
     volumes:
@@ -14,10 +14,10 @@ services:
         condition: service_healthy
     environment:
       - CELINE_KEYCLOAK_SECRETS_FILE=/tmp/.secrets.yaml
-    entrypoint: ["/bin/sh", "-euc"]
+    entrypoint: [ "/bin/sh", "-euc" ]
     command:
-      - >
-        celine-policies keycloak bootstrap --admin-user admin --admin-password admin &&
+      - |
+        celine-policies keycloak bootstrap --admin-user admin --admin-password admin && \
         celine-policies keycloak sync --secrets-file /tmp/.secrets.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -34,12 +34,11 @@ services:
     depends_on:
       keycloak-sync:
         condition: service_completed_successfully
-    entrypoint: ["/bin/sh", "-euc"]
+    entrypoint: [ "/bin/sh", "-euc" ]
     command:
       - >
-        celine-policies keycloak sync-users /app/rec-example.yaml
-        --admin-user admin --admin-password admin
-        --password test --no-temporary --mock
+        celine-policies keycloak sync-users /app/rec-example.yaml --admin-user
+        admin --admin-password admin --password test --no-temporary --mock
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "keycloak.celine.localhost:host-gateway"
@@ -63,7 +62,8 @@ services:
           "CMD",
           ".venv/bin/python",
           "-c",
-          "import httpx; httpx.get('http://localhost:8009/health').raise_for_status()",
+          "import httpx;
+            httpx.get('http://localhost:8009/health').raise_for_status()",
         ]
       interval: 10s
       timeout: 5s
@@ -105,10 +105,7 @@ services:
     image: redis:7.2-alpine
     restart: unless-stopped
     command: >
-      redis-server
-      --appendonly yes
-      --save 60 1000
-      --maxmemory 512mb
+      redis-server --appendonly yes --save 60 1000 --maxmemory 512mb
       --maxmemory-policy allkeys-lru
     networks:
       - celine_security_net
@@ -147,7 +144,7 @@ services:
     networks:
       - celine_security_net
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000"]
+      test: [ "CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000" ]
       interval: 5s
       timeout: 5s
       retries: 15
