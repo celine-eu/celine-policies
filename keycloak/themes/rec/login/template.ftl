@@ -74,7 +74,7 @@
                 <!-- Logo -->
                 <div id="kc-logo-wrapper">
                     <div id="kc-logo">
-                        <span class="kc-logo-text">${realm.displayName!'REC'}</span>
+                        <span class="kc-logo-text">${realm.displayName!properties.brandName!'CELINE'}</span>
                     </div>
                 </div>
 
