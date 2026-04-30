@@ -78,6 +78,7 @@ clients.yaml ──> celine-policies keycloak sync ──> Keycloak Admin API
 ```
 
 The `sync` command:
+
 1. Loads `clients.yaml` (scopes + clients with `default_scopes` and `scopes_prefix`)
 2. Fetches current state from Keycloak (existing scopes, clients, assignments)
 3. Computes a diff (plan): scopes to create/update, clients to create/update, scope assignments to add/remove
