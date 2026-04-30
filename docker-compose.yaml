@@ -38,10 +38,10 @@ services:
     command:
       - |
         celine-policies keycloak sync-users /app/rec-example.yaml --admin-user admin --admin-password admin --password test --no-temporary --mock && \
-        celine-policies keycloak set-user-organization admin --organization example_dso --group admins && \
-        celine-policies keycloak set-user-organization viewer --organization example_dso --group viewers && \
-        celine-policies keycloak set-user-organization admin --organization example_rec --group admins && \
-        celine-policies keycloak set-user-organization viewer --organization example_rec --group viewers
+        celine-policies keycloak set-user-organization admin  --admin-user admin --admin-password admin  --organization example_dso --group admins && \
+        celine-policies keycloak set-user-organization viewer --admin-user admin --admin-password admin  --organization example_dso --group viewers && \
+        celine-policies keycloak set-user-organization admin  --admin-user admin --admin-password admin  --organization example_rec --group admins && \
+        celine-policies keycloak set-user-organization viewer --admin-user admin --admin-password admin  --organization example_rec --group viewers
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "keycloak.celine.localhost:host-gateway"
