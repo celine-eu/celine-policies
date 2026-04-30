@@ -1,111 +1,99 @@
-# CELINE Policy Service
+# celine-policies
 
-Centralized authorization service for the CELINE platform using embedded OPA (Open Policy Agent).
+Authentication, authorization, and identity management for the CELINE platform.
 
-The policy service provides a unified authorization layer for all CELINE platform services, enforcing consistent access control across datasets, pipelines, digital twins, MQTT messaging, and user data.
+This repository provides two services:
 
-## Key Features
+1. **`mqtt_auth`** — A FastAPI HTTP backend for [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth) that validates JWTs and evaluates OPA (Rego) policies to control MQTT topic access.
+2. **`celine-policies` CLI** — A typer-based CLI that performs idempotent synchronization of OAuth scopes, service clients, users, and organizations into Keycloak.
 
-- **Unified Authorization** — Single service handles all authorization decisions
-- **Policy as Code** — Rego policies are versioned, testable, and auditable
-- **Zero Trust Model** — Every request is validated regardless of origin
-- **Dual Authorization** — User permissions intersected with client scopes
-- **MQTT Integration** — Native support for mosquitto-go-auth
-- **Audit Logging** — All decisions logged for compliance and debugging
+It also ships a custom Keycloak Docker image with the `rec` login theme (see [`keycloak/README.md`](keycloak/README.md)).
 
 ## Quick Start
 
 ```bash
-# Start the service stack
+# Install dependencies
+uv sync
+
+# Bootstrap Keycloak admin client and sync scopes/clients
+task keycloak:bootstrap
+task keycloak:sync
+
+# Start the full stack (Keycloak, MQTT auth, Mosquitto, Redis, oauth2-proxy)
 docker compose up -d
 
-# Verify health
+# Verify MQTT auth health
 curl http://localhost:8009/health
-
-# Check authorization (requires JWT)
-curl -X POST http://localhost:8009/authorize \
-  -H "Authorization: Bearer <your-jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "resource": {"type": "dataset", "id": "ds-123", "attributes": {"access_level": "internal"}},
-    "action": {"name": "read"}
-  }'
 ```
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](https://celine-eu.github.io/projects/celine-policies/docs/getting-started) | Developer quickstart guide |
-| [Architecture](https://celine-eu.github.io/projects/celine-policies/docs/architecture) | Authorization model and system design |
-| [API Reference](https://celine-eu.github.io/projects/celine-policies/docs/api-reference) | Complete endpoint documentation |
-| [Scopes & Permissions](https://celine-eu.github.io/projects/celine-policies/docs/scopes-and-permissions) | OAuth scopes and access control |
-| [MQTT Integration](https://celine-eu.github.io/projects/celine-policies/docs/mqtt-integration) | Topic patterns and broker setup |
-| [Deployment](https://celine-eu.github.io/projects/celine-policies/docs/deployment) | Configuration and production deployment |
-
-## Platform Services
-
-The policy service authorizes requests for the following CELINE services:
-
-| Service | Description | Key Scopes |
-|---------|-------------|------------|
-| **digital-twin** | Digital twin state and simulation | `dt.read`, `dt.write`, `dt.simulate` |
-| **pipelines** | Data pipeline orchestration | `pipeline.execute`, `dataset.admin` |
-| **rec-registry** | REC certificate registry | `dataset.query`, `dataset.admin` |
-| **nudging** | User engagement and notifications | `dt.read`, `userdata.read` |
-
-## Authorization Model Overview
-
-Each authorization request passes through the Policy Service to OPA (regorus). OPA evaluates two independent checks and intersects the results:
-
-| Check | Source | Description |
-|---|---|---|
-| User groups | JWT `groups` claim | Role hierarchy: admins > managers > editors > viewers |
-| Client scopes | JWT `scope` claim | OAuth scopes granted to the calling service client |
-
-Both checks must pass. A high-trust user calling through a low-trust client is denied. A high-trust client acting on behalf of a low-privilege user is also denied.
-
-Authorization requires **both**:
-1. **User** must have sufficient group level (admins > managers > editors > viewers)
-2. **Client** must have the required OAuth scope
-
-This dual-check prevents privilege escalation via low-trust clients.
+| [Getting Started](docs/getting-started.md) | Setup, CLI commands, and first sync |
+| [Architecture](docs/architecture.md) | System design and component overview |
+| [API Reference](docs/api-reference.md) | MQTT auth HTTP endpoints |
+| [Scopes & Permissions](docs/scopes-and-permissions.md) | OAuth scopes and client configuration |
+| [MQTT Integration](docs/mqtt-integration.md) | Topic patterns, ACL policies, broker config |
+| [Deployment](docs/deployment.md) | Docker Compose stack and configuration |
 
 ## Project Structure
 
 ```
 celine-policies/
-├── src/celine/policies/    # Python service code
-│   ├── api/                # Policy API layer
-│   ├── auth/               # JWT validation, subject extraction
-│   ├── engine/             # OPA engine wrapper
-│   ├── routes/             # FastAPI endpoints
-│   └── models/             # Pydantic models
-├── policies/               # Rego policy files
-│   └── celine/
-│       ├── common/         # Shared helpers
-│       ├── dataset/        # Dataset access policies
-│       ├── pipeline/       # Pipeline state machine
-│       ├── dt/             # Digital twin policies
-│       ├── mqtt/           # MQTT ACL policies
-│       └── userdata/       # User data access
-├── docs/                   # Documentation
-├── tests/                  # Python and Rego tests
-└── config/                 # Keycloak, mosquitto configs
+├── src/celine/
+│   ├── mqtt_auth/          # FastAPI MQTT auth service
+│   │   ├── main.py         # App factory (create_app)
+│   │   ├── routes.py       # /user, /acl, /superuser endpoints
+│   │   ├── models.py       # Pydantic request/response models
+│   │   └── config.py       # MqttAuthSettings (pydantic-settings)
+│   └── policies/cli/       # celine-policies CLI
+│       ├── main.py          # Typer entrypoint
+│       └── keycloak/        # Keycloak management commands
+│           ├── commands/    # bootstrap, sync, sync-users, sync-orgs, etc.
+│           ├── client.py    # KeycloakAdminClient (async httpx)
+│           ├── models.py    # Config models for clients.yaml
+│           ├── settings.py  # KeycloakSettings, SyncUsersSettings
+│           └── sync.py      # Sync plan computation and application
+├── policies/celine/        # Rego policy files
+│   ├── mqtt/acl.rego       # MQTT topic ACL rules
+│   └── scopes.rego         # Shared scope/group helpers
+├── clients.yaml            # Platform scopes and service client definitions
+├── keycloak/               # Custom Keycloak image + rec login theme
+├── config/
+│   ├── keycloak/import/    # Realm import JSON
+│   ├── mosquitto/          # mosquitto.conf
+│   └── oauth2-proxy/       # oauth2-proxy.cfg
+├── tests/                  # Pytest test suite
+├── docker-compose.yaml     # Full development stack
+├── Dockerfile              # MQTT auth service image
+├── taskfile.yaml           # Task runner commands
+└── pyproject.toml          # Package definition (uv + hatchling)
+```
+
+## CLI Commands
+
+```bash
+celine-policies keycloak bootstrap       # Create admin-cli service account in Keycloak
+celine-policies keycloak sync            # Sync clients.yaml scopes/clients to Keycloak
+celine-policies keycloak sync-users      # Import users from REC registry YAML
+celine-policies keycloak sync-orgs       # Import organizations from owners YAML
+celine-policies keycloak set-password    # Set a user's password
+celine-policies keycloak set-user-organization  # Assign user to org + groups
+celine-policies keycloak status          # Show current Keycloak state
 ```
 
 ## Development
 
 ```bash
-# Install dependencies
-uv sync
+# Run MQTT auth dev server
+task run
 
 # Run tests
-pytest
-opa test policies/ -v
+task test
 
-# Start development server
-uv run uvicorn celine.policies.main:create_app --reload --port 8009
+# Release (semantic-release)
+task release
 ```
 
 ## License

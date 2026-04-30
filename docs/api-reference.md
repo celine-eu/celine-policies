@@ -1,528 +1,161 @@
 # API Reference
 
-Complete documentation for all Policy Service endpoints.
+HTTP endpoints exposed by the MQTT auth service (`celine.mqtt_auth`).
 
 ## Base URL
 
 | Environment | URL |
 |-------------|-----|
 | Development | `http://localhost:8009` |
-| Docker Compose | `http://policy-service:8009` |
-| Production | Configure via environment |
+| Docker Compose | `http://mqtt_auth:8009` |
 
 ## Authentication
 
-All authorization endpoints require a JWT in the `Authorization` header:
+All endpoints (except `/health`) require a JWT in the `Authorization` header:
 
 ```
 Authorization: Bearer <jwt-token>
 ```
 
-The JWT must be issued by the configured Keycloak realm.
+The JWT is validated using the OIDC configuration from `celine-sdk` (`OidcSettings`).
 
-## Common Headers
+---
 
-| Header | Required | Description |
-|--------|----------|-------------|
-| `Authorization` | Yes* | Bearer token (*except health endpoints) |
-| `Content-Type` | Yes | `application/json` |
-| `X-Request-Id` | No | Correlation ID for tracing |
-| `X-Source-Service` | No | Calling service name (for audit) |
+## POST /user
 
-## Common Response Fields
+Authenticate an MQTT client. Called by mosquitto-go-auth on client connect.
 
-All authorization responses include:
+Extracts the JWT from the `Authorization` header, validates it, and returns success if the token is valid.
+
+**Response (200):**
+
+```json
+{"ok": true, "reason": "authenticated"}
+```
+
+**Response (403):**
+
+```json
+{"ok": false, "reason": "missing token"}
+```
+
+```json
+{"ok": false, "reason": "invalid credentials"}
+```
+
+---
+
+## POST /acl
+
+Authorize MQTT topic access. Called by mosquitto-go-auth on every publish/subscribe.
+
+Validates the JWT, converts the mosquitto `acc` bitmask to action names, and evaluates the `celine.mqtt.acl` Rego policy for each action.
+
+**Request Body (JSON):**
+
+```json
+{
+  "clientid": "my-client",
+  "topic": "celine/digital-twin/events/pump/pump-001",
+  "acc": 2
+}
+```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `allowed` | boolean | Whether the action is permitted |
-| `reason` | string | Human-readable explanation |
-| `request_id` | string | Request identifier for tracing |
-
----
-
-## Authorization Endpoints
-
-### POST /authorize
-
-Generic authorization check for any resource type.
-
-**Request Body:**
-
-```json
-{
-  "resource": {
-    "type": "dataset | pipeline | dt | topic | userdata",
-    "id": "resource-identifier",
-    "attributes": {
-      "access_level": "open | internal | restricted"
-    }
-  },
-  "action": {
-    "name": "read | write | admin | ...",
-    "context": {}
-  },
-  "context": {}
-}
-```
-
-**Response:**
-
-```json
-{
-  "allowed": true,
-  "reason": "user has viewer access and client has dataset.query scope",
-  "request_id": "550e8400-e29b-41d4-a716-446655440000"
-}
-```
-
-**Example:**
-
-```bash
-curl -X POST http://localhost:8009/authorize \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "resource": {
-      "type": "dataset",
-      "id": "ds-energy-consumption",
-      "attributes": {"access_level": "internal"}
-    },
-    "action": {"name": "read"}
-  }'
-```
-
----
-
-## Dataset Endpoints
-
-### POST /dataset/access
-
-Check access to a specific dataset.
-
-**Request Body:**
-
-```json
-{
-  "dataset_id": "string",
-  "access_level": "open | internal | restricted",
-  "action": "read | write | admin"
-}
-```
-
-**Response:**
-
-```json
-{
-  "allowed": true,
-  "reason": "user has viewer access and client has dataset.query scope",
-  "request_id": "uuid"
-}
-```
-
-**Access Matrix:**
-
-| Level | Anonymous | Viewers | Editors | Managers | Admins |
-|-------|-----------|---------|---------|----------|--------|
-| open | read | read | read | read | read/write |
-| internal | ❌ | read* | read/write* | read/write* | read/write |
-| restricted | ❌ | ❌ | ❌ | ❌ | read/write* |
-
-*Requires appropriate client scope (`dataset.query` or `dataset.admin`)
-
-### POST /dataset/filters
-
-Get row-level filters to apply to dataset queries.
-
-**Request Body:**
-
-```json
-{
-  "dataset_id": "string",
-  "access_level": "open | internal | restricted"
-}
-```
-
-**Response:**
-
-```json
-{
-  "allowed": true,
-  "filters": [
-    {
-      "field": "organization_id",
-      "operator": "eq",
-      "value": "org-123"
-    },
-    {
-      "field": "classification",
-      "operator": "in",
-      "value": ["public", "internal"]
-    }
-  ],
-  "reason": "filters applied based on user context",
-  "request_id": "uuid"
-}
-```
-
-**Filter Operators:**
-
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `eq` | Equals | `field = value` |
-| `ne` | Not equals | `field != value` |
-| `in` | In list | `field IN (values)` |
-| `gt` | Greater than | `field > value` |
-| `lt` | Less than | `field < value` |
-
----
-
-## Pipeline Endpoints
-
-### POST /pipeline/transition
-
-Validate a pipeline state transition.
-
-**Request Body:**
-
-```json
-{
-  "pipeline_id": "string",
-  "from_state": "pending | started | running | completed | failed | cancelled",
-  "to_state": "pending | started | running | completed | failed | cancelled"
-}
-```
-
-**Response:**
-
-```json
-{
-  "allowed": true,
-  "reason": "valid transition from started to running",
-  "request_id": "uuid"
-}
-```
-
-**Valid Transitions:**
-
-| From | To | Description |
-|---|---|---|
-| `pending` | `started` | Pipeline begins execution |
-| `pending` | `cancelled` | Pipeline cancelled before start |
-| `started` | `running` | Execution proceeds |
-| `started` | `cancelled` | Pipeline cancelled after start |
-| `running` | `completed` | Successful completion |
-| `running` | `failed` | Execution error |
-
----
-
-## Digital Twin Endpoints
-
-### POST /dt/access
-
-Check access to digital twin operations.
-
-**Request Body:**
-
-```json
-{
-  "dt_id": "string",
-  "action": "read | write | simulate | admin"
-}
-```
-
-**Response:**
-
-```json
-{
-  "allowed": true,
-  "reason": "user can read dt data",
-  "request_id": "uuid"
-}
-```
-
-**Action Requirements:**
-
-| Action | Users | Services |
-|--------|-------|----------|
-| `read` | viewers+ with `dt.read` | `dt.read` scope |
-| `write` | editors+ with `dt.write` | `dt.write` scope |
-| `simulate` | managers+ with `dt.simulate` | `dt.simulate` scope |
-| `admin` | admins with `dt.admin` | `dt.admin` scope |
-
-### POST /dt/event
-
-Authorize a digital twin event emission.
-
-**Request Body:**
-
-```json
-{
-  "dt_id": "string",
-  "event_type": "string",
-  "simulation_state": "string | null"
-}
-```
-
-**Response:**
-
-```json
-{
-  "allowed": true,
-  "reason": "service can emit dt events",
-  "request_id": "uuid"
-}
-```
-
----
-
-## MQTT Endpoints
-
-Compatible with [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth) HTTP backend.
-
-### POST /mqtt/user
-
-Authenticate an MQTT client.
-
-**Request:**
-
-The JWT should be passed in the `Authorization` header:
-
-```
-Authorization: Bearer <jwt>
-```
-
-**Response:**
-
-```json
-{
-  "ok": true,
-  "reason": "authenticated"
-}
-```
-
-**HTTP Status Codes:**
-
-| Code | Meaning |
-|------|---------|
-| 200 | Authentication successful |
-| 403 | Authentication failed |
-
-### POST /mqtt/acl
-
-Check topic access for an authenticated client.
-
-**Request Body (form-encoded or JSON):**
-
-```json
-{
-  "username": "jwt-token-or-username",
-  "topic": "celine/digital-twin/events/pump/123",
-  "clientid": "client-id",
-  "acc": 1
-}
-```
-
-**Access Mask (`acc`):**
+| `clientid` | string | MQTT client ID |
+| `topic` | string | MQTT topic being accessed |
+| `acc` | int | Access bitmask: 1=read, 2=publish, 4=subscribe |
+
+**Access bitmask values:**
 
 | Value | Permission |
 |-------|------------|
 | 1 | Read |
-| 2 | Write (Publish) |
+| 2 | Publish |
 | 4 | Subscribe |
-| 3 | Read + Write |
+| 3 | Read + Publish |
 | 5 | Read + Subscribe |
 | 7 | All |
 
-**Response:**
+**Response (200):**
 
 ```json
-{
-  "ok": true,
-  "reason": "authorized"
-}
+{"ok": true, "reason": "authorized"}
 ```
 
-### POST /mqtt/superuser
-
-Check if a client has superuser (admin) access.
-
-**Request Body:**
+**Response (403):**
 
 ```json
-{
-  "username": "jwt-token-or-username"
-}
-```
-
-**Response:**
-
-```json
-{
-  "ok": true,
-  "reason": "superuser"
-}
+{"ok": false, "reason": "denied"}
 ```
 
 ---
 
-## User Data Endpoints
+## POST /superuser
 
-### POST /userdata/access
+Check if a client has MQTT superuser access. Superusers bypass all ACL checks.
 
-Check access to user-owned resources.
+Grants superuser if the JWT contains:
+- The `mqtt.admin` scope, OR
+- The `admin` group, OR
+- The `mqtt.admin` group
 
-**Request Body:**
-
-```json
-{
-  "resource_type": "dashboard | profile | settings",
-  "resource_id": "string",
-  "owner_id": "user-id-who-owns-resource",
-  "action": "read | write | delete | share"
-}
-```
-
-**Response:**
+**Request Body (JSON):**
 
 ```json
 {
-  "allowed": true,
-  "reason": "user accessing own data",
-  "request_id": "uuid"
+  "username": "client-id-or-jwt"
 }
 ```
 
-**Access Rules:**
+**Response (200):**
 
-| Scenario | Allowed |
-|----------|---------|
-| Owner accessing own data | ✅ |
-| Resource shared with user | ✅ (read only) |
-| Resource shared with user's group | ✅ (read only) |
-| Admin with `userdata.admin` scope | ✅ |
-| Other users | ❌ |
+```json
+{"ok": true, "reason": "superuser"}
+```
+
+**Response (403):**
+
+```json
+{"ok": false, "reason": "not superuser"}
+```
 
 ---
 
-## Health Endpoints
+## GET /health
 
-### GET /health
-
-Liveness check — is the service running?
+Liveness check. No authentication required.
 
 **Response:**
 
 ```json
 {
   "status": "healthy",
-  "version": "0.1.0",
   "policies_loaded": true,
-  "details": {
-    "policy_count": 6
-  }
+  "policy_count": 2,
+  "packages": ["celine.mqtt.acl", "celine.scopes"]
 }
 ```
 
-### GET /ready
+---
 
-Readiness check — is the service ready to accept requests?
+## GET /docs
 
-**Response:**
+Swagger UI for interactive API exploration.
 
-```json
-{
-  "status": "healthy",
-  "version": "0.1.0",
-  "policies_loaded": true,
-  "details": {
-    "policy_count": 6,
-    "cache": {
-      "hits": 1234,
-      "misses": 56
-    }
-  }
-}
-```
+## GET /redoc
 
-### POST /reload
-
-Hot-reload policies from disk.
-
-**Response:**
-
-```json
-{
-  "status": "success",
-  "policy_count": 6
-}
-```
+ReDoc API documentation.
 
 ---
 
 ## Error Responses
 
-### 400 Bad Request
+| Code | Meaning |
+|------|---------|
+| 200 | OK (check `ok` field for auth result) |
+| 403 | Authentication/authorization failed |
+| 500 | Internal error (e.g. policy parse failure) |
 
-Invalid request format or unknown resource type.
-
-```json
-{
-  "detail": "Unknown resource type: invalid"
-}
-```
-
-### 401 Unauthorized
-
-Missing or invalid JWT.
-
-```json
-{
-  "detail": "Invalid authorization header format"
-}
-```
-
-### 403 Forbidden
-
-Valid JWT but access denied (for MQTT endpoints).
-
-```json
-{
-  "ok": false,
-  "reason": "insufficient privileges"
-}
-```
-
-### 500 Internal Server Error
-
-Policy evaluation failure.
-
-```json
-{
-  "detail": "Policy evaluation failed: ..."
-}
-```
-
----
-
-## Rate Limiting
-
-Production deployments should implement rate limiting. Recommended limits:
-
-| Endpoint | Limit |
-|----------|-------|
-| `/authorize` | 1000 req/sec per client |
-| `/health` | 100 req/sec |
-| `/reload` | 1 req/min |
-
----
-
-## OpenAPI Specification
-
-The service exposes an OpenAPI spec at:
-
-```
-GET /openapi.json
-GET /docs        # Swagger UI
-GET /redoc       # ReDoc UI
-```
+The MQTT auth endpoints always return a `MqttResponse` body with `ok` and `reason` fields. HTTP status 403 is set alongside `ok: false` to satisfy mosquitto-go-auth's expected behavior.

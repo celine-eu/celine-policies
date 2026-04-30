@@ -1,238 +1,138 @@
 # Architecture
 
-This document describes the authorization model, system architecture, and design decisions of the CELINE Policy Service.
+This document describes the components, authorization model, and design of the celine-policies repository.
 
-## System Overview
+## Components
 
-The CELINE platform services (digital-twin, pipelines, rec-registry, nudging) delegate all authorization decisions to the Policy Service. The Policy Service validates the JWT, extracts the subject, evaluates Rego policies in an embedded OPA engine, and returns an allow/deny decision with optional row-level filters. Keycloak is the identity provider that issues the JWTs.
+The repository contains three main pieces:
 
-## Authorization Model
+### 1. MQTT Auth Service
 
-### The Dual-Check Model
+A FastAPI application (`src/celine/mqtt_auth/`) that acts as the HTTP backend for [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth). Mosquitto delegates authentication and authorization decisions to this service over HTTP.
 
-The CELINE authorization model enforces **two independent checks** that must both pass:
+The service uses `celine-sdk`'s `PolicyEngine` (built on [regorus](https://github.com/nicholasgasior/regorus), a Rust OPA implementation) to evaluate Rego policies at request time. An optional in-memory decision cache (`CachedPolicyEngine`) reduces repeated evaluations.
 
-| Check | Source | Description |
-|---|---|---|
-| User groups | JWT `groups` or `realm_access.roles` claim | Role hierarchy: admins > managers > editors > viewers |
-| Client scopes | JWT `scope` claim | OAuth scopes granted to the calling service client |
+**Endpoints:** `/user` (auth), `/acl` (topic access), `/superuser` (admin check), `/health`.
 
-**Why this model?**
+### 2. Keycloak CLI
 
-1. **User Groups** define what a human user is allowed to do based on their role.
-2. **Client Scopes** define what the requesting application is allowed to do.
+A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. It reads `clients.yaml` — which defines all platform OAuth scopes and service clients — and idempotently provisions them in Keycloak.
 
-The intersection prevents privilege escalation: even if a user is an admin, a low-privilege client (like a public dashboard) cannot access admin-only resources.
+**Commands:**
+- `bootstrap` — create a `celine-admin-cli` service account with realm-management roles
+- `sync` — reconcile scopes and clients in Keycloak to match `clients.yaml`
+- `sync-users` — create Keycloak users from a `rec-registry` REC definition YAML
+- `sync-orgs` — create Keycloak organizations from an `owners.yaml`
+- `set-password` — set a user's password
+- `set-user-organization` — assign a user to organizations and org-level groups
+- `status` — show current scopes, clients, and assignments
 
-### Subject Types
+Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap.
 
-| Type | Identification | Authorization Source |
-|---|---|---|
-| User | JWT `sub` claim present | Group hierarchy + Client scopes |
-| Service | JWT `client_id` claim, no `sub` | Client scopes only |
-| Anonymous | No JWT provided | Limited to open resources |
+### 3. Rego Policies
 
-### Group Hierarchy
+Two policy files under `policies/celine/`:
 
-Users are assigned to groups in Keycloak. Groups have a hierarchy with level inheritance:
+- **`scopes.rego`** — shared helpers for checking subject type (user vs service), scope membership, group membership, and admin detection. Supports multiple group naming conventions (`service.resource.verb`, `mqtt:service:resource:verb`, wildcards).
 
-| Group | Level | Access |
-|---|---|---|
-| admins | 4 | Full platform access |
-| managers | 3 | Operational access, simulations |
-| editors | 2 | Write access to non-restricted resources |
-| viewers | 1 | Read-only access to internal resources |
-| (none) | 0 | Anonymous / no group membership |
+- **`mqtt/acl.rego`** — MQTT topic ACL rules. Parses topics following the `celine/{service}/{resource}/{...}` convention and decides allow/deny based on:
+  - Service admin scopes (e.g. `digital-twin.admin`)
+  - User admin groups (`admin`, `mqtt.admin`, `{service}.admin`)
+  - Fine-grained scopes/groups matching `{service}.{resource}.{verb}`
 
-Higher levels inherit all permissions of lower levels.
-
-### Resource Types
-
-| Resource | Policy Package | Description |
-|---|---|---|
-| `dataset` | `celine.dataset.access` | Data access control with row-level filtering |
-| `pipeline` | `celine.pipeline.state` | Pipeline state machine transitions |
-| `dt` | `celine.dt.access` | Digital twin API access |
-| `topic` | `celine.mqtt.acl` | MQTT topic publish/subscribe |
-| `userdata` | `celine.userdata.access` | User-owned resources |
-
-## Policy Engine
-
-### Why OPA?
-
-[Open Policy Agent](https://www.openpolicyagent.org/) provides declarative, testable, decoupled policies in Rego. It is a CNCF graduated project widely adopted for authorization use cases.
-
-### Embedded vs. Sidecar
-
-The policy service uses **embedded OPA** (via regorus, a Rust implementation):
-
-| Approach | Latency | Deployment | Best For |
-|---|---|---|---|
-| Embedded (current) | ~0.1-0.5ms | Single service | Centralized, moderate scale |
-| Sidecar per service | ~0.1ms | Container per service | High throughput, low latency |
-| Remote OPA | ~1-5ms | Separate deployment | Shared policies, simple services |
-
-For high-throughput services, the architecture can evolve to sidecars that pull policy bundles from this central service.
-
-### Policy Packages
+## MQTT Authorization Flow
 
 ```
-policies/celine/
-├── common/
-│   ├── subject.rego      # is_user, is_service, has_scope(), in_group()
-│   └── access_levels.rego # level_value(), is_open(), etc.
-├── dataset/
-│   ├── access.rego       # allow, reason, filters
-│   ├── row_filter.rego   # Row-level security filters
-│   └── access_test.rego  # Policy unit tests
-├── pipeline/
-│   └── state.rego        # State machine validation
-├── dt/
-│   └── access.rego       # Digital twin access
-├── mqtt/
-│   └── acl.rego          # Topic ACLs
-└── userdata/
-    └── access.rego       # User data ownership
+MQTT Client ──(JWT as password)──> Mosquitto
+                                      │
+                               mosquitto-go-auth
+                                      │
+                          ┌───────────┼───────────┐
+                          │           │           │
+                      /user       /acl      /superuser
+                          │           │           │
+                     JWT valid?   OPA eval    admin scope?
+                          │           │           │
+                        200/403    200/403     200/403
 ```
 
-### Policy Input Structure
+1. Client connects to Mosquitto with a JWT (obtained from Keycloak) as the MQTT password.
+2. Mosquitto calls `/user` — the service validates the JWT signature, issuer, and expiry.
+3. On publish/subscribe, Mosquitto calls `/acl` — the service builds a `PolicyInput` from the JWT claims (subject, scopes, groups) and the requested topic/action, then evaluates `celine.mqtt.acl` via regorus.
+4. Optionally, `/superuser` is checked — grants bypass if the JWT carries `mqtt.admin` scope or `admin` group.
 
-All policies receive a standardized input document:
+## Keycloak Sync Flow
 
-```json
-{
-  "subject": {
-    "id": "user-123",
-    "type": "user",
-    "groups": ["viewers", "editors"],
-    "scopes": ["dataset.query", "dt.read"],
-    "claims": {}
-  },
-  "resource": {
-    "type": "dataset",
-    "id": "ds-456",
-    "attributes": {
-      "access_level": "internal"
-    }
-  },
-  "action": {
-    "name": "read",
-    "context": {}
-  },
-  "environment": {
-    "request_id": "req-789",
-    "timestamp": 1706745600
-  }
-}
+```
+clients.yaml ──> celine-policies keycloak sync ──> Keycloak Admin API
+                       │
+                 compute diff
+                 (scopes to create/update,
+                  clients to create/update,
+                  scope assignments,
+                  audience mappers)
+                       │
+                 apply changes
+                       │
+                 .client.secrets.yaml
 ```
 
-### Policy Output Structure
+The `sync` command:
+1. Loads `clients.yaml` (scopes + clients with `default_scopes` and `scopes_prefix`)
+2. Fetches current state from Keycloak (existing scopes, clients, assignments)
+3. Computes a diff (plan): scopes to create/update, clients to create/update, scope assignments to add/remove
+4. Applies changes idempotently
+5. Writes generated client secrets to `.client.secrets.yaml`
 
-```json
-{
-  "allow": true,
-  "reason": "user has viewer access and client has dataset.query scope",
-  "filters": [
-    {"field": "organization_id", "operator": "eq", "value": "org-123"}
-  ]
-}
+The `scopes_prefix` field on each client declares scope ownership. The CLI uses this to automatically add audience mappers so that user JWTs issued through `oauth2-proxy` carry the correct audience for each service.
+
+## Topic Naming Convention
+
+MQTT topics follow the pattern:
+
+```
+celine/{service}/{resource}/{...}
 ```
 
-## Request Flow
+The ACL policy derives the required scope as `{service}.{resource}.{verb}` (where verb is `read` for subscribe/read, `write` for publish).
 
-### 1. JWT Validation
+Examples:
+- `celine/pipelines/runs/pipeline-123` → requires `pipelines.runs.read` (subscribe) or `pipelines.runs.write` (publish)
+- `celine/digital-twin/events/pump/pump-001` → requires `digital-twin.events.read` or `digital-twin.events.write`
 
-1. Extract the Bearer token from the `Authorization` header.
-2. Look up the signing key from the JWKS cache (fetch from Keycloak if expired or unknown kid).
-3. Validate JWT signature (RS256), expiry (`exp`), and issuer (`iss`).
-4. Return validated claims or reject with 401.
+Service-level wildcards (`celine/{service}/#`) require service admin access.
 
-### 2. Subject Extraction
+## Subject Types
 
-```python
-# Simplified logic
-def extract_subject(claims: dict) -> Subject:
-    if "client_id" in claims and "sub" not in claims:
-        return Subject(
-            type="service",
-            id=claims["client_id"],
-            scopes=claims.get("scope", "").split(),
-        )
-    return Subject(
-        type="user",
-        id=claims["sub"],
-        groups=extract_groups(claims),
-        scopes=claims.get("scope", "").split(),
-    )
-```
-
-### 3. Policy Evaluation
-
-1. Check the LRU decision cache using a hash of (policy_package + policy_input).
-2. On cache miss: build the policy input document and evaluate with OPA (regorus).
-3. Cache the decision with TTL.
-4. Write a structured audit log entry.
-5. Return the decision to the caller.
-
-## Caching Strategy
-
-### Decision Cache
-
-| Setting | Default | Description |
+| Type | Identification | Authorization |
 |---|---|---|
-| `DECISION_CACHE_ENABLED` | `true` | Enable/disable caching |
-| `DECISION_CACHE_TTL_SECONDS` | `300` | Time-to-live for cached decisions |
-| `DECISION_CACHE_MAXSIZE` | `10000` | Maximum cache entries |
+| User | JWT has groups | Group-based access (via `scopes.rego` helpers) |
+| Service | JWT has scopes but no groups | Scope-based access |
+| Anonymous | No valid JWT | Denied |
 
-Cache key: `hash(policy_package + policy_input)`
+## Configuration
 
-### JWKS Cache
+The MQTT auth service is configured via environment variables with the `CELINE_` prefix (see `MqttAuthSettings`):
 
-| Setting | Default | Description |
-|---|---|---|
-| `JWKS_CACHE_TTL_SECONDS` | `3600` | Key cache TTL |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CELINE_OIDC_*` | (from celine-sdk) | OIDC/JWT validation settings |
+| `CELINE_POLICIES_DIR` | `./policies` | Path to Rego policy files |
+| `CELINE_POLICIES_DATA_DIR` | `None` | Path to policy data JSON files |
+| `CELINE_POLICIES_CACHE_ENABLED` | `true` | Enable decision caching |
+| `CELINE_POLICIES_CACHE_TTL` | `300` | Cache TTL in seconds |
+| `CELINE_POLICIES_CACHE_MAXSIZE` | `10000` | Max cache entries |
+| `CELINE_MQTT_POLICY_PACKAGE` | `celine.mqtt.acl` | Rego package to evaluate |
+| `CELINE_MQTT_SUPERUSER_SCOPE` | `mqtt.admin` | Scope for superuser access |
 
-The JWKS is automatically refreshed on TTL expiry or when an unknown key ID (`kid`) appears in a token.
+The Keycloak CLI is configured via `CELINE_KEYCLOAK_*` environment variables (see `KeycloakSettings`):
 
-## Audit Logging
-
-All decisions are logged with structured JSON:
-
-```json
-{
-  "timestamp": "2024-01-31T12:00:00Z",
-  "event": "policy_decision",
-  "request_id": "550e8400-e29b-41d4-a716-446655440000",
-  "allowed": true,
-  "policy": "celine.dataset.access",
-  "subject_id": "user-123",
-  "subject_type": "user",
-  "resource_type": "dataset",
-  "resource_id": "ds-456",
-  "action": "read",
-  "source_service": "digital-twin",
-  "latency_ms": 0.42,
-  "cached": false
-}
-```
-
-## Security Considerations
-
-| Principle | Implementation |
-|---|---|
-| Never trust, always verify | Every request requires a valid JWT |
-| Least privilege | Scopes limit what each client can do |
-| Assume breach | Service-to-service requires auth |
-| Defense in depth | User groups AND client scopes both required |
-
-**Token security:** JWTs validated with RS256 signatures. Issuer (`iss`) verified against Keycloak. Expiry (`exp`) enforced. No token storage — stateless validation.
-
-## Performance Characteristics
-
-| Metric | Typical Value |
-|---|---|
-| Policy evaluation | 0.1 – 0.5 ms |
-| JWT validation (cached JWKS) | 0.5 – 1 ms |
-| Full request (uncached) | 2 – 5 ms |
-| Full request (cached) | < 1 ms |
-| Throughput | 5,000+ req/sec (single instance) |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CELINE_KEYCLOAK_BASE_URL` | `http://keycloak.celine.localhost` | Keycloak URL |
+| `CELINE_KEYCLOAK_REALM` | `celine` | Target realm |
+| `CELINE_KEYCLOAK_ADMIN_USER` | — | Admin username (for bootstrap) |
+| `CELINE_KEYCLOAK_ADMIN_PASSWORD` | — | Admin password (for bootstrap) |
+| `CELINE_KEYCLOAK_ADMIN_CLIENT_ID` | `celine-admin-cli` | Service client ID |
+| `CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET` | — | Service client secret |
+| `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` | Auto-load secret from file |

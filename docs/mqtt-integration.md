@@ -1,430 +1,194 @@
 # MQTT Integration
 
-This document covers MQTT authorization, topic patterns, and broker configuration for the CELINE platform.
+This document covers MQTT authorization, topic patterns, Rego policies, and broker configuration.
 
 ## Overview
 
-The policy service provides MQTT authorization via HTTP backend endpoints compatible with [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth).
+The CELINE MQTT setup consists of:
 
-The MQTT client connects to Mosquitto with a JWT. Mosquitto calls the Policy Service via HTTP (mosquitto-go-auth backend) on `/mqtt/user`, `/mqtt/acl`, and `/mqtt/superuser` to validate credentials and check topic permissions.
+- **Mosquitto** with [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth) plugin
+- **MQTT auth service** (`celine.mqtt_auth`) as the HTTP backend
+- **Rego policies** (`policies/celine/mqtt/acl.rego` + `policies/celine/scopes.rego`) evaluated via regorus
+
+MQTT clients authenticate with a JWT (obtained from Keycloak) passed as the MQTT password.
 
 ## Authentication Flow
 
-1. Client connects to Mosquitto with JWT as password (or in Authorization header)
-2. Mosquitto calls `/mqtt/user` to validate the JWT
-3. On publish/subscribe, Mosquitto calls `/mqtt/acl` to check topic permissions
-4. Optionally, `/mqtt/superuser` grants full access to admin users
+1. Client connects to Mosquitto with JWT as password
+2. Mosquitto calls `POST /user` on the auth service
+3. Auth service validates JWT signature, issuer, and expiry
+4. On publish/subscribe, Mosquitto calls `POST /acl`
+5. Auth service evaluates the `celine.mqtt.acl` Rego policy
+6. Superuser check via `POST /superuser` is disabled by default in the mosquitto config (`auth_opt_disable_superuser true`)
 
 ## Topic Naming Convention
 
-### Recommended Pattern
-
 ```
-celine/{service}/{resource-type}/{resource-id}/{action-or-data}
+celine/{service}/{resource}/{...}
 ```
 
-### Topic Hierarchy
+The ACL policy parses topics by splitting on `/` and derives the required scope as `{service}.{resource}.{verb}`.
 
-```
-celine/
-├── digital-twin/
-│   ├── events/{entity_type}/{entity_id}        # DT state change events
-│   │   └── e.g., celine/digital-twin/events/pump/pump-001
-│   ├── state/{entity_type}/{entity_id}         # Current state (retained)
-│   │   └── e.g., celine/digital-twin/state/pump/pump-001
-│   ├── commands/{entity_type}/{entity_id}      # Commands to DT
-│   │   └── e.g., celine/digital-twin/commands/pump/pump-001
-│   └── simulation/{run_id}/+                   # Simulation outputs
-│       └── e.g., celine/digital-twin/simulation/sim-123/results
-│
-├── pipelines/
-│   ├── status/{pipeline_id}                    # Pipeline status
-│   │   └── e.g., celine/pipelines/status/etl-daily
-│   └── events/{pipeline_id}/{event_type}       # Pipeline events
-│       └── e.g., celine/pipelines/events/etl-daily/started
-│
-├── rec-registry/
-│   └── updates/{rec_type}/{rec_id}             # Registry updates
-│       └── e.g., celine/rec-registry/updates/certificate/cert-456
-│
-├── nudging/
-│   ├── triggers/{user_id}                      # Nudge triggers
-│   │   └── e.g., celine/nudging/triggers/user-789
-│   └── responses/{user_id}                     # User responses
-│       └── e.g., celine/nudging/responses/user-789
-│
-├── telemetry/
-│   └── {device_type}/{device_id}/readings      # Raw sensor data
-│       └── e.g., celine/telemetry/meter/meter-001/readings
-│
-└── system/
-    ├── alerts/{severity}                       # System alerts
-    └── health/{service}                        # Service health
-```
+Examples:
 
-## MQTT Scopes
+| Topic | Action | Required Scope |
+|-------|--------|----------------|
+| `celine/pipelines/runs/pipeline-123` | subscribe | `pipelines.runs.read` |
+| `celine/digital-twin/events/pump/pump-001` | publish | `digital-twin.events.write` |
+| `celine/flexibility/committed/flex-456` | subscribe | `flexibility.committed.read` |
+| `celine/nudging/ingest/user-789` | publish | `nudging.ingest.write` |
 
-| Scope | Permissions | Typical Use |
-|-------|-------------|-------------|
-| `mqtt.read` | Subscribe, Read | Consumers, dashboards |
-| `mqtt.write` | Publish | Producers, services |
-| `mqtt.admin` | All + Superuser | Admin tools, debugging |
+## ACL Policy Rules
 
-## ACL Configuration
+The policy (`policies/celine/mqtt/acl.rego`) evaluates access based on topic shape:
 
-ACL rules are defined in `policies/data/celine.json`:
+### Service-level topics (`celine/{service}`)
 
-```json
-{
-  "celine": {
-    "mqtt": {
-      "acl": {
-        "rules": [
-          {
-            "subjects": { "groups": ["admins"] },
-            "topics": ["#"],
-            "actions": "*",
-            "effect": "allow"
-          },
-          {
-            "subjects": {
-              "types": ["service"],
-              "scopes": ["mqtt.write"]
-            },
-            "topics": ["celine/digital-twin/events/#"],
-            "actions": ["publish"],
-            "effect": "allow"
-          }
-        ]
-      }
-    },
-    "roles": {
-      "group_permissions": {
-        "admins": ["subscribe", "read", "publish", "superuser"],
-        "managers": ["subscribe", "read", "publish"],
-        "editors": ["subscribe", "read", "publish"],
-        "viewers": ["subscribe", "read"]
-      },
-      "scope_permissions": {
-        "mqtt.admin": ["subscribe", "read", "publish", "superuser"],
-        "mqtt.read": ["subscribe", "read"],
-        "mqtt.write": ["publish"]
-      }
-    }
-  }
-}
-```
+Access to `celine/{service}` (no resource path) requires one of:
+- Service admin scope (`{service}.admin`)
+- Global admin group (`admin` or `mqtt.admin`)
+- Service admin group (`{service}.admin` or `mqtt:{service}:admin`)
 
-### ACL Rule Structure
+### Service wildcard topics (`celine/{service}/#` or `celine/{service}/+`)
 
-```json
-{
-  "subjects": {
-    "types": ["user", "service"],
-    "ids": ["specific-client-id"],
-    "groups": ["viewers", "editors"],
-    "scopes": ["mqtt.read", "mqtt.write"]
-  },
-  "topics": ["celine/telemetry/#", "celine/+/events/+"],
-  "actions": ["subscribe", "read", "publish"],
-  "effect": "allow"
-}
-```
+Same requirements as service-level topics — only admins can use service-wide wildcards.
 
-| Field | Description |
-|-------|-------------|
-| `subjects.types` | Filter by subject type (`user`, `service`) |
-| `subjects.ids` | Filter by specific client/user IDs |
-| `subjects.groups` | Filter by user groups |
-| `subjects.scopes` | Filter by OAuth scopes |
-| `topics` | Topic patterns (supports `+` and `#` wildcards) |
-| `actions` | `subscribe`, `read`, `publish` |
-| `effect` | `allow` or `deny` (default: `allow`) |
+### Resource topics (`celine/{service}/{resource}/{...}`)
 
-### Topic Wildcards
+Standard topic access requires either:
 
-| Wildcard | Matches | Example |
-|----------|---------|---------|
-| `+` | Single level | `celine/+/events` matches `celine/dt/events` |
-| `#` | Multiple levels | `celine/dt/#` matches `celine/dt/state/pump/1` |
+**For service clients:**
+- Exact scope match (`{service}.{resource}.{verb}`)
+- Service admin scope (`{service}.admin`)
+- Resource wildcard scope (`{service}.{resource}.*`)
 
-## Example ACL Rules
+**For users:**
+- Exact group match (`{service}.{resource}.{verb}` or `mqtt:{service}:{resource}:{verb}`)
+- Resource wildcard group (`{service}.{resource}.*` or `mqtt:{service}:{resource}:*`)
+- Service admin group
+- Global admin group
 
-### Service Publishing to Its Namespace
+### Action mapping
 
-```json
-{
-  "subjects": {
-    "types": ["service"],
-    "scopes": ["mqtt.write"]
-  },
-  "topics": ["celine/digital-twin/events/#", "celine/digital-twin/state/#"],
-  "actions": ["publish"],
-  "effect": "allow"
-}
-```
-
-### Users Subscribing to Telemetry
-
-```json
-{
-  "subjects": {
-    "types": ["user"],
-    "groups": ["viewers"]
-  },
-  "topics": ["celine/telemetry/+/+/readings"],
-  "actions": ["subscribe", "read"],
-  "effect": "allow"
-}
-```
-
-### Pipeline Service Status Updates
-
-```json
-{
-  "subjects": {
-    "types": ["service"],
-    "ids": ["svc-pipelines"]
-  },
-  "topics": ["celine/pipelines/status/+", "celine/pipelines/events/#"],
-  "actions": ["publish"],
-  "effect": "allow"
-}
-```
-
-### Deny Specific Topic
-
-```json
-{
-  "subjects": {
-    "types": ["user"],
-    "groups": ["viewers"]
-  },
-  "topics": ["celine/system/alerts/critical"],
-  "actions": ["subscribe"],
-  "effect": "deny"
-}
-```
+| MQTT action | Rego verb |
+|---|---|
+| `subscribe` | `read` |
+| `read` | `read` |
+| `publish` | `write` |
 
 ## Mosquitto Configuration
 
-### mosquitto.conf
+The broker config is at `config/mosquitto/mosquitto.conf`:
 
 ```ini
-# Listener
-listener 1883
-protocol mqtt
+listener 1883           # MQTT
+listener 1884           # WebSockets
+protocol mqtt / websockets
 
-# TLS (recommended for production)
-listener 8883
-protocol mqtt
-cafile /etc/mosquitto/certs/ca.crt
-certfile /etc/mosquitto/certs/server.crt
-keyfile /etc/mosquitto/certs/server.key
-require_certificate false
+auth_plugin /mosquitto/go-auth.so
+auth_opt_backends jwt
+auth_opt_jwt_mode remote
+auth_opt_jwt_host host.docker.internal
+auth_opt_jwt_port 8009
 
-# Auth plugin
-auth_plugin /usr/lib/mosquitto-go-auth.so
+auth_opt_jwt_getuser_uri    /user
+auth_opt_jwt_aclcheck_uri   /acl
+auth_opt_jwt_superuser_uri  /superuser
 
-# HTTP backend
-auth_opt_backends http
-auth_opt_http_host policy-service
-auth_opt_http_port 8009
+auth_opt_disable_superuser true
 
-# Endpoints
-auth_opt_http_getuser_uri /mqtt/user
-auth_opt_http_aclcheck_uri /mqtt/acl
-auth_opt_http_superuser_uri /mqtt/superuser
-
-# HTTP options
-auth_opt_http_method POST
-auth_opt_http_content_type application/json
-auth_opt_http_timeout 5
-
-# Pass JWT in Authorization header
-auth_opt_http_params_mode form
-auth_opt_http_with_tls false
-
-# Caching (optional)
-auth_opt_cache true
+# Redis caching (disabled by default, redis is available in compose)
+auth_opt_cache false
 auth_opt_cache_type redis
-auth_opt_cache_host redis
+auth_opt_cache_host host.docker.internal
 auth_opt_cache_port 6379
-auth_opt_auth_cache_seconds 300
-auth_opt_acl_cache_seconds 300
 ```
 
-### Docker Compose
+The broker uses the JWT backend mode (`auth_opt_backends jwt`), not the HTTP backend. The JWT is extracted by mosquitto-go-auth and forwarded to the auth service endpoints.
+
+## Docker Compose
+
+The relevant services in `docker-compose.yaml`:
 
 ```yaml
-services:
-  mosquitto:
-    image: ghcr.io/lhns/mosquitto-go-auth:latest
-    ports:
-      - "1883:1883"
-      - "8883:8883"
-    volumes:
-      - ./config/mosquitto:/etc/mosquitto:ro
-    depends_on:
-      - policy-service
-      - redis
-    environment:
-      - POLICY_SERVICE_HOST=policy-service
-      - POLICY_SERVICE_PORT=8009
-
-  redis:
-    image: redis:7-alpine
-    # Caches auth decisions
+mqtt_auth:          # FastAPI auth service on port 8009
+mosquitto:          # Mosquitto broker on ports 1883 (MQTT) + 1884 (WS)
+redis:              # Redis for optional auth caching
 ```
 
-## Client Integration
+Mosquitto depends on `mqtt_auth` being healthy before starting.
+
+## Client Examples
 
 ### Python (paho-mqtt)
 
 ```python
 import paho.mqtt.client as mqtt
 
-def get_jwt_token() -> str:
-    # Get token from Keycloak
-    ...
+token = get_jwt_from_keycloak()
 
 client = mqtt.Client()
+client.username_pw_set(username="", password=token)
+client.connect("localhost", 1883)
 
-# Use JWT as password
-client.username_pw_set(
-    username="",  # Empty or client ID
-    password=get_jwt_token()
-)
-
-# Or with TLS
-client.tls_set(
-    ca_certs="/path/to/ca.crt",
-    certfile="/path/to/client.crt",
-    keyfile="/path/to/client.key"
-)
-
-client.connect("mqtt.celine.example", 8883)
-
-# Subscribe (requires mqtt.read scope)
+# Subscribe (requires {service}.{resource}.read scope/group)
 client.subscribe("celine/digital-twin/events/#")
 
-# Publish (requires mqtt.write scope)
-client.publish(
-    "celine/digital-twin/events/pump/pump-001",
-    payload='{"state": "running"}'
-)
+# Publish (requires {service}.{resource}.write scope/group)
+client.publish("celine/digital-twin/events/pump/pump-001", payload='{"state": "running"}')
 ```
 
-### JavaScript (mqtt.js)
+### Service Account
 
-```javascript
-const mqtt = require('mqtt');
-
-const token = await getJwtToken();
-
-const client = mqtt.connect('mqtts://mqtt.celine.example:8883', {
-  username: '',
-  password: token,
-  rejectUnauthorized: true,
-});
-
-client.on('connect', () => {
-  client.subscribe('celine/digital-twin/events/#');
-});
-
-client.on('message', (topic, message) => {
-  console.log(`${topic}: ${message.toString()}`);
-});
-```
-
-### Service Account (Client Credentials)
+Service clients use client_credentials flow to get a JWT with the scopes defined in `clients.yaml`:
 
 ```python
 import httpx
-import paho.mqtt.client as mqtt
 
-async def get_service_token():
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://keycloak:8080/realms/celine/protocol/openid-connect/token",
-            data={
-                "grant_type": "client_credentials",
-                "client_id": "svc-digital-twin",
-                "client_secret": "secret",
-                "scope": "mqtt.write",
-            }
-        )
-        return response.json()["access_token"]
-
-# Token refresh should happen before expiry
-token = await get_service_token()
-
-mqtt_client = mqtt.Client()
-mqtt_client.username_pw_set("", token)
-mqtt_client.connect("mqtt.celine.example", 1883)
+response = httpx.post(
+    "http://keycloak.celine.localhost/realms/celine/protocol/openid-connect/token",
+    data={
+        "grant_type": "client_credentials",
+        "client_id": "svc-digital-twin",
+        "client_secret": "your-secret",
+    },
+)
+token = response.json()["access_token"]
 ```
 
 ## Debugging
 
-### Check Authentication
+### Test authentication
 
 ```bash
-# Get a token
 TOKEN=$(curl -s -X POST \
   "http://localhost:8080/realms/celine/protocol/openid-connect/token" \
   -d "grant_type=client_credentials" \
-  -d "client_id=svc-test" \
-  -d "client_secret=secret" \
+  -d "client_id=svc-digital-twin" \
+  -d "client_secret=svc-digital-twin" \
   | jq -r '.access_token')
 
-# Test auth endpoint
-curl -X POST http://localhost:8009/mqtt/user \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json"
+curl -X POST http://localhost:8009/user \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-### Check ACL
+### Test ACL
 
 ```bash
-curl -X POST http://localhost:8009/mqtt/acl \
+curl -X POST http://localhost:8009/acl \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{
-    "topic": "celine/digital-twin/events/pump/1",
-    "acc": 2
-  }'
+  -d '{"clientid": "test", "topic": "celine/digital-twin/events/pump/1", "acc": 2}'
 ```
 
-### Mosquitto Logs
+### Check health
 
 ```bash
-# Enable verbose logging
-mosquitto -v
-
-# Or in config
-log_type all
-log_dest stderr
+curl http://localhost:8009/health
 ```
 
-## Best Practices
+### Decode JWT claims
 
-### Topic Design
-
-1. **Use hierarchical topics** — Enables efficient wildcard subscriptions
-2. **Include service name** — `celine/{service}/...` for clear ownership
-3. **Be consistent** — Same pattern across all services
-4. **Use retained messages** for state — `celine/dt/state/...` with retain flag
-
-### Security
-
-1. **Use TLS in production** — Port 8883 with certificates
-2. **Rotate tokens** — Handle token refresh before expiry
-3. **Principle of least privilege** — Only grant necessary topics
-4. **Monitor subscriptions** — Watch for unexpected wildcard subscriptions
-
-### Performance
-
-1. **Cache auth decisions** — Use Redis cache with mosquitto-go-auth
-2. **Batch messages** — Avoid excessive small messages
-3. **Use QoS appropriately** — QoS 0 for telemetry, QoS 1 for commands
-4. **Limit retained messages** — Don't retain high-frequency data
+```bash
+echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq
+```
