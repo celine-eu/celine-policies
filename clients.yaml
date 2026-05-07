@@ -194,6 +194,7 @@ clients:
   - client_id: svc-webapp
     name: Webapp BFF Service
     secret: ${SVC_WEBAPP_SECRET:-svc-webapp}
+    scopes_prefix: webapp
     default_scopes:
       - nudging.ingest # schedule flexibility reminders via nudging API
 
