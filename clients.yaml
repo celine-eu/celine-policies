@@ -191,6 +191,12 @@ clients:
       - nudging.ingest            # send grid_alert nudges
       - pipelines.runs.read       # subscribe to pipeline run completion events on MQTT
 
+  - client_id: svc-webapp
+    name: Webapp BFF Service
+    secret: ${SVC_WEBAPP_SECRET:-svc-webapp}
+    default_scopes:
+      - nudging.ingest # schedule flexibility reminders via nudging API
+
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
