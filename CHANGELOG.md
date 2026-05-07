@@ -2,6 +2,54 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-05-07)
+
+### Bug Fixes
+
+- Add credentials on set org
+  ([`12299ae`](https://github.com/celine-eu/celine-policies/commit/12299ae41b23b44b32113606ba3075267a7a71d6))
+
+- Add groups, add org level groups
+  ([`cd3a7ba`](https://github.com/celine-eu/celine-policies/commit/cd3a7baa655751f29c6d777a6a0dbf76ba833c0b))
+
+### Chores
+
+- Fix docker compose deps for dev setup
+  ([`ce75dfa`](https://github.com/celine-eu/celine-policies/commit/ce75dfa9748bf563d2a5ff8198d45d5825dd4c3c))
+
+- Remove pypi publishing
+  ([`68972a3`](https://github.com/celine-eu/celine-policies/commit/68972a379d33de15716857af5099114d1f81ec0e))
+
+- Update docs
+  ([`782410d`](https://github.com/celine-eu/celine-policies/commit/782410d5bc1194804c4d07787ea62f819cbf9dbd))
+
+- Update docs
+  ([`26860af`](https://github.com/celine-eu/celine-policies/commit/26860afdafc4b81daa5a4d67fbe0f96a897e7078))
+
+- Update keycloak theme title
+  ([`3c410d7`](https://github.com/celine-eu/celine-policies/commit/3c410d7d387c1ca36a7669ed33db6ea5657bf52d))
+
+- Upgrade celine-sdk to 1.11.0
+  ([`f9c8457`](https://github.com/celine-eu/celine-policies/commit/f9c84570d78c87b204cb3bd823b0477d9ad498b3))
+
+- Upgrade celine-sdk to 1.12.0
+  ([`a9ab56b`](https://github.com/celine-eu/celine-policies/commit/a9ab56b2b169931ece0be7d833527073b30837db))
+
+- Upgrade celine-sdk to 1.12.1
+  ([`cc92acd`](https://github.com/celine-eu/celine-policies/commit/cc92acd444de1623cacf1b369d3488746464ccdd))
+
+### Features
+
+- Add set user organization command
+  ([`1258afe`](https://github.com/celine-eu/celine-policies/commit/1258afe2c59b5d674d40049dd286e2d786c740d3))
+
+- Added svc-webapp with nudging scope
+  ([`c69101e`](https://github.com/celine-eu/celine-policies/commit/c69101e81dcbec521c76a3f8e1ac32f3f9fa5677))
+
+- **keycloak**: Review theme
+  ([`e20b662`](https://github.com/celine-eu/celine-policies/commit/e20b662911f01be258429a78afe24d424c65cc89))
+
+
 ## v1.3.0 (2026-04-16)
 
 ### Bug Fixes
