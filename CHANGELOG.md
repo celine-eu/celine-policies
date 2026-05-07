@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.5.0 (2026-05-07)
+
+### Features
+
+- Add scopes_prefix to svc-webapp for audience mapper derivation
+  ([`312de81`](https://github.com/celine-eu/celine-policies/commit/312de81008fe40ce7b7fcd1073433d5878234f01))
+
+
 ## v1.4.0 (2026-05-07)
 
 ### Bug Fixes
