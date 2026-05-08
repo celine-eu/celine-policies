@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.5.1 (2026-05-08)
+
+### Bug Fixes
+
+- Grid rule setting
+  ([`186cd29`](https://github.com/celine-eu/celine-policies/commit/186cd294617f409aa8aa2779fe64f605d4f12325))
+
+
 ## v1.5.0 (2026-05-07)
 
 ### Features
