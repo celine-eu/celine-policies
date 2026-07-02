@@ -13,3 +13,4 @@ __pycache__
 # Dumpster output
 sources.txt
 .dumpster
+taskfile.local.yaml
