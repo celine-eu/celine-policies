@@ -196,6 +196,51 @@ default_scopes:
 
 ---
 
+## User Groups
+
+User authorization is group-based. Groups determine what resources a user can access (e.g., internal datasets, community data).
+
+### Group Sources
+
+Groups can come from two places in the JWT:
+
+| Source | Claim | Assigned via |
+|---|---|---|
+| **Realm-level** | `groups: ["/admins"]` | Keycloak admin UI or `--group /admins` flag |
+| **Org-level** | `organization.<alias>.groups: ["/viewers"]` | `sync-users` (automatic for REC participants) |
+
+Realm-level groups are reserved for **platform management** (admins, managers). Regular REC participants receive org-level groups only.
+
+### Group Hierarchy
+
+Groups follow the standard role hierarchy (defined in `ROLE_HIERARCHY`):
+
+| Group | Capabilities |
+|---|---|
+| `admins` | Full access to all resources |
+| `managers` | Read/query access to internal datasets |
+| `editors` | (reserved for future use) |
+| `viewers` | Read/query access to internal datasets |
+
+### How Services Read Groups
+
+All CELINE services use `extract_groups()` from `celine-sdk` to read groups from JWT claims. This function merges realm-level and org-level groups into a flat list:
+
+```python
+from celine.sdk.auth.jwt import extract_groups
+
+groups = extract_groups(user.claims)
+# ["viewers"] — regardless of whether it came from realm or org
+```
+
+Services must NOT use `claims.get("groups")` directly — it misses org-level groups.
+
+### Multi-REC Isolation
+
+Group-based access is a table-level gate ("can this user query internal datasets?"). Row-level isolation for multi-REC deployments is handled separately by `row_filters` in `governance.yaml`, which restrict visible rows based on the user's registered devices or community membership.
+
+---
+
 ## Audience Mappers
 
 The `oauth2_proxy_client` field in `clients.yaml` identifies the oauth2-proxy Keycloak client. The sync tool adds audience mappers for every service client that has a `scopes_prefix`, so that user JWTs issued through oauth2-proxy carry all service audiences and pass audience validation on each service.
