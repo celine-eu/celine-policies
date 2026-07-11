@@ -95,6 +95,12 @@ scopes:
   - name: grid.admin
     description: Full access to the Grid API (all of the above, cross-user)
 
+  # MLflow
+  - name: mlflow.admin
+    description: Full access to MLflow (experiments, models, runs)
+  - name: mlflow.read
+    description: Read-only access to MLflow (experiments, runs, artifacts)
+
   # MQTT
   - name: mqtt.admin
     description: MQTT superuser access
@@ -198,6 +204,13 @@ clients:
     default_scopes:
       - nudging.ingest # schedule flexibility reminders via nudging API
 
+  - client_id: svc-forecast
+    name: Forecast Service
+    secret: ${SVC_FORECAST_SECRET:-svc-forecast}
+    scopes_prefix: mlflow
+    default_scopes:
+      - mlflow.admin
+
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
@@ -214,6 +227,7 @@ clients:
       - digital-twin.admin
       - pipelines.admin
       - dataset.admin
+      - mlflow.admin
       - mqtt.admin
       - rec-registry.admin
       - nudging.admin
