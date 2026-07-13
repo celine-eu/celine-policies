@@ -181,11 +181,11 @@ async def _async_sync(
         # Authenticate
         await client.authenticate()
 
-        # Provision realm claim scopes (organization, groups) — idempotent
+        # Provision realm claim scopes (organization, groups, dataspace) — idempotent
         if not dry_run:
             claim_changed = await client.ensure_realm_claim_scopes(config.oauth2_proxy_client)
             if claim_changed:
-                typer.echo("  ! realm claim scopes (organization, groups) provisioned")
+                typer.echo("  ! realm claim scopes (organization, groups, dataspace) provisioned")
 
         # Fetch current state
         typer.echo("Fetching current state...")

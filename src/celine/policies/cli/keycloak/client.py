@@ -107,8 +107,9 @@ class KeycloakAdminClient:
     ]
 
     # Well-known Keycloak built-in scopes to ignore during sync.
-    # 'organization' and 'groups' are managed via ensure_*_client_scope() helpers
-    # rather than through clients.yaml — exclude from orphan detection.
+    # 'organization', 'groups', and 'dataspace' are managed via
+    # ensure_*_client_scope() helpers rather than through clients.yaml —
+    # exclude from orphan detection.
     BUILTIN_SCOPES = {
         "openid",
         "profile",
@@ -123,6 +124,7 @@ class KeycloakAdminClient:
         "basic",
         "organization",
         "groups",
+        "dataspace",
     }
 
     def __init__(self, settings: KeycloakSettings):
@@ -610,10 +612,70 @@ class KeycloakAdminClient:
 
         return scope_id, changed
 
+    async def _ensure_dataspace_claim_scope(self) -> tuple[str, bool]:
+        """Ensure the 'dataspace' client scope exists with its DID attribute mapper.
+
+        Creates a ``dataspace`` scope with an ``oidc-usermodel-attribute-mapper``
+        that exposes the ``dataspace_did`` user attribute as a JWT claim.
+
+        Backward compatible: if a user has no ``dataspace_did`` attribute the
+        claim is simply absent from the JWT — no breakage for non-dataspace setups.
+
+        Returns (scope_id, changed).
+        """
+        DESIRED = {
+            "claim.name": "dataspace_did",
+            "user.attribute": "dataspace_did",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+        }
+        changed = False
+
+        scope = await self.get_client_scope_by_name("dataspace")
+        if not scope:
+            scope_id = await self.create_client_scope(
+                name="dataspace", description="Dataspace DID claims"
+            )
+            changed = True
+            logger.info("Created 'dataspace' client scope (%s)", scope_id)
+        else:
+            scope_id = scope["id"]
+
+        mappers = await self.get_scope_protocol_mappers(scope_id)
+        existing = next(
+            (m for m in mappers if m.get("name") == "dataspace-did"),
+            None,
+        )
+        if existing:
+            config = existing.get("config", {})
+            if any(config.get(k) != v for k, v in DESIRED.items()):
+                config.update(DESIRED)
+                existing["config"] = config
+                await self.update_scope_protocol_mapper(scope_id, existing)
+                logger.info("Updated dataspace-did mapper on scope %s", scope_id)
+                changed = True
+        else:
+            await self._post(
+                f"/client-scopes/{scope_id}/protocol-mappers/models",
+                json={
+                    "name": "dataspace-did",
+                    "protocol": "openid-connect",
+                    "protocolMapper": "oidc-usermodel-attribute-mapper",
+                    "consentRequired": False,
+                    "config": DESIRED,
+                },
+            )
+            logger.info("Added dataspace-did mapper to scope %s", scope_id)
+            changed = True
+
+        return scope_id, changed
+
     async def ensure_realm_claim_scopes(
         self, oauth2_proxy_client_id: str | None = None
     ) -> bool:
-        """Idempotently provision realm-level claim scopes (organization, groups).
+        """Idempotently provision realm-level claim scopes (organization, groups, dataspace).
 
         For each scope:
           1. Ensure the scope + protocol mapper exist (create/update on drift)
@@ -639,7 +701,13 @@ class KeycloakAdminClient:
         c = await self._ensure_scope_not_realm_default(groups_id, "groups")
         changed = changed or c
 
-        # --- assign both as Default on oauth2_proxy ---
+        # --- dataspace scope ---
+        ds_id, c = await self._ensure_dataspace_claim_scope()
+        changed = changed or c
+        c = await self._ensure_scope_not_realm_default(ds_id, "dataspace")
+        changed = changed or c
+
+        # --- assign all three as Default on oauth2_proxy ---
         if oauth2_proxy_client_id:
             proxy = await self.get_client_by_client_id(oauth2_proxy_client_id)
             if proxy:
@@ -647,6 +715,8 @@ class KeycloakAdminClient:
                 c = await self._ensure_scope_default_on_client(proxy_uuid, "organization")
                 changed = changed or c
                 c = await self._ensure_scope_default_on_client(proxy_uuid, "groups")
+                changed = changed or c
+                c = await self._ensure_scope_default_on_client(proxy_uuid, "dataspace")
                 changed = changed or c
             else:
                 logger.warning(

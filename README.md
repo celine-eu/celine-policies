@@ -83,6 +83,33 @@ celine-policies keycloak set-user-organization  # Assign user to org + groups
 celine-policies keycloak status          # Show current Keycloak state
 ```
 
+## Dataspace Integration
+
+The CLI manages Keycloak resources for the CELINE dataspace layer (identity
+registry, onboarding, portal).
+
+### `dataspace` claim scope
+
+`ensure_realm_claim_scopes()` creates a `dataspace` client scope with an
+`oidc-usermodel-attribute-mapper` that maps the Keycloak user attribute
+`dataspace_did` into a `dataspace_did` JWT claim (id, access, and userinfo
+tokens). The scope is assigned as a default scope on the `oauth2_proxy` client,
+so every user JWT automatically carries the claim when the attribute is set.
+
+### `identity-registry.admin` scope
+
+A standard OAuth scope granting admin access to the dataspace identity-registry
+API. It follows the `{service}.admin` naming convention.
+
+### Dataspace service clients
+
+All three follow the `svc-ds-*` naming convention to distinguish dataspace
+services from platform services (`svc-*`).
+
+- **`svc-ds-identity-registry`** -- Identity Registry backend. Owns the `identity-registry` scope prefix.
+- **`svc-ds-onboarding`** -- Onboarding service. Gets `identity-registry.admin` scope and uses `extra_audiences: [svc-ds-identity-registry]` for token forwarding.
+- **`svc-ds-portal`** -- User-facing OIDC client (`service_account_enabled: false`). Default scopes: `dataset.query`, `dataset.read`.
+
 ## Development
 
 ```bash

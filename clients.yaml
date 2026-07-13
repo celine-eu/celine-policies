@@ -105,6 +105,10 @@ scopes:
   - name: mqtt.admin
     description: MQTT superuser access
 
+  # Dataspace Identity Registry
+  - name: identity-registry.admin
+    description: Admin access to dataspace identity-registry API
+
 # =============================================================================
 # CLIENTS
 # =============================================================================
@@ -231,3 +235,30 @@ clients:
       - mqtt.admin
       - rec-registry.admin
       - nudging.admin
+
+  # ── Dataspace services ─────────────────────────────────────────────
+
+  - client_id: svc-ds-identity-registry
+    name: Dataspace Identity Registry
+    secret: ${SVC_DS_IDENTITY_REGISTRY_SECRET:-svc-ds-identity-registry}
+    scopes_prefix: identity-registry
+    default_scopes:
+      - identity-registry.admin
+
+  - client_id: svc-ds-onboarding
+    name: Dataspace Onboarding
+    secret: ${SVC_DS_ONBOARDING_SECRET:-svc-ds-onboarding}
+    scopes_prefix: null
+    default_scopes:
+      - identity-registry.admin
+    extra_audiences:
+      - svc-ds-identity-registry
+
+  - client_id: svc-ds-portal
+    name: Dataspace Portal
+    secret: ${SVC_DS_PORTAL_SECRET:-svc-ds-portal}
+    service_account_enabled: false
+    scopes_prefix: null
+    default_scopes:
+      - dataset.query
+      - dataset.read
