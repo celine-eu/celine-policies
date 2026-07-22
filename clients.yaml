@@ -290,6 +290,7 @@ clients:
       - dataset.read
       - identity-registry.resolve
       - identity-registry.read
+      - identity-registry.membership.read
       - connector.admin
       - provenance.read
       - catalog.read
