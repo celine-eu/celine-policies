@@ -127,6 +127,29 @@ scopes:
     description: Resolve user identity by email
   - name: identity-registry.membership.read
     description: Check organization membership
+  # Split out of identity-registry.admin so a console or a service can be granted
+  # exactly what it calls. `identity-registry.admin` still satisfies all of them
+  # (superset), so the CLI and bootstrap are unaffected. Mirrors ds's
+  # services/keycloak/clients.yaml — the two vocabularies must not drift, or a
+  # client that authorizes in the dataspaces realm 403s in this one.
+  - name: identity-registry.organizations.read
+    description: Read organisation applications and owners
+  - name: identity-registry.organizations.write
+    description: Register, verify and credential an organisation
+  # Separate from .write on purpose: promotion is the irreversible act that turns
+  # an applicant into a DSP counterparty.
+  - name: identity-registry.organizations.promote
+    description: Promote, suspend or revoke an organisation as a participant
+  - name: identity-registry.agreements.read
+    description: Read service agreements and their acceptances
+  - name: identity-registry.participants.write
+    description: Register, update or deactivate a DSP participant
+  - name: identity-registry.credentials.write
+    description: Issue and revoke a data-subject credential
+  - name: identity-registry.memberships.write
+    description: Register or delete an organisation membership
+  - name: identity-registry.keycloak.sync
+    description: Push the dataspace_did attribute onto a Keycloak user
 
   # Dataspace Connector
   - name: connector.admin
@@ -295,11 +318,16 @@ clients:
     name: Dataspace Onboarding
     secret: ${SVC_DS_ONBOARDING_SECRET:-svc-ds-onboarding}
     default_scopes:
-      # Issue the data-subject credential, register the organisation membership
-      # and sync the DID onto the Keycloak user. Still `admin` because the
-      # identity-registry has not split credentials, memberships and
-      # keycloak-sync into their own grants yet.
-      - identity-registry.admin
+      # Resolve the bound community's organisation at boot. Read-only: this
+      # client creates no owners — a missing organisation is a startup failure,
+      # not something to auto-create.
+      - identity-registry.organizations.read
+      # Issue the data-subject credential on approval, revoke it on removal.
+      - identity-registry.credentials.write
+      # Register and delete the person's organisation membership.
+      - identity-registry.memberships.write
+      # Sync the DID onto the Keycloak user.
+      - identity-registry.keycloak.sync
       # Provision the subject's standing sharing decision after approval
       # (POST /consent/admin/shares).
       - connector.consent.provision
