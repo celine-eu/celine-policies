@@ -76,6 +76,41 @@ scopes:
   - name: rec-registry.lookup
     description: Permission to lookup data
 
+  # REC Onboarding
+  # The console's authorization is primarily *group*-based: a REC operator is
+  # authorised by membership of the community's Keycloak organization plus one of
+  # the admins/managers/editors/viewers org groups, and carries no scope. These
+  # scopes exist for the other subject type — service accounts and the CLI, which
+  # have no organization and so must state their intent explicitly. Every one of
+  # them is satisfied by `onboarding.admin` through the admin-override rule.
+  - name: onboarding.admin
+    description: Full administrative access to the onboarding console API
+  - name: onboarding.recs.read
+    description: List the communities the caller may administer
+  - name: onboarding.submissions.read
+    description: Read submissions, with fiscal code and POD masked
+  - name: onboarding.submissions.reveal
+    description: Unmask a submission's fiscal code and POD (each reveal is audit-logged)
+  - name: onboarding.submissions.write
+    description: Edit submission fields and operator notes
+  - name: onboarding.submissions.review
+    description: Drive the review state machine (take in charge, approve, reject, reopen)
+  # Separate from .review on purpose, mirroring rec-registry.members.purge:
+  # rejecting somebody is recoverable, erasing them is not, and the two must not
+  # become grantable together by accident.
+  - name: onboarding.submissions.purge
+    description: GDPR erasure of a submission, its files and its enablement state
+  - name: onboarding.enablement.retry
+    description: Re-run a failed enablement step for an approved participant
+  # Reversal is admin-only for the same reason: it revokes a credential and
+  # deletes a registry member.
+  - name: onboarding.enablement.revoke
+    description: Reverse enablement — revoke the credential, membership and login
+  - name: onboarding.audit.read
+    description: Read a community's onboarding audit trail
+  - name: onboarding.export
+    description: Export submissions or consented supply points
+
   # Nudging
   - name: nudging.admin
     description: Admin nudging
@@ -239,6 +274,36 @@ clients:
       # Own resources
       - rec-registry.admin
 
+  # REC onboarding console API. Declared here so that (a) `onboarding.*` has an
+  # owner and (b) oauth2-proxy mints `aud: svc-onboarding` on user JWTs — which is
+  # what lets a REC operator's browser token authenticate against the console.
+  #
+  # This is deliberately NOT the same client as `svc-ds-onboarding` below. That one
+  # is the onboarding service's *outbound* identity for the dataspace, and renaming
+  # it would ripple through the ds deployment's env. One service, two clients: this
+  # one for inbound audience validation, that one for outbound M2M. Consolidate
+  # under this id when the ds env can be changed in the same pass.
+  - client_id: svc-onboarding
+    name: REC Onboarding Console
+    secret: ${SVC_ONBOARDING_SECRET:-svc-onboarding}
+    scopes_prefix: onboarding
+    default_scopes:
+      # Own resources — REC operators get their capabilities from org group
+      # membership, not from scopes, via the oauth2-proxy audience mapper.
+      - onboarding.admin
+
+  # The `onboarding-cli` review/enablement commands. Holds the superset because it
+  # is the break-glass and e2e driver; a narrower client is what a scheduled job
+  # should use.
+  - client_id: svc-onboarding-cli
+    name: REC Onboarding CLI
+    secret: ${SVC_ONBOARDING_CLI_SECRET:-svc-onboarding-cli}
+    # No scopes_prefix — it owns nothing, it only calls.
+    extra_audiences:
+      - svc-onboarding
+    default_scopes:
+      - onboarding.admin
+
   - client_id: svc-flexibility
     name: Flexibility API Service
     secret: ${SVC_FLEXIBILITY_SECRET:-svc-flexibility}
@@ -291,6 +356,7 @@ clients:
       - svc-nudging
       - svc-flexibility
       - svc-grid
+      - svc-onboarding
       - oauth2_proxy
     # No scopes_prefix — sudo client, exempt from audience mapper generation
     default_scopes:
@@ -301,6 +367,7 @@ clients:
       - mqtt.admin
       - rec-registry.admin
       - nudging.admin
+      - onboarding.admin
 
   # ── Dataspace services ─────────────────────────────────────────────
 
