@@ -218,17 +218,55 @@ class TestClientsYamlDataspaceEntries:
         client_ids = config.get_client_ids()
         assert "svc-ds-onboarding" in client_ids
         ob = next(c for c in config.clients if c.client_id == "svc-ds-onboarding")
-        assert "identity-registry.admin" in ob.default_scopes
+        # Each capability is granted on its own — see the rationale comments in
+        # clients.yaml. Asserted individually so dropping one is a failure here
+        # rather than a 403 at approval time.
+        assert {
+            "identity-registry.organizations.read",
+            "identity-registry.credentials.write",
+            "identity-registry.memberships.write",
+            "identity-registry.keycloak.sync",
+        } <= set(ob.default_scopes)
         assert "svc-ds-identity-registry" in ob.extra_audiences
+
+    def test_ds_onboarding_holds_no_registry_admin_scope(self):
+        """The least-privilege realignment must not be undone.
+
+        This client used to hold `identity-registry.admin`, which also covers
+        creating and deleting organizations — authority an onboarding flow has
+        no use for. Re-adding it would silently widen the blast radius of a
+        compromised onboarding service back to the whole identity registry.
+        """
+        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
+        ob = next(c for c in config.clients if c.client_id == "svc-ds-onboarding")
+        assert "identity-registry.admin" not in ob.default_scopes
+        assert "identity-registry.admin" not in ob.optional_scopes
 
     def test_ds_portal_client(self):
         config = KeycloakConfig.from_yaml(CLIENTS_YAML)
         client_ids = config.get_client_ids()
         assert "svc-ds-portal" in client_ids
         portal = next(c for c in config.clients if c.client_id == "svc-ds-portal")
-        assert portal.service_account_enabled is False
+        # Set explicitly in clients.yaml: the portal calls the registry, the
+        # connector and dataset-api as itself, so it needs its own credential.
+        assert portal.service_account_enabled is True
         assert "dataset.query" in portal.default_scopes
         assert "dataset.read" in portal.default_scopes
+
+    def test_ds_portal_reaches_the_registry_read_only(self):
+        """A browser-facing portal must not be able to mint or revoke identity.
+
+        It resolves and reads; issuing credentials belongs to the onboarding
+        service, which is not exposed to end users.
+        """
+        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
+        portal = next(c for c in config.clients if c.client_id == "svc-ds-portal")
+        registry_scopes = [
+            s for s in portal.default_scopes if s.startswith("identity-registry.")
+        ]
+        assert registry_scopes, "portal no longer talks to the identity registry?"
+        assert all(s.endswith(".read") or s.endswith(".resolve") for s in registry_scopes)
+        assert "identity-registry.admin" not in portal.default_scopes
 
     def test_no_undefined_scope_references(self):
         config = KeycloakConfig.from_yaml(CLIENTS_YAML)

@@ -94,6 +94,10 @@ def sync(
     Reads a YAML configuration file and ensures Keycloak matches the desired state.
     This command is idempotent - running it multiple times has the same effect.
 
+    Defaults to ENV=prod, which refuses to sync a client whose secret is still the
+    clients.yaml placeholder (a secret equal to the client id, or an empty one).
+    Export ENV=dev to accept those fallbacks on a local realm.
+
     Example:
         celine-policies keycloak sync config/keycloak.yaml --dry-run
         celine-policies keycloak sync config/keycloak.yaml --admin-user admin --admin-password admin
@@ -124,6 +128,13 @@ def sync(
 
     typer.echo(f"Syncing to Keycloak: {settings.base_url} realm={settings.realm}")
     typer.echo(f"Config: {len(config.scopes)} scopes, {len(config.clients)} clients")
+    typer.echo(f"Environment: {settings.env}")
+
+    # Refuse to write dev placeholder secrets into a production realm. Checked
+    # before authenticating so a misconfigured deployment fails on its own
+    # machine rather than halfway through rewriting a live realm.
+    if settings.is_production:
+        _fail_on_placeholder_secrets(config)
 
     # Validate scope references
     undefined = config.validate_scope_references()
@@ -168,6 +179,42 @@ def sync(
 
     if not result.success:
         raise typer.Exit(1)
+
+
+def _fail_on_placeholder_secrets(config: KeycloakConfig) -> None:
+    """Abort the sync if any client would be given a dev placeholder secret.
+
+    `clients.yaml` writes secrets as `${SVC_X_SECRET:-svc-x}`, so an unset
+    variable resolves to the client_id itself. Locally that is the whole point;
+    in a production realm it is a client credential anyone can derive from the
+    client list, and nothing downstream would ever complain about it.
+
+    Raises typer.Exit(1) — the failure has to be loud, and it names every
+    offending client and the variable that fixes it.
+    """
+    offenders = config.clients_with_placeholder_secrets()
+    if not offenders:
+        return
+
+    typer.secho(
+        f"\nRefusing to sync: {len(offenders)} client(s) have a placeholder secret "
+        "and ENV is not a development environment.",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    for client_id in offenders:
+        source = config.secret_source(client_id)
+        hint = f"set {source}" if source else "set an explicit secret in the config"
+        typer.secho(f"  ! {client_id} — {hint}", fg=typer.colors.RED, err=True)
+
+    typer.secho(
+        "\nA secret equal to the client_id (or an empty one) is guessable from the "
+        "client list alone.\nSet the variables above, or export ENV=dev if this is "
+        "a local realm and the defaults are intended.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+    raise typer.Exit(1)
 
 
 async def _async_sync(

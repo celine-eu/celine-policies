@@ -83,6 +83,30 @@ celine-policies keycloak set-user-organization  # Assign user to org + groups
 celine-policies keycloak status          # Show current Keycloak state
 ```
 
+### `ENV` — production safety
+
+Every client secret in `clients.yaml` is written as `${SVC_X_SECRET:-svc-x}`, so
+an unset variable resolves the secret to the client id itself. That is the point
+locally; against a real realm it installs a credential anyone can derive from the
+client list, and nothing downstream ever complains.
+
+`keycloak sync` therefore **defaults to `ENV=prod`** and refuses to run when any
+client would receive such a placeholder, naming each offending client and the
+variable that fixes it. It fails before authenticating, so a misconfigured
+deployment stops on its own machine rather than halfway through a live realm.
+
+```bash
+ENV=dev celine-policies keycloak sync    # accept the clients.yaml fallbacks
+SVC_DATASET_SECRET=... celine-policies keycloak sync   # or supply real secrets
+```
+
+`taskfile.yaml` exports `ENV=dev` for the whole file, so `task keycloak:sync` and
+friends behave as before. Resolution order is `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`,
+then plain `ENV`; `dev`, `development`, `local`, `test` and `ci` disable the
+check, and **anything else — including a typo or nothing at all — is production**.
+Declaring no `secret:` at all is always accepted: Keycloak then generates one,
+which is the recommended production shape.
+
 ## Dataspace Integration
 
 The CLI manages Keycloak resources for the CELINE dataspace layer (identity

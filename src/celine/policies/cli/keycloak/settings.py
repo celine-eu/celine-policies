@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import secrets as _secrets
@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # Default secrets file path
 DEFAULT_SECRETS_FILE = Path(".client.secrets.yaml")
 DEFAULT_ADMIN_CLIENT_ID = "celine-admin-cli"
+
+# Values of ENV that mean "the clients.yaml fallbacks are what I want".
+# Everything else — including a typo and including nothing at all — is treated
+# as production, so the safety checks are on unless someone opted out on purpose.
+NON_PRODUCTION_ENVS = frozenset({"dev", "development", "local", "test", "ci"})
 
 
 def _load_secret_from_file(
@@ -63,6 +68,23 @@ class KeycloakSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="CELINE_KEYCLOAK_",
         extra="ignore",
+        # `env` declares explicit aliases, which would otherwise be the only way
+        # to set it — this keeps KeycloakSettings(env="dev") working too.
+        populate_by_name=True,
+    )
+
+    # Deployment environment. Defaults to production so that a deployment which
+    # says nothing gets the strict checks; dev opts out explicitly (taskfile.yaml
+    # exports ENV=dev, where the clients.yaml secret fallbacks are the point).
+    #
+    # Read from CELINE_KEYCLOAK_ENV, CELINE_ENV or plain ENV, in that order. The
+    # bare name is accepted because it is the conventional one in deployment
+    # manifests — but it is also a POSIX shell variable in some setups, so a
+    # prefixed name wins when both are present.
+    env: str = Field(
+        default="prod",
+        validation_alias=AliasChoices("CELINE_KEYCLOAK_ENV", "CELINE_ENV", "ENV"),
+        description="Deployment environment: 'prod' (default, strict) or 'dev'",
     )
 
     # Connection
@@ -106,6 +128,17 @@ class KeycloakSettings(BaseSettings):
     )
 
     @property
+    def is_production(self) -> bool:
+        """Whether to apply production safety checks.
+
+        True unless ENV names a known non-production environment. An unset or
+        misspelled value is production: the failure mode of being strict in dev
+        is a one-line export, the other way round it is a guessable secret in a
+        live realm.
+        """
+        return self.env.strip().lower() not in NON_PRODUCTION_ENVS
+
+    @property
     def realm_url(self) -> str:
         """Get the realm-specific URL."""
         return f"{self.base_url.rstrip('/')}/realms/{self.realm}"
@@ -143,6 +176,7 @@ class KeycloakSettings(BaseSettings):
     ) -> "KeycloakSettings":
         """Create a new settings instance with CLI overrides applied."""
         return KeycloakSettings(
+            env=self.env,
             base_url=base_url or self.base_url,
             realm=realm or self.realm,
             timeout=self.timeout,

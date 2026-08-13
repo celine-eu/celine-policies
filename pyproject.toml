@@ -16,6 +16,15 @@ dependencies = [
     "celine-regorus>=0.9.1.post20260227075446",
     "celine-sdk>=1.13.0",
     "typer>=0.23.1",
+    # Imported directly by the Keycloak CLI (settings, models, sync, bootstrap,
+    # _utils) but never declared — it arrived transitively via uvicorn[standard].
+    # Declared now so the CLI cannot break when an unrelated dependency drops it.
+    "pyyaml>=6.0",
+    # `owners.schema.json` and its validator. Plain `celine-utils`, never `[all]`:
+    # the extra pulls dbt, Meltano and Prefect, none of which this service has any
+    # business installing. The thin core adds only jsonschema on top of pydantic
+    # and pyyaml, both already here.
+    "celine-utils>=2.0.0",
 ]
 
 [project.optional-dependencies]

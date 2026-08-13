@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 
 # Pattern for ${VAR} and ${VAR:-default} interpolation
@@ -165,6 +165,25 @@ class ClientConfig(BaseModel):
             return info.data["client_id"]
         return v or ""
 
+    def has_placeholder_secret(self) -> bool:
+        """Whether this client's secret is a development placeholder.
+
+        Two shapes, both produced by an unset environment variable:
+
+        - ``secret == client_id`` — the ``${SVC_X_SECRET:-svc-x}`` fallback. Fine
+          locally, but in a real realm it is a credential anyone can guess from
+          the client list.
+        - an empty secret — ``${SVC_X_SECRET}`` with nothing to resolve to. It is
+          sent to Keycloak as no secret at all, so whatever was there before
+          silently stays in force.
+
+        ``None`` is not a placeholder: it means the YAML declares no secret and
+        Keycloak generates a real one.
+        """
+        if self.secret is None:
+            return False
+        return not self.secret.strip() or self.secret == self.client_id
+
     def scope_prefix_of(self, scope_name: str) -> str:
         """Extract the service prefix from a scope name (part before first '.')."""
         return scope_name.split(".")[0]
@@ -232,6 +251,12 @@ class KeycloakConfig(BaseModel):
         ),
     )
 
+    # client_id -> the secret exactly as written in the YAML, before
+    # interpolation. Kept so that a placeholder that resolved to nothing can be
+    # reported as the variable an operator has to set, rather than as a value
+    # they would have to go and look up.
+    _raw_secrets: dict[str, str] = PrivateAttr(default_factory=dict)
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "KeycloakConfig":
         """Load configuration from a YAML file with env var interpolation."""
@@ -243,10 +268,40 @@ class KeycloakConfig(BaseModel):
         if not isinstance(raw, dict):
             raise ValueError(f"Config file must be a YAML mapping: {path}")
 
+        raw_secrets = {
+            entry["client_id"]: entry["secret"]
+            for entry in raw.get("clients") or []
+            if isinstance(entry, dict)
+            and isinstance(entry.get("client_id"), str)
+            and isinstance(entry.get("secret"), str)
+        }
+
         # Resolve environment variables
         resolved = _resolve_env(raw)
 
-        return cls.model_validate(resolved)
+        config = cls.model_validate(resolved)
+        config._raw_secrets = raw_secrets
+        return config
+
+    def secret_source(self, client_id: str) -> str | None:
+        """The environment variable a client's secret comes from, if any.
+
+        ``${SVC_X_SECRET:-svc-x}`` → ``SVC_X_SECRET``. None when the secret is
+        hardcoded, absent, or the config was not loaded from a file.
+        """
+        raw = self._raw_secrets.get(client_id)
+        if not raw:
+            return None
+        match = _ENV_PATTERN.search(raw)
+        return match.group(1) if match else None
+
+    def clients_with_placeholder_secrets(self) -> list[str]:
+        """Client IDs whose secret is a dev placeholder — see `has_placeholder_secret`.
+
+        Checked before syncing a production realm: every entry here is a client
+        whose credential is either guessable from its own name or missing.
+        """
+        return sorted(c.client_id for c in self.clients if c.has_placeholder_secret())
 
     def get_scope_names(self) -> set[str]:
         """Get all scope names defined in config."""

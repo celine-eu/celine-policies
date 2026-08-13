@@ -1,5 +1,12 @@
 version: "3"
 
+# Everything driven from this taskfile targets the local dev realm, where the
+# `${SVC_X_SECRET:-svc-x}` fallbacks in clients.yaml are exactly what we want.
+# `keycloak sync` defaults to ENV=prod and refuses those placeholders, so dev
+# opts out here rather than the code defaulting to the unsafe side.
+env:
+  ENV: dev
+
 includes:
   local:
     taskfile: taskfile.local.yaml

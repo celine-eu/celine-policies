@@ -7,6 +7,8 @@ import logging
 import yaml
 from pathlib import Path
 
+from celine.governance import validate_owners
+
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 
 
@@ -91,11 +93,25 @@ def load_owners(owner_yamls: list[Path]) -> list[dict]:
     overrides to extend or replace entries from the base owners.yaml.
 
     Returns a list of owner dicts. Entries without an 'id' are skipped.
+
+    Each file is checked against ``owners.schema.json`` before it is merged.
+    This command provisions real Keycloak organizations, and the failure it
+    prevents is a quiet one: a mistyped key is not an error anywhere — the
+    schema was published but never executed, and the loop below skips an entry
+    it cannot identify with a log line — so the registry loads, the run reports
+    success, and one organization is simply missing. That surfaces later as an
+    authorization failure with nothing to connect it to.
+
+    Deliberately not merged through ``celine.governance.OwnersRegistry``: this
+    stays on raw dicts because the shadowing merge across several files is not
+    something the canonical single-file loader expresses, and because the
+    Keycloak payloads below are built from the YAML shape directly.
     """
     logger = logging.getLogger(__name__)
     merged: dict[str, dict] = {}
     for path in owner_yamls:
         raw = yaml.safe_load(path.read_text())
+        validate_owners(raw, source=str(path))
         for entry in raw.get("owners", []):
             owner_id = entry.get("id")
             if not owner_id:
