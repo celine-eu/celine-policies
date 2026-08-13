@@ -2,6 +2,48 @@
 
 <!-- version list -->
 
+## v1.6.0 (2026-08-13)
+
+### Bug Fixes
+
+- Add ds permissions
+  ([`d9d2430`](https://github.com/celine-eu/celine-policies/commit/d9d2430ccbf470c2938623c8852fa30367f0528b))
+
+- Realign ds scopes
+  ([`66941c8`](https://github.com/celine-eu/celine-policies/commit/66941c863897da924cca94d027704700774831a2))
+
+### Chores
+
+- Add external taskfile import
+  ([`98b66d8`](https://github.com/celine-eu/celine-policies/commit/98b66d84a285b36f5104b02ff92a1fb2bbac0ebf))
+
+- Add forecast service
+  ([`1c2f6c1`](https://github.com/celine-eu/celine-policies/commit/1c2f6c1534def6845a5e04435d15a7b87c4adeae))
+
+- Comment ds scopes
+  ([`7008cc6`](https://github.com/celine-eu/celine-policies/commit/7008cc62a341ad83c6ab3083d90ec36677f9c0e7))
+
+- Introduce ds clients
+  ([`1036724`](https://github.com/celine-eu/celine-policies/commit/103672442339ca486ba62756c3fe068173c3c9c7))
+
+- Update clietns
+  ([`3db2114`](https://github.com/celine-eu/celine-policies/commit/3db2114aed5e1108aa2f8fe3dcc5f47f49c0b766))
+
+- Upgrade celine-sdk to 1.13.0
+  ([`d04cea1`](https://github.com/celine-eu/celine-policies/commit/d04cea16f1d731c88aa8adf9d11826198ae108bc))
+
+### Features
+
+- Add client and scopes for onboarding clients.yaml
+  ([`347f76b`](https://github.com/celine-eu/celine-policies/commit/347f76b5419a8688e3a7d7d30af512a73434768a))
+
+- Add ds clients
+  ([`d1d4e40`](https://github.com/celine-eu/celine-policies/commit/d1d4e409d7ff0ecddb74a9aaef5a7f1e4cd9a370))
+
+- Add ENV gate to block client id equal to secrets
+  ([`fd052bb`](https://github.com/celine-eu/celine-policies/commit/fd052bb68a2e6d4a69d5be848729649c5b566c46))
+
+
 ## v1.5.1 (2026-05-08)
 
 ### Bug Fixes
