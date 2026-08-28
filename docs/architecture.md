@@ -64,19 +64,21 @@ MQTT Client ──(JWT as password)──> Mosquitto
 ## Keycloak Sync Flow
 
 ```
-clients.yaml ──┐
-               ├─ merge ──> celine-policies keycloak sync ──> Keycloak Admin API
-clients.*.yaml ┘  (--overlay, repeatable)
-                       │
-                 compute diff
-                 (scopes to create/update,
-                  clients to create/update,
-                  scope assignments,
-                  audience mappers)
-                       │
-                 apply changes
-                       │
-                 .client.secrets.yaml
+clients.yaml ─────────┐   celine's own services — a whole realm on its own
+clients.ds-host.yaml ─┤   the grants celine adds to ds's clients   ┐ only where a
+<ds>/clients.yaml ────┘   ds's own declaration of those clients    ┘ dataspace runs
+          │
+          └─ merge (--overlay, repeatable)
+                 │
+                 ├─ compute diff
+                 │    scopes to create/update
+                 │    clients to create/update
+                 │    scope assignments
+                 │    audience mappers
+                 │
+                 ├─ apply changes ──> Keycloak Admin API
+                 │
+                 └─ .client.secrets.yaml
 ```
 
 The `sync` command:

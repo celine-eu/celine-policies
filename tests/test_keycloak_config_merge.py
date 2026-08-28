@@ -42,6 +42,7 @@ from celine.policies.cli.main import app
 runner = CliRunner()
 
 CLIENTS_YAML = Path(__file__).resolve().parents[1] / "clients.yaml"
+DS_HOST_YAML = Path(__file__).resolve().parents[1] / "clients.ds-host.yaml"
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
@@ -1033,3 +1034,74 @@ class TestSyncCommand:
 
         assert result.exit_code != 0
         assert not async_sync.called
+
+
+class TestTheDataspaceIsOptional:
+    """The base file is a whole realm on its own.
+
+    `clients.yaml` declares celine's services and nothing about the dataspace.
+    A deployment with no dataspace passes it alone; a deployment with one adds
+    `clients.ds-host.yaml` and ds's own file. The point of the split is that
+    the first case is not a degraded version of the second — it is correct.
+    """
+
+    def test_the_base_file_is_syncable_alone(self):
+        """No overlay, no `requires:`, no refusal — a celine realm."""
+        config = KeycloakConfig.from_yaml_files([CLIENTS_YAML], complete=True)
+        assert config.realm == "celine"
+        assert config.validate_scope_references() == []
+        assert config.contested_scope_prefixes() == {}
+
+    def test_the_base_file_requires_nothing(self):
+        """A `requires: [ds]` here would make an optional component mandatory.
+
+        It is also unnecessary: the entries that genuinely need ds live in
+        `clients.ds-host.yaml`, and the completeness check refuses *those*
+        without it. See the test below.
+        """
+        raw = yaml.safe_load(CLIENTS_YAML.read_text())
+        assert "requires" not in raw
+
+    def test_the_base_file_declares_nothing_about_the_dataspace(self):
+        """The hand-pasted copy is gone and must not come back.
+
+        Any `svc-ds-*` client here is either a duplicate of ds's declaration —
+        which the merge refuses as a double-declared identity — or a grant that
+        belongs in the host overlay.
+        """
+        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
+        assert not [c for c in config.clients if c.client_id.startswith("svc-ds-")]
+        assert "svc-edc" not in config.get_client_ids()
+        families = {s.name.split(".")[0] for s in config.scopes}
+        assert not families & {"identity-registry", "connector", "provenance", "catalog"}
+
+    def test_the_host_overlay_is_refused_without_a_dataspace_declaration(self):
+        """The trap the split could have created, closed by the merge itself.
+
+        Mounting celine's host-side grants while forgetting ds's file would
+        otherwise have the sync create eight clients with no name and generated
+        secrets. It refuses before authenticating, and no `requires:` key is
+        involved.
+        """
+        with pytest.raises(MergeError) as exc:
+            KeycloakConfig.from_yaml_files(
+                [CLIENTS_YAML, DS_HOST_YAML], complete=True
+            )
+        message = str(exc.value)
+        assert "no supplied file declares" in message
+        for client_id in ("svc-ds-portal", "svc-ds-onboarding"):
+            assert client_id in message
+
+    def test_the_host_overlay_alone_still_loads_for_the_other_commands(self):
+        """`sync-orgs` and `sync-users` read client ids, they do not write a realm.
+
+        They call `from_yaml`, which does not run the completeness check — the
+        distinction that lets the base file carry grants-only entries at all.
+        """
+        config = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        assert {c.client_id for c in config.clients} == {
+            "svc-ds-identity-registry",
+            "svc-ds-onboarding",
+            "svc-ds-portal",
+            "svc-ds-dataset-api",
+        }

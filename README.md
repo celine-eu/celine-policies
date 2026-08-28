@@ -118,7 +118,9 @@ So when a realm is declared by more than one party, pass every file and let the 
 merge them:
 
 ```bash
-celine-policies keycloak sync clients.yaml --overlay clients.ds.yaml
+celine-policies keycloak sync clients.yaml \
+    --overlay clients.ds-host.yaml \
+    --overlay /path/to/ds/clients.yaml
 ```
 
 `--overlay` is repeatable. Merging happens before anything else, so the placeholder-secret
@@ -135,19 +137,38 @@ last-wins:
 | `realm`, `oauth2_proxy_client` | stated by any file; two files disagreeing is an error |
 | a `scopes_prefix` | claimed by one client only — it decides where every audience mapper for those scopes points |
 
-A file that cannot be synced on its own says so, and the file that answers it identifies
-itself by name — not by path, because a deployment mounts a file wherever it likes:
+### Which files this repository ships
+
+| file | declares | mounted |
+|---|---|---|
+| `clients.yaml` | celine's own services | always — it is a whole realm on its own |
+| `clients.ds-host.yaml` | the grants celine adds to the dataspace's clients | only where a dataspace is deployed, and only with ds's file |
+
+**The dataspace is optional, so the base file does not require it.** `clients.yaml`
+declares nothing about ds — no client, no scope family — and syncing it alone produces a
+correct celine realm. Where a dataspace is deployed, its clients are declared by ds's own
+file and celine adds grants to them from `clients.ds-host.yaml`.
+
+Forgetting ds's file is refused rather than survived, and no keyword is needed for it:
+every entry in the host overlay is grants-only, so without ds's declaration they name
+clients nobody owns, and the sync stops before authenticating rather than creating eight
+clients with no name and generated secrets.
+
+A file that genuinely cannot be synced on its own may still say so, and the file that
+answers it identifies itself by name — not by path, because a deployment mounts a file
+wherever it likes:
 
 ```yaml
-# clients.yaml
+# a base file that is only ever half a realm
 requires: [ds]        # refuse to sync without the declaration called 'ds'
 
-# clients.ds.yaml
+# the file that answers it
 overlay: ds           # this is that declaration
 ```
 
-Syncing the base file alone would strip every grant the missing file carries off the
-clients that stay, so it fails before authenticating instead.
+Use it only where the base file is genuinely incomplete without the other. Putting
+`requires:` on a file that describes a working realm makes an optional component
+mandatory — which is why neither file above carries one.
 
 A grant naming a scope **no** file declares is refused the same way, in every environment
 and with no flag to accept it: the scope would never be created, so the grant would be
@@ -173,16 +194,31 @@ so every user JWT automatically carries the claim when the attribute is set.
 ### `identity-registry.admin` scope
 
 A standard OAuth scope granting admin access to the dataspace identity-registry
-API. It follows the `{service}.admin` naming convention.
+API. It follows the `{service}.admin` naming convention, and is declared in
+`clients.ds-host.yaml` because celine is the only party that grants it: ds omits
+every `*.admin` from what it carries into a host realm, on the grounds that a
+long-lived process should not hold a superset over every permission of a service.
 
 ### Dataspace service clients
 
-All three follow the `svc-ds-*` naming convention to distinguish dataspace
-services from platform services (`svc-*`).
+They follow the `svc-ds-*` naming convention to distinguish dataspace services
+from platform services (`svc-*`), and **they are declared by ds, not here** —
+ds owns their identity and the `identity-registry.*`, `connector.*`,
+`provenance.*` and `catalog.*` vocabularies. This repository used to carry a
+hand-pasted copy of that declaration; it drifted, and the copy is gone. See
+[ADR-0001](docs/decisions/ADR-0001-merge-in-the-loader.md).
 
-- **`svc-ds-identity-registry`** -- Identity Registry backend. Owns the `identity-registry` scope prefix.
-- **`svc-ds-onboarding`** -- Onboarding service. Gets `identity-registry.admin` scope and uses `extra_audiences: [svc-ds-identity-registry]` for token forwarding.
-- **`svc-ds-portal`** -- User-facing OIDC client (`service_account_enabled: false`). Default scopes: `dataset.query`, `dataset.read`.
+What celine decides about them is in `clients.ds-host.yaml`, one grants-only
+entry per client:
+
+- **`svc-ds-identity-registry`** — `identity-registry.admin`. ds drops every `*.admin` from what it carries into a host realm; this realm drives the registry as an operator surface, so it grants the superset and declares it.
+- **`svc-ds-onboarding`** — `rec-registry.members.write`. rec-registry is celine's own service, so ds's file cannot carry this grant.
+- **`svc-ds-portal`** — the host-side console grants, including `dataset.query` / `dataset.read` against celine's dataset-api.
+- **`svc-ds-dataset-api`** — `dataset.admin` and the `svc-dataset-api` audience. `dataset.*` is celine's vocabulary on celine's data plane; this client is the dataset API's outbound identity ([spindoxlabs/ds#14](https://github.com/spindoxlabs/ds/issues/14)).
+
+The other four ds clients — `svc-ds-connector`, `svc-ds-provenance`,
+`svc-ds-federated-catalog`, `svc-edc` — need nothing from celine and appear in
+neither file.
 
 ## Development
 

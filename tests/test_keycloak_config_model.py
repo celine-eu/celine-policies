@@ -415,16 +415,25 @@ class TestShippedClientsYaml:
     def test_unowned_families_are_reachable_through_extra_audiences(
         self, config: KeycloakConfig
     ):
-        """Whoever holds a `provenance.*` scope must name its audience by hand."""
-        holders = [
-            c
-            for c in config.clients
-            if any(s.startswith("provenance.") for s in c.default_scopes)
-        ]
-        assert holders, "no client holds a provenance scope — is the family dead?"
-        for client in holders:
-            assert "svc-ds-provenance" in client.extra_audiences, (
-                f"{client.client_id} holds a provenance scope but declares no "
+        """A grant of a family this file does not own must name its audience.
+
+        `provenance.*` used to be the case in point and now lives in ds's
+        declaration, so the rule is asserted where celine can still break it:
+        every host-side grant in `clients.ds-host.yaml` names a scope family
+        no client in *that* file owns, so each one has to carry an explicit
+        audience or the token it produces is rejected by the target service.
+        """
+        host = KeycloakConfig.from_yaml(
+            CLIENTS_YAML.parent / "clients.ds-host.yaml"
+        )
+        for client in host.clients:
+            foreign = {
+                s.split(".")[0]
+                for s in client.default_scopes + client.optional_scopes
+            }
+            assert foreign, f"{client.client_id} grants nothing — drop the entry"
+            assert client.extra_audiences or foreign <= {"identity-registry"}, (
+                f"{client.client_id} holds {sorted(foreign)} but declares no "
                 "audience for it — its token will be rejected"
             )
 

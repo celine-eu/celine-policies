@@ -192,6 +192,7 @@ def test_dataspace_in_builtin_scopes():
 
 
 CLIENTS_YAML = Path(__file__).resolve().parents[1] / "clients.yaml"
+DS_HOST_YAML = Path(__file__).resolve().parents[1] / "clients.ds-host.yaml"
 
 
 class TestClientsYamlDataspaceEntries:
@@ -200,34 +201,35 @@ class TestClientsYamlDataspaceEntries:
         assert len(config.clients) > 0
         assert len(config.scopes) > 0
 
+    # ------------------------------------------------------------------
+    # The dataspace clients are declared by ds, not here. What follows
+    # asserts the grants *celine* adds to them, which live in
+    # clients.ds-host.yaml and are the only part of those clients this
+    # repository decides. Their identity — name, secret, scopes_prefix,
+    # service_account_enabled — is ds's and is deliberately not pinned here
+    # any more: pinning it is what let the old hand-pasted copy drift.
+    # ------------------------------------------------------------------
+
     def test_identity_registry_admin_scope_defined(self):
-        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
-        scope_names = config.get_scope_names()
-        assert "identity-registry.admin" in scope_names
+        """celine grants the superset, so celine declares it.
+
+        ds drops every `*.admin` from what it carries into a host realm, so a
+        realm that grants one has to declare it itself.
+        """
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        assert "identity-registry.admin" in host.get_scope_names()
 
     def test_ds_identity_registry_client(self):
-        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
-        client_ids = config.get_client_ids()
-        assert "svc-ds-identity-registry" in client_ids
-        ir = next(c for c in config.clients if c.client_id == "svc-ds-identity-registry")
-        assert ir.scopes_prefix == "identity-registry"
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        ir = next(c for c in host.clients if c.client_id == "svc-ds-identity-registry")
         assert "identity-registry.admin" in ir.default_scopes
 
     def test_ds_onboarding_client(self):
-        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
-        client_ids = config.get_client_ids()
-        assert "svc-ds-onboarding" in client_ids
-        ob = next(c for c in config.clients if c.client_id == "svc-ds-onboarding")
-        # Each capability is granted on its own — see the rationale comments in
-        # clients.yaml. Asserted individually so dropping one is a failure here
-        # rather than a 403 at approval time.
-        assert {
-            "identity-registry.organizations.read",
-            "identity-registry.credentials.write",
-            "identity-registry.memberships.write",
-            "identity-registry.keycloak.sync",
-        } <= set(ob.default_scopes)
-        assert "svc-ds-identity-registry" in ob.extra_audiences
+        """The one grant ds cannot carry: rec-registry is celine's service."""
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        ob = next(c for c in host.clients if c.client_id == "svc-ds-onboarding")
+        assert "rec-registry.members.write" in ob.default_scopes
+        assert "svc-rec-registry" in ob.extra_audiences
 
     def test_ds_onboarding_holds_no_registry_admin_scope(self):
         """The least-privilege realignment must not be undone.
@@ -236,37 +238,89 @@ class TestClientsYamlDataspaceEntries:
         creating and deleting organizations — authority an onboarding flow has
         no use for. Re-adding it would silently widen the blast radius of a
         compromised onboarding service back to the whole identity registry.
+        ds grants it the enumerated writes instead; celine must not add the
+        superset back on top.
         """
-        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
-        ob = next(c for c in config.clients if c.client_id == "svc-ds-onboarding")
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        ob = next(c for c in host.clients if c.client_id == "svc-ds-onboarding")
         assert "identity-registry.admin" not in ob.default_scopes
         assert "identity-registry.admin" not in ob.optional_scopes
 
+    def test_ds_onboarding_is_granted_nothing_ds_already_grants(self):
+        """A host-side grant that repeats ds's is how the last copy started.
+
+        The union is the same either way, so a duplicate is invisible until it
+        drifts. Kept narrow: only the scopes ds's own file lists for this
+        client, which are the ones this repository used to duplicate.
+        """
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        ob = next(c for c in host.clients if c.client_id == "svc-ds-onboarding")
+        ds_owned = {
+            "identity-registry.organizations.read",
+            "identity-registry.credentials.write",
+            "identity-registry.memberships.write",
+            "identity-registry.keycloak.sync",
+            "identity-registry.resolve",
+            "connector.consent.provision",
+            "connector.consent.audience",
+            "connector.disclosure.record",
+            "provenance.write",
+        }
+        assert not ds_owned & set(ob.default_scopes), (
+            "clients.ds-host.yaml repeats a grant ds's own file already makes"
+        )
+
     def test_ds_portal_client(self):
-        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
-        client_ids = config.get_client_ids()
-        assert "svc-ds-portal" in client_ids
-        portal = next(c for c in config.clients if c.client_id == "svc-ds-portal")
-        # Set explicitly in clients.yaml: the portal calls the registry, the
-        # connector and dataset-api as itself, so it needs its own credential.
-        assert portal.service_account_enabled is True
+        """The portal calls celine's dataset-api as itself."""
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        portal = next(c for c in host.clients if c.client_id == "svc-ds-portal")
         assert "dataset.query" in portal.default_scopes
         assert "dataset.read" in portal.default_scopes
+        assert "svc-dataset-api" in portal.extra_audiences
 
     def test_ds_portal_reaches_the_registry_read_only(self):
         """A browser-facing portal must not be able to mint or revoke identity.
 
         It resolves and reads; issuing credentials belongs to the onboarding
-        service, which is not exposed to end users.
+        service, which is not exposed to end users. This asserts what celine
+        adds — ds's own grants to the portal are ds's to justify.
         """
-        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
-        portal = next(c for c in config.clients if c.client_id == "svc-ds-portal")
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        portal = next(c for c in host.clients if c.client_id == "svc-ds-portal")
         registry_scopes = [
             s for s in portal.default_scopes if s.startswith("identity-registry.")
         ]
         assert registry_scopes, "portal no longer talks to the identity registry?"
         assert all(s.endswith(".read") or s.endswith(".resolve") for s in registry_scopes)
         assert "identity-registry.admin" not in portal.default_scopes
+
+    def test_the_host_overlay_declares_no_dataspace_client(self):
+        """Every entry is grants-only, or celine is claiming a client ds owns.
+
+        A second file declaring identity is a merge error naming both files —
+        this fails first, and says why.
+        """
+        import yaml
+
+        raw = yaml.safe_load(DS_HOST_YAML.read_text())
+        identity = {
+            "name",
+            "description",
+            "secret",
+            "scopes_prefix",
+            "service_account_enabled",
+        }
+        grants = {"client_id", "default_scopes", "optional_scopes", "extra_audiences"}
+        for entry in raw["clients"]:
+            claimed = set(entry) & identity
+            assert not claimed, (
+                f"{entry['client_id']} declares {sorted(claimed)} — ds owns this "
+                "client's identity, and a second file declaring it is a merge error"
+            )
+            assert set(entry) <= grants, (
+                f"{entry['client_id']} carries {sorted(set(entry) - grants)}, which "
+                "makes the entry an ownership claim rather than a grant"
+            )
 
     def test_no_undefined_scope_references(self):
         config = KeycloakConfig.from_yaml(CLIENTS_YAML)

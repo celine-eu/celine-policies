@@ -1,0 +1,97 @@
+# =============================================================================
+# celine's grants on the dataspace's clients
+# =============================================================================
+# This file is mounted only where a dataspace is deployed alongside celine. It
+# is passed with ds's own declaration, never instead of it:
+#
+#   celine-policies keycloak sync clients.yaml \
+#       --overlay clients.ds-host.yaml --overlay /path/to/ds/clients.yaml
+#
+# **It declares no ds client.** ds owns their identity — name, secret,
+# scopes_prefix — and owns the `identity-registry.*`, `connector.*`,
+# `provenance.*` and `catalog.*` vocabularies. Every entry below names a
+# client_id and adds grants to it, which is what the merge permits a second
+# file to do and the only thing it permits. `clients.yaml` used to carry a
+# hand-pasted copy of ds's whole declaration instead, and the copy drifted:
+# on 2026-08-28 a client was missing, seven scopes were missing, and five
+# clients' grants disagreed with ds in both directions. See ADR-0001.
+#
+# Forgetting ds's file is refused, not survived: every entry here would name a
+# client nobody declares, and the sync stops before authenticating rather than
+# creating a client with no name and a generated secret. No `requires:` key is
+# needed for that, and there is none — celine's realm does not require a
+# dataspace.
+#
+# **What belongs here.** Only what celine adds on top of ds's declaration. If a
+# grant below is also in ds's file, delete it from here: the union is the same
+# either way, and a duplicate is how the last copy started. Four ds clients —
+# svc-ds-connector, svc-ds-provenance, svc-ds-federated-catalog, svc-edc —
+# need nothing from celine and so are absent entirely.
+# =============================================================================
+
+overlay: ds-host
+
+# -----------------------------------------------------------------------------
+# SCOPES
+# -----------------------------------------------------------------------------
+# The two admin supersets. ds deliberately omits them from what it carries into
+# a host realm — admin is an operator grant, and a long-lived process should not
+# hold a superset over every permission of a service — so where celine does
+# grant one, celine declares it.
+scopes:
+  - name: identity-registry.admin
+    description: Admin access to dataspace identity-registry API
+  - name: connector.admin
+    description: Provider management (sync, assets, policies, contracts)
+
+# -----------------------------------------------------------------------------
+# GRANTS
+# -----------------------------------------------------------------------------
+clients:
+  # The registry runs as an operator surface in this realm: sync-orgs and the
+  # onboarding console drive it, so it holds the superset rather than the
+  # enumerated writes ds grants it.
+  - client_id: svc-ds-identity-registry
+    default_scopes:
+      - identity-registry.admin
+
+  # Register the approved participant as a community member. rec-registry is
+  # celine's own service, so ds's declaration cannot carry this grant and must
+  # not. Deliberately not `rec-registry.admin`: onboarding registers no assets,
+  # and has no business importing, exporting or purging.
+  - client_id: svc-ds-onboarding
+    default_scopes:
+      - rec-registry.members.write
+    extra_audiences:
+      - svc-rec-registry
+
+  # Host-side console grants. The portal reaches celine's dataset-api as itself
+  # (see tests/test_dataspace_scope.py::test_ds_portal_client), and the read
+  # side of the registry, connector, provenance and catalog for its own views.
+  # `connector.admin` is a host decision: ds's file drops every `*.admin` on
+  # purpose, and this realm's portal is an operator console.
+  - client_id: svc-ds-portal
+    default_scopes:
+      - catalog.read
+      - connector.admin
+      - dataset.query
+      - dataset.read
+      - identity-registry.membership.read
+      - identity-registry.read
+      - provenance.read
+    extra_audiences:
+      - svc-dataset-api
+      - svc-ds-connector
+      - svc-ds-federated-catalog
+      - svc-ds-provenance
+
+  # `dataset.*` is celine's vocabulary on celine's data plane, owned here by
+  # svc-dataset-api. This client is the dataset API's *outbound* identity — it
+  # presents this to reach ds's connector — and the audience it must carry is
+  # the server identity that validates tokens, `svc-dataset-api`.
+  # See spindoxlabs/ds#14, which took the `dataset` prefix off it on ds's side.
+  - client_id: svc-ds-dataset-api
+    default_scopes:
+      - dataset.admin
+    extra_audiences:
+      - svc-dataset-api

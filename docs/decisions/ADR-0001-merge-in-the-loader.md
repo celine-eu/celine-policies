@@ -70,11 +70,23 @@ single flag-day cut; allowing an identical repeat lets a file shed its copies on
 at a time. A *differing* definition is still an error — that is the ambiguity worth failing
 on, and two of them exist today.
 
-**Splitting the declaration creates a trap, and the `requires` guard is what answers it.**
-Once the base file has shed the half another file declares, syncing it alone strips those
-clients back to their host-side grants — silently, no flag, exactly the failure this
-mechanism exists to prevent. The guard must never be removed as ceremony; it is the reason
-the split is safe.
+**Splitting the declaration creates a trap, and the completeness check is what answers it
+— not `requires`.** The first design put `requires: [ds]` on `clients.yaml`, reasoning that
+once the base file had shed the half another file declares, syncing it alone would strip
+those clients back to their host-side grants. That was wrong twice over. **The dataspace is
+optional**: a celine deployment without one is ordinary, and a `requires:` on the base file
+makes it mandatory. And the binding was never the keyword — grants-only entries for ds
+clients bind just as hard, because without ds's file they name clients nobody declares and
+the completeness check refuses them regardless.
+
+So the split is by deployment, not by keyword. `clients.yaml` declares celine's services and
+nothing about ds; it is a whole realm and syncs alone. `clients.ds-host.yaml` holds the
+grants celine adds to ds's clients, is mounted only alongside ds's own file, and is refused
+without it by the check that already existed. Neither file carries `requires:`.
+
+`requires:` remains right for a file that genuinely cannot be a realm on its own — ds's
+`clients.dataspaces.yaml` is one, and declares `requires: [ds]`. It is a statement that a
+file is half a declaration, not a way to pin a deployment topology.
 
 **`from_yaml` stays, and does not enforce completeness.** `sync-orgs` and `sync-users` read
 client ids and scopes out of the base file rather than writing a realm, so a declaration

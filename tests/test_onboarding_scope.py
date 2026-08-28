@@ -14,6 +14,7 @@ from pathlib import Path
 from celine.policies.cli.keycloak.models import KeycloakConfig
 
 CLIENTS_YAML = Path(__file__).resolve().parents[1] / "clients.yaml"
+DS_HOST_YAML = Path(__file__).resolve().parents[1] / "clients.ds-host.yaml"
 
 
 def _config() -> KeycloakConfig:
@@ -122,12 +123,16 @@ class TestOnboardingClients:
         One service, two clients: `svc-onboarding` validates inbound audiences,
         `svc-ds-onboarding` authenticates outbound M2M to the dataspace. Renaming
         the latter would ripple through the ds deployment's env, so it does not
-        acquire the `onboarding` prefix.
+        acquire the `onboarding` prefix — and ds owns that client now, so what
+        this asserts is that celine's overlay does not push it back inbound.
         """
-        config = _config()
-        ds = next(c for c in config.clients if c.client_id == "svc-ds-onboarding")
-        assert ds.scopes_prefix is None
+        assert "svc-ds-onboarding" not in _config().get_client_ids(), (
+            "the dataspace's clients are declared by ds — see clients.ds-host.yaml"
+        )
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        ds = next(c for c in host.clients if c.client_id == "svc-ds-onboarding")
         assert not any(s.startswith("onboarding.") for s in ds.default_scopes)
+        assert "svc-onboarding" not in ds.extra_audiences
 
     def test_no_undefined_scope_references(self):
         assert _config().validate_scope_references() == []
