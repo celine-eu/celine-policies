@@ -396,7 +396,6 @@ class TestShippedClientsYaml:
     # the target in `extra_audiences` instead.
     UNOWNED_SCOPE_FAMILIES = {
         "mqtt",  # consumed by the mqtt_auth service, which is not a KC client
-        "provenance",  # owned by svc-ds-provenance, deployed with the dataspace
     }
 
     def test_scope_families_are_owned_or_knowingly_unowned(self, config: KeycloakConfig):
@@ -443,11 +442,19 @@ class TestShippedClientsYaml:
             }
             assert derived <= known, f"{client.client_id} derives an unknown audience"
 
-    def test_external_audiences_are_the_two_known_ones(self, config: KeycloakConfig):
+    def test_the_oauth2_proxy_is_the_only_external_audience(
+        self, config: KeycloakConfig
+    ):
         """`extra_audiences` may point outside this file — but not by accident.
 
         A typo'd client_id there is invisible: `sync` logs a warning and creates
         the mapper anyway, so the token carries an audience nobody validates.
+
+        `svc-ds-provenance` used to be the second entry here: three clients named
+        it as an audience while nothing declared it, so the mappers pointed at a
+        client that did not exist. It is a managed client now, which is why the
+        set is down to one. `oauth2_proxy` stays outside deliberately — it is
+        declared by the realm import as `oauth2_proxy_client`, not by the sync.
         """
         known = config.get_client_ids()
         external = {
@@ -456,7 +463,7 @@ class TestShippedClientsYaml:
             for audience in client.extra_audiences
             if audience not in known
         }
-        assert external == {"oauth2_proxy", "svc-ds-provenance"}
+        assert external == {"oauth2_proxy"}
 
     def test_the_oauth2_proxy_client_is_declared(self, config: KeycloakConfig):
         """Without it, no user JWT carries any service audience."""

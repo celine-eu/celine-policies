@@ -181,6 +181,8 @@ scopes:
     description: Register, update or deactivate a DSP participant
   - name: identity-registry.credentials.write
     description: Issue and revoke a data-subject credential
+  - name: identity-registry.credentials.read
+    description: Check whether a subject holds a valid credential of a given type
   - name: identity-registry.memberships.write
     description: Register or delete an organisation membership
   - name: identity-registry.keycloak.sync
@@ -197,8 +199,22 @@ scopes:
     description: Internal API (agreement/transfer/consent checks, audit, JWKS)
   - name: connector.webhook
     description: Accept EDC webhook events (transfer-process, contract-negotiation)
+  - name: connector.consent.audience
+    description: Who consents to a sharing offer (GET /consent/admin/shares)
   - name: connector.consent.provision
     description: Provision a data subject's standing sharing consent on their behalf
+  - name: connector.consent.read
+    description: Is a negotiation awaiting a consent decision (GET /consent/pending)
+  - name: connector.consumer.read
+    description: Fetch a counterparty catalogue through the consumer connector
+  - name: connector.disclosure.record
+    description: Record data leaving the platform (POST /admin/disclosure)
+  - name: connector.history.read
+    description: Read EDC negotiation, agreement and transfer history
+  - name: connector.ingestion.record
+    description: Record a DSO/offline data handover (POST /admin/ingestion)
+  - name: connector.registry.invalidate
+    description: Invalidate the cached participant registry
 
   # Dataspace Provenance
   - name: provenance.read
@@ -377,6 +393,11 @@ clients:
     scopes_prefix: identity-registry
     default_scopes:
       - identity-registry.admin
+      # Drop the connector's cached participant registry when an organisation's
+      # standing changes here, so a suspension is not honoured a cache TTL late.
+      - connector.registry.invalidate
+    extra_audiences:
+      - svc-ds-connector
 
   # Member onboarding. Approving a participant lands three things — a login, a
   # community member, and a dataspace identity plus their standing sharing
@@ -395,9 +416,21 @@ clients:
       - identity-registry.memberships.write
       # Sync the DID onto the Keycloak user.
       - identity-registry.keycloak.sync
+      # Reuse an existing subject DID before minting a new one
+      # (GET /users/resolve).
+      - identity-registry.resolve
       # Provision the subject's standing sharing decision after approval
       # (POST /consent/admin/shares).
       - connector.consent.provision
+      # Read that decision back before exporting against it: who currently
+      # consents to this offer (GET /consent/admin/shares). A separate scope
+      # from `.provision` because that one sits in ds's `ds-participant-admin`
+      # bundle, and a write grant must not carry bulk subject enumeration.
+      - connector.consent.audience
+      # Record a POD-list handover with the connector before it happens
+      # (POST /admin/disclosure), which is what computes the consent snapshot
+      # hash the export cannot assert for itself.
+      - connector.disclosure.record
       # Record an offline disclosure (a CSV or supply-point export) as a
       # DataDisclosed event.
       - provenance.write
@@ -438,10 +471,25 @@ clients:
     default_scopes:
       - identity-registry.read
       - identity-registry.membership.read
+      - identity-registry.credentials.read
       - provenance.write
+      - connector.consent.read
     extra_audiences:
       - svc-ds-identity-registry
       - svc-ds-provenance
+      # Itself: `connector.consent.read` is its own prefix, so no audience is
+      # derived for it, and the connector calls its own internal API with a
+      # service token that still has to pass an `aud` check.
+      - svc-ds-connector
+
+  # Named in three clients' `extra_audiences` above but never declared here, so
+  # the audience mappers pointing at it had no client to point at. It owns the
+  # `provenance.*` vocabulary, which was likewise unowned.
+  - client_id: svc-ds-provenance
+    name: Dataspace Provenance
+    secret: ${SVC_DS_PROVENANCE_SECRET:-svc-ds-provenance}
+    scopes_prefix: provenance
+    default_scopes: []
 
   - client_id: svc-ds-federated-catalog
     name: Dataspace Federated Catalog
@@ -449,8 +497,10 @@ clients:
     scopes_prefix: catalog
     default_scopes:
       - identity-registry.read
+      - connector.consumer.read
     extra_audiences:
       - svc-ds-identity-registry
+      - svc-ds-connector
 
   - client_id: svc-ds-dataset-api
     name: Dataspace Dataset API
@@ -468,6 +518,7 @@ clients:
     default_scopes:
       - identity-registry.read
       - connector.webhook
+      - connector.internal
     extra_audiences:
       - svc-ds-identity-registry
       - svc-ds-connector

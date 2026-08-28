@@ -107,6 +107,56 @@ check, and **anything else — including a typo or nothing at all — is product
 Declaring no `secret:` at all is always accepted: Keycloak then generates one,
 which is the recommended production shape.
 
+### One realm, more than one file
+
+`sync` recomputes the grants of every client **present** in the file it is given. A file
+that describes only part of a realm therefore does not leave the rest alone: an absent
+client is an orphan and survives without `--prune`, but a client that stays is narrowed to
+whatever grants that file declares — silently, with nothing deleted and no flag involved.
+
+So when a realm is declared by more than one party, pass every file and let the loader
+merge them:
+
+```bash
+celine-policies keycloak sync clients.yaml --overlay clients.ds.yaml
+```
+
+`--overlay` is repeatable. Merging happens before anything else, so the placeholder-secret
+guard and the scope-reference check see the whole realm rather than one file's view of it.
+
+The rule is **ownership, not precedence** — no file is subordinate and there is no
+last-wins:
+
+| | |
+|---|---|
+| a client's identity | declared by **exactly one** file: `name`, `description`, `secret`, `scopes_prefix`, `service_account_enabled` |
+| a client's grants | added by **any** file, with `client_id` plus `default_scopes` / `optional_scopes` / `extra_audiences` and nothing else |
+| a scope | declared once, or identically more than once; a conflicting redefinition is an error |
+| `realm`, `oauth2_proxy_client` | stated by any file; two files disagreeing is an error |
+| a `scopes_prefix` | claimed by one client only — it decides where every audience mapper for those scopes points |
+
+A file that cannot be synced on its own says so, and the file that answers it identifies
+itself by name — not by path, because a deployment mounts a file wherever it likes:
+
+```yaml
+# clients.yaml
+requires: [ds]        # refuse to sync without the declaration called 'ds'
+
+# clients.ds.yaml
+overlay: ds           # this is that declaration
+```
+
+Syncing the base file alone would strip every grant the missing file carries off the
+clients that stay, so it fails before authenticating instead.
+
+A grant naming a scope **no** file declares is refused the same way, in every environment
+and with no flag to accept it: the scope would never be created, so the grant would be
+skipped and the service would get a 403 the first time it needed it. This used to be a
+warning that synced anyway and failed at the end, with the realm already rewritten — see
+[ADR-0002](docs/decisions/ADR-0002-undefined-scope-grants-are-fatal.md). See
+[ADR-0001](docs/decisions/ADR-0001-merge-in-the-loader.md) for why this is merged in the
+loader rather than pre-merged into a generated file.
+
 ## Dataspace Integration
 
 The CLI manages Keycloak resources for the CELINE dataspace layer (identity

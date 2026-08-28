@@ -64,7 +64,9 @@ MQTT Client ──(JWT as password)──> Mosquitto
 ## Keycloak Sync Flow
 
 ```
-clients.yaml ──> celine-policies keycloak sync ──> Keycloak Admin API
+clients.yaml ──┐
+               ├─ merge ──> celine-policies keycloak sync ──> Keycloak Admin API
+clients.*.yaml ┘  (--overlay, repeatable)
                        │
                  compute diff
                  (scopes to create/update,
@@ -79,7 +81,7 @@ clients.yaml ──> celine-policies keycloak sync ──> Keycloak Admin API
 
 The `sync` command:
 
-1. Loads `clients.yaml` (scopes + clients with `default_scopes` and `scopes_prefix`)
+1. Loads `clients.yaml` (scopes + clients with `default_scopes` and `scopes_prefix`), merged with every `--overlay` file into one declaration — a realm may be declared by more than one party, and syncing half of it silently narrows the clients it mentions
 2. Fetches current state from Keycloak (existing scopes, clients, assignments)
 3. Computes a diff (plan): scopes to create/update, clients to create/update, scope assignments to add/remove
 4. Applies changes idempotently

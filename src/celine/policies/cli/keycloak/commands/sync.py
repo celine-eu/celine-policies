@@ -42,6 +42,19 @@ def sync(
         readable=True,
         default=Path("./clients.yaml"),
     ),
+    overlay: Annotated[
+        Optional[list[Path]],
+        typer.Option(
+            "--overlay",
+            help=(
+                "Further file declaring part of the same realm; repeatable. "
+                "Merged with the configuration file before anything is synced."
+            ),
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
     # Connection options
     base_url: Annotated[
         Optional[str],
@@ -98,9 +111,21 @@ def sync(
     clients.yaml placeholder (a secret equal to the client id, or an empty one).
     Export ENV=dev to accept those fallbacks on a local realm.
 
+    A grant naming a scope no file declares is also refused, in any environment,
+    before anything is authenticated.
+
+    One realm may be declared by more than one file. `--overlay` is repeatable and
+    every file is merged before the sync sees any of it, because a file describing
+    only part of a realm does not leave the rest alone: `sync` recomputes the grants
+    of every client it finds, so syncing half the declaration silently narrows the
+    clients it does mention, with no flag and nothing deleted. A client's identity
+    is declared by exactly one file; any file may add grants to a client another
+    file declares.
+
     Example:
         celine-policies keycloak sync config/keycloak.yaml --dry-run
         celine-policies keycloak sync config/keycloak.yaml --admin-user admin --admin-password admin
+        celine-policies keycloak sync clients.yaml --overlay clients.ds.yaml
     """
     configure_logging(verbose)
 
@@ -115,9 +140,12 @@ def sync(
         secrets_file=secrets_file,
     )
 
-    # Load configuration
+    # Load configuration. Every file is merged into one declaration first, so
+    # the placeholder-secret guard and the scope-reference check below see the
+    # whole realm rather than one file's view of it.
+    overlays = list(overlay or [])
     try:
-        config = KeycloakConfig.from_yaml(config_path)
+        config = KeycloakConfig.from_yaml_files([config_path, *overlays])
     except Exception as e:
         typer.secho(f"Error loading config: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
@@ -127,6 +155,11 @@ def sync(
         settings = settings.with_overrides(realm=config.realm)
 
     typer.echo(f"Syncing to Keycloak: {settings.base_url} realm={settings.realm}")
+    if overlays:
+        typer.echo(
+            f"Merged {len(overlays) + 1} files: "
+            + ", ".join(str(path) for path in [config_path, *overlays])
+        )
     typer.echo(f"Config: {len(config.scopes)} scopes, {len(config.clients)} clients")
     typer.echo(f"Environment: {settings.env}")
 
@@ -136,13 +169,10 @@ def sync(
     if settings.is_production:
         _fail_on_placeholder_secrets(config)
 
-    # Validate scope references
-    undefined = config.validate_scope_references()
-    if undefined:
-        typer.secho(
-            f"Warning: Scopes referenced but not defined: {', '.join(undefined)}",
-            fg=typer.colors.YELLOW,
-        )
+    # Refuse a grant naming a scope no file declares. Like the guard above, this
+    # runs before authenticating: the failure it replaces happened *after* the
+    # realm had been rewritten.
+    _fail_on_undefined_scopes(config)
 
     # Run async sync
     try:
@@ -211,6 +241,54 @@ def _fail_on_placeholder_secrets(config: KeycloakConfig) -> None:
         "\nA secret equal to the client_id (or an empty one) is guessable from the "
         "client list alone.\nSet the variables above, or export ENV=dev if this is "
         "a local realm and the defaults are intended.",
+        fg=typer.colors.YELLOW,
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def _fail_on_undefined_scopes(config: KeycloakConfig) -> None:
+    """Abort the sync if any client is granted a scope nobody declares.
+
+    This used to be a yellow warning, and the sync proceeded. It did not end
+    well: the scope is never created, so `apply_sync_plan` reaches the
+    assignment, cannot resolve the name, and appends `Scope not found` to
+    `result.errors` — which fails the command **after** every client, scope and
+    mapper before it has already been written. A realm half-rewritten by a run
+    that then exits 1 is the worst of the three possible outcomes.
+
+    It became fatal when one realm stopped being one file. With a single file a
+    dangling grant is a typo the author sees; across two, it is the ordinary
+    consequence of a grant staying in one file while its scope moves to the
+    other, and it is the specific mistake the split makes possible. So it fails
+    here, before anything is authenticated, and names both the scope and the
+    clients that asked for it — there is no flag to accept it, because there is
+    no realm in which the grant means anything.
+    """
+    undefined = config.validate_scope_references()
+    if not undefined:
+        return
+
+    askers: dict[str, list[str]] = {}
+    for client in config.clients:
+        for scope_name in list(client.default_scopes) + list(client.optional_scopes):
+            if scope_name in undefined:
+                askers.setdefault(scope_name, []).append(client.client_id)
+
+    typer.secho(
+        f"\nRefusing to sync: {len(undefined)} scope(s) are granted but declared "
+        "by no file.",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    for scope_name in undefined:
+        wanted_by = ", ".join(sorted(set(askers.get(scope_name, []))))
+        typer.secho(f"  ! {scope_name} — granted to {wanted_by}", fg=typer.colors.RED, err=True)
+
+    typer.secho(
+        "\nKeycloak would never create these scopes, so every grant above would be "
+        "skipped\nand the services would get a 403 the first time they needed it. "
+        "Declare them,\nor supply the file that does with --overlay.",
         fg=typer.colors.YELLOW,
         err=True,
     )
