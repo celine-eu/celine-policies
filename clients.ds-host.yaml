@@ -62,6 +62,14 @@ clients:
   - client_id: svc-ds-onboarding
     default_scopes:
       - rec-registry.members.write
+      # Read back who holds which supply point before exporting against it, so
+      # the POD comes from the running registry rather than from the intake form
+      # a member filled in once. `members-by-dids` joins the connector's consent
+      # audience to the registry on the DID; `assets-by-user-ids` follows it for
+      # commissioned meters. One scope covers both: the registry names
+      # `assets.lookup` apart from `lookup` so a policy can separate them later,
+      # but rec_registry/access.rego grants both from `rec-registry.lookup`.
+      - rec-registry.lookup
     extra_audiences:
       - svc-rec-registry
 
