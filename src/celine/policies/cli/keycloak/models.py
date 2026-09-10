@@ -136,6 +136,20 @@ GROUP_ADMIN_SCOPES = frozenset(
     }
 )
 
+#: The scopes that authorise something about a group's *members*. Every one of
+#: them is exercised through a call addressed by the group's id, which is why a
+#: declaration carrying any of them and not `view` is a grant that cannot reach
+#: what it administers — see `AdminGroupPermission`.
+GROUP_MEMBER_ADMIN_SCOPES = frozenset(
+    {
+        "view-members",
+        "manage-members",
+        "manage-membership",
+        "manage-membership-of-members",
+        "impersonate-members",
+    }
+)
+
 
 class AdminGroupPermission(BaseModel):
     """What a service account may do to the members of one group.
@@ -156,6 +170,14 @@ class AdminGroupPermission(BaseModel):
         manage-members + view-members               -> 403
         manage-membership                           -> 403
         manage-members + manage-membership          -> 201
+
+    **Finding the group at all needs `view`.** The member scopes do not carry
+    it: holding the three above and nothing else, every route to the group's own
+    id is 403 — `group-by-path`, `GET /groups/{id}` on the very group being
+    administered, `GET /groups?search=`. Since every member call is addressed by
+    that id, such a grant can create a member and can never find one again.
+    Adding `view` opens `group-by-path` and `GET /groups/{id}`; `GET /groups`
+    stays 403, because listing the realm's groups is a realm-wide act.
     """
 
     path: str = Field(
@@ -892,6 +914,24 @@ class KeycloakConfig(BaseModel):
             if c.admin_permissions is not None and not c.admin_permissions.is_empty()
         ]
 
+    def admin_permission_group_paths(self) -> dict[str, list[str]]:
+        """Realm groups a service account is declared to administer, and by whom.
+
+        `sync` uses the declaration to grant the permission; `sync-users` uses
+        this to file the participants it creates in the same groups, because a
+        group declared as administered and empty of everything this tool creates
+        is a grant over nobody. Keyed by path so the two cannot drift: there is
+        one declaration, not one per command.
+
+        Empty for a configuration that declares nothing, which is what keeps
+        `sync-users` unchanged for everyone not using the feature.
+        """
+        paths: dict[str, list[str]] = {}
+        for client in self.clients_with_admin_permissions():
+            for grant in client.admin_permissions.groups:
+                paths.setdefault(grant.path, []).append(client.client_id)
+        return {path: sorted(set(ids)) for path, ids in sorted(paths.items())}
+
     def malformed_admin_permissions(self) -> list[str]:
         """Everything wrong with the declared admin permissions, named per client.
 
@@ -901,6 +941,7 @@ class KeycloakConfig(BaseModel):
         nothing.
         """
         problems: list[str] = []
+        declared_by: dict[str, list[str]] = {}
 
         for client in self.clients:
             if client.admin_permissions is None:
@@ -923,6 +964,7 @@ class KeycloakConfig(BaseModel):
                 if grant.path in seen:
                     problems.append(f"{where}: declared twice by the same client")
                 seen.add(grant.path)
+                declared_by.setdefault(grant.path, []).append(client.client_id)
 
                 if not grant.scopes:
                     problems.append(
@@ -935,6 +977,21 @@ class KeycloakConfig(BaseModel):
                         f"{', '.join(repr(u) for u in unknown)} "
                         f"(it defines {', '.join(sorted(GROUP_ADMIN_SCOPES))})"
                     )
+
+        # Two clients on one group deny each other. Keycloak's admin-permissions
+        # resource server decides UNANIMOUS and so does each permission, so a
+        # permission whose client policy does not name you votes *against* you:
+        # granting a second client the same group takes the grant away from the
+        # first one that already worked, and every call — creating, reading
+        # members, even resolving the group — answers 403 for both. Nothing in
+        # the API refuses it; both permissions are created with a 201.
+        for path, client_ids in sorted(declared_by.items()):
+            if len(client_ids) > 1:
+                problems.append(
+                    f"{path!r}: declared by {', '.join(sorted(set(client_ids)))} — two "
+                    "clients on one group deny each other in Keycloak, and the second "
+                    "declaration silently revokes the first. One client per group."
+                )
 
         return problems
 

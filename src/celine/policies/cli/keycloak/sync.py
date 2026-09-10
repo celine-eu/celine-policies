@@ -41,6 +41,7 @@ from celine.policies.cli.keycloak.client import (
     KeycloakNotFoundError,
 )
 from celine.policies.cli.keycloak.models import (
+    GROUP_MEMBER_ADMIN_SCOPES,
     ClientConfig,
     KeycloakConfig,
     ScopeConfig,
@@ -683,6 +684,22 @@ def compute_sync_plan(
                     "of it — creating a user in that group will be refused. Add "
                     "'manage-membership' unless it is only meant to administer "
                     "members that already exist.",
+                    client.client_id,
+                    grant.path,
+                )
+
+            # The other half-grant, and the one that reads as working: every
+            # member call is addressed by the group's id, and the member scopes
+            # cannot obtain it. Without `view`, `group-by-path` and
+            # `GET /groups/{id}` on the administered group are both 403, so a
+            # service resolving its group lazily still provisions and only
+            # *finds* nobody — the failure surfaces later, on a re-approval or a
+            # retried enablement, rather than on the run that granted this.
+            if scopes & GROUP_MEMBER_ADMIN_SCOPES and "view" not in scopes:
+                logger.warning(
+                    "Client %s may administer the members of %s but cannot resolve the "
+                    "group itself — every route to its id is 403 without 'view', and "
+                    "every member call is addressed by that id. Add 'view'.",
                     client.client_id,
                     grant.path,
                 )

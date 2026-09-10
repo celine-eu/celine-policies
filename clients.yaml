@@ -293,6 +293,11 @@ clients:
             - manage-members
             - manage-membership
             - view-members
+            # And `view`, without which the grant cannot resolve the group it
+            # administers: the three member scopes leave `group-by-path` and
+            # `GET /groups/{id}` both 403, and every member call is addressed by
+            # that id. Creating a participant works and finding one never does.
+            - view
     default_scopes:
       # Own resources — REC operators get their capabilities from org group
       # membership, not from scopes, via the oauth2-proxy audience mapper.

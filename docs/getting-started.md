@@ -62,6 +62,11 @@ celine-policies keycloak sync-users ../rec-registry/recs/rec-example.yaml \
 
 The `--mock` flag fills placeholder email/name fields for development.
 
+Participants are also added to any group `clients.yaml` declares under
+`admin_permissions`, so the service account granted over that group can see them — run
+`keycloak sync` first, which is what creates the group. `--no-admin-groups` turns that off.
+See [Realm administration](scopes-and-permissions.md#realm-administration).
+
 ### Step 5: Sync Organizations (optional)
 
 Import organizations from an `owners.yaml` file:

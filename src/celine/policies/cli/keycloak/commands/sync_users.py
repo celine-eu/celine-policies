@@ -147,6 +147,17 @@ def sync_users(
             help="Fill email (<username>@celine.localhost), firstName, lastName, emailVerified for dev convenience.",
         ),
     ] = False,
+    admin_groups: Annotated[
+        bool,
+        typer.Option(
+            "--admin-groups/--no-admin-groups",
+            help=(
+                "Also add participants to the groups clients.yaml declares under "
+                "admin_permissions, so the service account granted over them can "
+                "find what it administers. Default: true."
+            ),
+        ),
+    ] = True,
     secrets_file: Annotated[
         Optional[Path],
         typer.Option("--secrets-file", "-s", help="Path to secrets file for auth"),
@@ -254,10 +265,18 @@ def sync_users(
     community_type = community.get("type", "rec")
 
     oauth2_proxy_client: str | None = None
+    # Groups some client's service account is declared to administer. A
+    # participant this command creates outside them is invisible to that
+    # service: it attempts a create, gets 409, scans the group and does not find
+    # the account. Read from the same declaration `sync` grants from, so the two
+    # cannot name different groups.
+    admin_group_owners: dict[str, list[str]] = {}
     if clients_config.exists():
         try:
             kc_config = KeycloakConfig.from_yaml(clients_config)
             oauth2_proxy_client = kc_config.oauth2_proxy_client
+            if admin_groups:
+                admin_group_owners = kc_config.admin_permission_group_paths()
         except Exception as e:
             typer.secho(
                 f"Warning: could not load clients config {clients_config}: {e}",
@@ -273,6 +292,14 @@ def sync_users(
     typer.echo(f"Org groups: {' > '.join(ROLE_HIERARCHY)} (viewers assigned to members)")
     if sync_settings.groups:
         typer.echo(f"Extra groups: {', '.join(sync_settings.groups)}")
+    if admin_group_owners:
+        typer.echo(
+            "Admin groups: "
+            + ", ".join(
+                f"{path} (declared by {', '.join(owners)})"
+                for path, owners in admin_group_owners.items()
+            )
+        )
     typer.echo(
         f"Password : {'fixed' if sync_settings.temp_password else 'random per user'}"
     )
@@ -289,6 +316,7 @@ def sync_users(
                 community=community,
                 operators=operators,
                 oauth2_proxy_client=oauth2_proxy_client,
+                admin_group_paths=list(admin_group_owners),
                 reset_password=reset_password,
                 temporary=sync_settings.temporary,
                 mock=mock,
@@ -326,6 +354,7 @@ async def _async_sync_users(
     community: dict,
     operators: list[dict] | None = None,
     oauth2_proxy_client: str | None = None,
+    admin_group_paths: list[str] | None = None,
     reset_password: bool = False,
     temporary: bool = True,
     mock: bool = False,
@@ -334,6 +363,11 @@ async def _async_sync_users(
 
     Ensures organizations are enabled, the REC organization exists, and every
     participant user is a member of it.
+
+    `admin_group_paths` are the groups `clients.yaml` declares a service account
+    may administer. Every participant is added to them whether the account was
+    just created or already existed, which is what makes a re-run the backfill
+    for accounts created before this behaviour existed.
 
     Returns (created, skipped, errors).
     """
@@ -454,7 +488,28 @@ async def _async_sync_users(
             extra_group_ids[path] = group["id"]
             logger.debug("Resolved group %s -> %s", path, group["id"])
 
+        # --- Declared admin-permission groups (fail fast if missing) ------------
+        # `sync` creates these when it grants the permission, and it owns realm
+        # structure — so a missing one means the realm has not been synced from
+        # the declaration this command just read, and creating it here would
+        # paper over that. Resolved before any user is touched, like --group.
+        for path in admin_group_paths or []:
+            group = await kc.get_group_by_path(path)
+            if not group:
+                raise KeycloakError(
+                    f"Group '{path}' not found in realm '{kc_settings.realm}'. "
+                    f"It is declared under admin_permissions in the clients config; "
+                    f"run 'celine-policies keycloak sync' to create it, or pass "
+                    f"--no-admin-groups."
+                )
+            extra_group_ids[path] = group["id"]
+            logger.debug("Resolved admin-permission group %s -> %s", path, group["id"])
+
         # --- Per-participant sync ---------------------------------------------
+        admin_hint = (
+            f" groups={', '.join(admin_group_paths)}" if admin_group_paths else ""
+        )
+
         for p in participants:
             key = p["key"]
             username = derive_username(key)
@@ -468,13 +523,13 @@ async def _async_sync_users(
                 if existing:
                     typer.echo(
                         f"  ✓ {key} — exists as '{existing.get('username')}'"
-                        f" (org: {community['id']}{group_hint})"
+                        f" (org: {community['id']}{group_hint}){admin_hint}"
                     )
                     skipped.append(username)
                 else:
                     typer.secho(
                         f"  ~ {key} username='{username}'"
-                        f" org={community['id']}{group_hint}",
+                        f" org={community['id']}{group_hint}{admin_hint}",
                         fg=typer.colors.YELLOW,
                     )
                     created.append(username)
@@ -512,18 +567,20 @@ async def _async_sync_users(
                         typer.echo(
                             f"  ✓ {key} — already exists ({kc_uuid}), password reset"
                             + (" [org joined]" if org_added else "")
+                            + admin_hint
                         )
                     else:
                         typer.echo(
                             f"  ✓ {key} — already exists ({kc_uuid})"
                             + (" [org joined]" if org_added else "")
+                            + admin_hint
                         )
                     skipped.append(username)
                     continue
 
                 typer.secho(
                     f"  + {key} username='{username}' uuid={kc_uuid} pwd='{pwd}'"
-                    f" org={community['id']}",
+                    f" org={community['id']}{admin_hint}",
                     fg=typer.colors.GREEN,
                 )
                 created.append(username)

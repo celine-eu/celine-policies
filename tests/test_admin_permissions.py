@@ -454,6 +454,231 @@ class TestTheScopePairing:
         assert len(plan.admin_permissions_to_add) == 1
 
 
+class TestFindingTheGroupNeedsView:
+    """The member scopes cannot resolve the group they administer.
+
+    Measured on 26.6.0: holding `manage-members` + `manage-membership` +
+    `view-members` and nothing else, *every* route to the group's id answers 403
+    — `group-by-path`, `GET /groups?search=`, and `GET /groups/{id}` on the very
+    group being administered. Adding `view` opens `group-by-path` and
+    `GET /groups/{id}`; `GET /groups` stays 403, because listing the realm's
+    groups is a realm-wide act.
+
+    Every member call is addressed by that id, so the grant this repository first
+    shipped could create a participant and never find one again. Warned rather
+    than refused, for the same reason the pairing is: a permission whose scopes
+    are all member-addressed is a coherent narrower grant, and the warning names
+    what will break.
+    """
+
+    def test_member_scopes_without_view_warn(self, caplog):
+        config = a_config(
+            a_client(
+                groups=[
+                    (
+                        "/participants",
+                        ["manage-members", "manage-membership", "view-members"],
+                    )
+                ]
+            )
+        )
+        with caplog.at_level(logging.WARNING):
+            compute_sync_plan(config, CurrentState())
+
+        assert "'view'" in caplog.text
+        assert "/participants" in caplog.text
+
+    def test_view_alongside_them_does_not_warn(self, caplog):
+        config = a_config(
+            a_client(
+                groups=[
+                    (
+                        "/participants",
+                        [
+                            "manage-members",
+                            "manage-membership",
+                            "view-members",
+                            "view",
+                        ],
+                    )
+                ]
+            )
+        )
+        with caplog.at_level(logging.WARNING):
+            compute_sync_plan(config, CurrentState())
+
+        assert caplog.text == ""
+
+    def test_a_lone_member_scope_warns_too(self, caplog):
+        """`view-members` alone is just as unable to name the group."""
+        config = a_config(a_client(groups=[("/participants", ["view-members"])]))
+        with caplog.at_level(logging.WARNING):
+            compute_sync_plan(config, CurrentState())
+
+        assert "'view'" in caplog.text
+
+    def test_a_grant_of_view_alone_does_not_warn(self, caplog):
+        """Nothing member-addressed is declared, so nothing is unreachable."""
+        config = a_config(a_client(groups=[("/participants", ["view"])]))
+        with caplog.at_level(logging.WARNING):
+            compute_sync_plan(config, CurrentState())
+
+        assert caplog.text == ""
+
+    def test_it_warns_and_still_plans_the_grant(self):
+        """A warning is not a refusal — the declaration is still applied."""
+        config = a_config(a_client(groups=[("/participants", ["view-members"])]))
+        plan = compute_sync_plan(config, CurrentState())
+
+        assert len(plan.admin_permissions_to_add) == 1
+
+
+class TestTwoClientsOnOneGroupAreRefused:
+    """A second client granted the same group revokes the first one silently.
+
+    Measured on 26.6.0: with a permission for `svc-a` and another for `svc-b` on
+    `/participants`, *both* clients get 403 on everything — creating, reading
+    members, resolving the group. The admin-permissions resource server decides
+    `UNANIMOUS` and so does each permission, so a permission whose client policy
+    does not name you votes against you.
+
+    Keycloak refuses none of it: both permissions are created with a 201. So the
+    refusal is here, at load time, before anything is authenticated — the same
+    place an unknown scope name is caught, and for the same reason.
+    """
+
+    def test_two_clients_declaring_one_group_is_refused(self):
+        config = a_config(
+            a_client("svc-a", groups=[("/participants", ["view-members", "view"])]),
+            a_client("svc-b", groups=[("/participants", ["view-members", "view"])]),
+        )
+        problems = config.malformed_admin_permissions()
+
+        assert len(problems) == 1
+        assert "/participants" in problems[0]
+
+    def test_the_refusal_names_both_clients(self):
+        """The operator has to know which declaration to remove."""
+        config = a_config(
+            a_client("svc-a", groups=[("/participants", ["view"])]),
+            a_client("svc-b", groups=[("/participants", ["view"])]),
+        )
+        problem = config.malformed_admin_permissions()[0]
+
+        assert "svc-a" in problem
+        assert "svc-b" in problem
+
+    def test_it_says_the_second_declaration_breaks_the_first(self):
+        """Naming the consequence, because the API reports none."""
+        config = a_config(
+            a_client("svc-a", groups=[("/participants", ["view"])]),
+            a_client("svc-b", groups=[("/participants", ["view"])]),
+        )
+        problem = config.malformed_admin_permissions()[0]
+
+        assert "deny each other" in problem
+
+    def test_three_clients_on_one_group_is_one_problem_naming_all_three(self):
+        config = a_config(
+            a_client("svc-a", groups=[("/participants", ["view"])]),
+            a_client("svc-b", groups=[("/participants", ["view"])]),
+            a_client("svc-c", groups=[("/participants", ["view"])]),
+        )
+        problems = config.malformed_admin_permissions()
+
+        assert len(problems) == 1
+        assert all(c in problems[0] for c in ("svc-a", "svc-b", "svc-c"))
+
+    def test_different_groups_for_different_clients_are_fine(self):
+        """The conflict is one group, not the feature. Measured: no interference."""
+        config = a_config(
+            a_client("svc-a", groups=[("/participants", ["view"])]),
+            a_client("svc-b", groups=[("/operators", ["view"])]),
+        )
+
+        assert config.malformed_admin_permissions() == []
+
+    def test_one_client_declaring_two_groups_is_fine(self):
+        config = a_config(
+            a_client(
+                "svc-a",
+                groups=[("/participants", ["view"]), ("/operators", ["view"])],
+            )
+        )
+
+        assert config.malformed_admin_permissions() == []
+
+    def test_loading_a_conflicting_file_fails_before_anything_is_authenticated(
+        self, tmp_path: Path
+    ):
+        """The whole point of a load-time check: no realm is touched."""
+        path = tmp_path / "clients.yaml"
+        path.write_text(
+            "realm: celine\n"
+            "scopes: []\n"
+            "clients:\n"
+            "  - client_id: svc-a\n"
+            "    name: A\n"
+            "    admin_permissions:\n"
+            "      groups:\n"
+            "        - path: /participants\n"
+            "          scopes: [view]\n"
+            "  - client_id: svc-b\n"
+            "    name: B\n"
+            "    admin_permissions:\n"
+            "      groups:\n"
+            "        - path: /participants\n"
+            "          scopes: [view]\n"
+        )
+
+        with pytest.raises(ValueError, match="deny each other"):
+            KeycloakConfig.from_yaml(path)
+
+
+class TestTheGroupsParticipantsAreFiledIn:
+    """`sync-users` reads the same declaration `sync` grants from.
+
+    A group declared as administered and empty of everything this tool creates is
+    a grant over nobody: onboarding attempts a create, gets `409 User exists with
+    same username`, scans the group and does not find the account. So the paths
+    come from one place, and the two commands cannot name different groups.
+    """
+
+    def test_a_declared_group_is_reported_with_its_client(self):
+        config = a_config(
+            a_client("svc-onboarding", groups=[("/participants", ["view"])])
+        )
+
+        assert config.admin_permission_group_paths() == {
+            "/participants": ["svc-onboarding"]
+        }
+
+    def test_a_configuration_declaring_nothing_names_no_group(self):
+        """What keeps `sync-users` unchanged for everyone not using the feature."""
+        assert a_config(a_client(groups=None)).admin_permission_group_paths() == {}
+
+    def test_an_empty_block_names_no_group(self):
+        assert a_config(a_client(groups=[])).admin_permission_group_paths() == {}
+
+    def test_every_declared_group_is_named(self):
+        config = a_config(
+            a_client("svc-a", groups=[("/participants", ["view"])]),
+            a_client("svc-b", groups=[("/operators", ["view"])]),
+        )
+
+        assert sorted(config.admin_permission_group_paths()) == [
+            "/operators",
+            "/participants",
+        ]
+
+    def test_the_real_declaration_names_the_participants_group(self):
+        config = KeycloakConfig.from_yaml(Path("clients.yaml"))
+
+        assert config.admin_permission_group_paths() == {
+            "/participants": ["svc-onboarding"]
+        }
+
+
 class TestTheRealmsOwnClientIsNotAnOrphan:
     """`--prune` must never delete the resource server holding the permissions.
 
@@ -497,6 +722,23 @@ class TestTheRealDeclaration:
             config.clients_with_admin_permissions()[0].admin_permissions.groups[0].scopes
         )
         assert {"manage-members", "manage-membership"} <= scopes
+
+    def test_it_carries_view_so_the_grant_can_find_its_group(self):
+        """Without it the service creates participants and finds none of them."""
+        config = KeycloakConfig.from_yaml(Path("clients.yaml"))
+        scopes = set(
+            config.clients_with_admin_permissions()[0].admin_permissions.groups[0].scopes
+        )
+        assert "view" in scopes
+
+    def test_the_shipped_declaration_warns_about_no_half_grant(self, caplog):
+        """Neither half-grant. The unrelated `oauth2_proxy` audience warning is
+        pre-existing and not what this asserts about."""
+        config = KeycloakConfig.from_yaml(Path("clients.yaml"))
+        with caplog.at_level(logging.WARNING):
+            compute_sync_plan(config, CurrentState())
+
+        assert "/participants" not in caplog.text
 
     def test_nothing_in_the_declaration_is_malformed(self):
         config = KeycloakConfig.from_yaml(Path("clients.yaml"))

@@ -132,6 +132,13 @@ class TestSyncUsersOptions:
     def test_group_assignment_is_offered(self, help_text: str):
         assert "--group" in help_text or "--groups" in help_text
 
+    def test_filing_into_the_administered_groups_can_be_turned_off(
+        self, help_text: str
+    ):
+        """On by default; the escape hatch is for a realm whose groups this
+        declaration does not own."""
+        assert "--no-admin-groups" in help_text
+
 
 class TestSyncOrgsOptions:
     @pytest.fixture

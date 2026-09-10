@@ -212,7 +212,7 @@ scopes_prefix: onboarding
 admin_permissions:
   groups:
     - path: /participants
-      scopes: [manage-members, manage-membership, view-members]
+      scopes: [manage-members, manage-membership, view-members, view]
 default_scopes:
   - onboarding.admin
 ```
@@ -350,7 +350,7 @@ separate mechanism, and it is declared with `admin_permissions`:
     admin_permissions:
       groups:
         - path: /participants
-          scopes: [manage-members, manage-membership, view-members]
+          scopes: [manage-members, manage-membership, view-members, view]
 ```
 
 The grant is scoped to the members of one group. A service account holding the block above
@@ -378,6 +378,22 @@ both: one authorises making the user, the other authorises putting them in the g
 Granted either alone, Keycloak creates the permission without complaint and refuses every
 creation with a `403`. `sync` warns when it sees one without the other.
 
+**Any member scope needs `view` beside it.** The member scopes do not let a service account
+name the group they are about: holding them and nothing else, `group-by-path`,
+`GET /groups?search=` and even `GET /groups/{id}` on the administered group all answer
+`403`. Every member call is addressed by that id, so such a grant can create a member and
+can never find one again — and a service that resolves its group lazily keeps provisioning
+and fails only later, on a lookup. `sync` warns when a member scope appears without `view`.
+Adding `view` does not widen the grant beyond the group: `GET /groups`, which lists the
+realm's groups, stays `403`.
+
+**One client per group.** Two clients granted the same group deny *each other*: the
+admin-permissions resource server decides `UNANIMOUS`, so a permission whose client policy
+does not name you votes against you, and both clients end up with `403` on everything —
+including the one that was working before the second declaration was added. Keycloak
+creates both permissions with a `201` and reports nothing, so the declaration is refused
+when the file is loaded instead.
+
 ### What sync does with it
 
 On a realm that declares nothing, nothing — no request is made and no action is planned.
@@ -390,6 +406,22 @@ permission, and removing a group from the declaration revokes it. Only permissio
 with the `celine-policies:` prefix are ever read or written, so anything created by hand in
 the admin console survives a sync untouched. A group that `sync` created is never deleted —
 revoking a permission leaves the group and its members alone.
+
+### What sync-users does with it
+
+`sync-users` reads the same block and adds every participant it processes to the groups it
+declares, so a grant over a group is a grant over the participants this tool creates. It
+applies to accounts that already exist as well as new ones, which makes a re-run the
+backfill for participants provisioned before the group was declared:
+
+```console
+$ celine-policies keycloak sync-users greenland.yaml
+Admin groups: /participants (declared by svc-onboarding)
+```
+
+The group must already exist — `sync` creates it when it grants the permission, and
+`sync-users` fails before touching any user rather than creating realm structure of its
+own. `--no-admin-groups` turns the behaviour off.
 
 ### Requirements
 
@@ -421,7 +453,7 @@ clients:
     admin_permissions:
       groups:
         - path: /some-group
-          scopes: [manage-members, manage-membership]
+          scopes: [manage-members, manage-membership, view]
 ```
 
 Client secrets support environment variable substitution with `${VAR:-default}` syntax.
