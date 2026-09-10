@@ -194,6 +194,7 @@ class KeycloakAdminClient:
         "organization",
         "groups",
         "dataspace",
+        "service_account",
     }
 
     def __init__(self, settings: KeycloakSettings):

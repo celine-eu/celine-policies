@@ -137,6 +137,8 @@ scopes:
     description: Admin nudging
   - name: nudging.ingest
     description: Send notifications
+  - name: nudging.analytics.read
+    description: Read privacy-safe aggregate nudging analytics
 
   # Flexibility API
   - name: flexibility.admin
@@ -163,6 +165,18 @@ scopes:
     description: Create, update, and delete own alert rules and notification settings
   - name: grid.admin
     description: Full access to the Grid API (all of the above, cross-user)
+
+  # REC Manager Dashboard
+  - name: community.read
+    description: Read aggregate REC manager data
+  - name: community.devices.read
+    description: Read technical device-level data without participant identity
+  - name: community.nudging.read
+    description: Read aggregate nudging performance
+  - name: community.alerts.write
+    description: Manage and acknowledge REC alerts
+  - name: community.objectives.write
+    description: Manage REC objectives
 
   # MLflow
   - name: mlflow.admin
@@ -323,6 +337,25 @@ clients:
       - dataset.query # DT passes svc-grid token through to dataset-api → aud: svc-dataset-api
       - nudging.ingest # send grid_alert nudges
       - pipelines.runs.read # subscribe to pipeline run completion events on MQTT
+
+  - client_id: svc-community
+    name: REC Manager Dashboard BFF
+    secret: ${SVC_COMMUNITY_SECRET:-svc-community}
+    scopes_prefix: community
+    default_scopes:
+      # Own resources
+      - community.read
+      - community.devices.read
+      - community.nudging.read
+      - community.alerts.write
+      - community.objectives.write
+      # Dependencies: the DT forwards this token to governed dataset queries.
+      - digital-twin.values.read
+      - dataset.query
+      # Aggregate administrative population; participant records never leave the BFF process.
+      - rec-registry.read
+      # Aggregate-only operational metrics; nudging-tool retains participant records.
+      - nudging.analytics.read
 
   - client_id: svc-webapp
     name: Webapp BFF Service
