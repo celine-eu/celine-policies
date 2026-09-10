@@ -212,6 +212,21 @@ class KeycloakSettings(BaseSettings):
         return self
 
 
+def realm_is_set_in_environment() -> bool:
+    """Whether the environment aims the realm, rather than leaving it defaulted.
+
+    `KeycloakSettings().realm` cannot answer this: an unset variable and one set
+    to the default value read identically. Pydantic records which fields a source
+    actually supplied, so ask it rather than reading `os.environ` by hand — the
+    answer stays right if the alias changes or a settings source is added.
+
+    `sync` is the only caller: it is the one command with a third input for the
+    realm (`realm:` in clients.yaml), and it has to know whether that input is
+    filling a gap or overruling a deliberate choice.
+    """
+    return "realm" in KeycloakSettings().model_fields_set
+
+
 class SyncUsersSettings(BaseSettings):  # <<< NEW
     """Settings for the sync-users command.
 

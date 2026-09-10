@@ -61,7 +61,7 @@ Environment variables with `CELINE_KEYCLOAK_` prefix:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CELINE_KEYCLOAK_BASE_URL` | `http://keycloak.celine.localhost` | Keycloak URL |
-| `CELINE_KEYCLOAK_REALM` | `celine` | Target realm |
+| `CELINE_KEYCLOAK_REALM` | `celine` | Target realm. Outranks `realm:` in `clients.yaml`, and is outranked by `--realm` |
 | `CELINE_KEYCLOAK_ADMIN_USER` | — | Admin username |
 | `CELINE_KEYCLOAK_ADMIN_PASSWORD` | — | Admin password |
 | `CELINE_KEYCLOAK_ADMIN_CLIENT_ID` | `celine-admin-cli` | Service client ID |

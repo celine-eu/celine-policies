@@ -60,7 +60,9 @@ them, and `?subGroups=true` changes nothing.
 So the per-org shape is a different change rather than a larger version of this one:
 `clients.yaml` does not know organizations and the REC registry does, so granting would move
 from `clients.yaml`-driven `sync` to registry-driven `sync-users`, and the consumer would
-have to resolve an organization's group rather than one fixed path. It needs its own ADR.
+have to resolve an organization's group rather than one fixed path. It needs its own ADR,
+and the measurements are recorded in
+[celine-policies#6](https://github.com/celine-eu/celine-policies/issues/6).
 
 One thing does descend, and is worth not re-deriving: **member-addressed calls**. Reading,
 updating and password-resetting a user who is only in `/participants/<org>` all succeed

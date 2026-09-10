@@ -9,7 +9,10 @@ from pathlib import Path
 
 from celine.governance import validate_owners
 
-from celine.policies.cli.keycloak.settings import KeycloakSettings
+from celine.policies.cli.keycloak.settings import (
+    KeycloakSettings,
+    realm_is_set_in_environment,
+)
 
 
 def configure_logging(verbose: bool) -> None:
@@ -57,6 +60,40 @@ def build_settings(
         settings = settings.with_auto_secret()
 
     return settings
+
+
+def resolve_realm(
+    settings: KeycloakSettings,
+    *,
+    cli_realm: str | None,
+    config_realm: str | None,
+    config_source: str,
+) -> tuple[KeycloakSettings, str]:
+    """Decide which input aims this run, and name the one that won.
+
+    `sync` is the only command with a third input for the realm — `realm:` in the
+    declaration it is about to apply — and that input is committed and shared,
+    while `CELINE_KEYCLOAK_REALM` is how one particular run is aimed. So the
+    declaration supplies a default for a run nobody aimed, and nothing more:
+
+        --realm  >  CELINE_KEYCLOAK_REALM  >  the declaration  >  the default
+
+    which is the order every other command already has, with the declaration
+    added at the bottom. It previously sat above the environment variable,
+    because the test for "not aimed" was the CLI parameter alone and
+    `build_settings` had already folded the environment into `settings`.
+
+    Returns the settings to use and a short name for the input that supplied the
+    realm, for the banner: the value alone does not say which input won, and that
+    is the whole reason this was hard to see.
+    """
+    if cli_realm:
+        return settings, "--realm"
+    if realm_is_set_in_environment():
+        return settings, "CELINE_KEYCLOAK_REALM"
+    if config_realm:
+        return settings.with_overrides(realm=config_realm), config_source
+    return settings, "the default"
 
 
 def load_rec_participants(rec_yaml: Path) -> list[dict]:

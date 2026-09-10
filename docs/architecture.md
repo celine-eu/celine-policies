@@ -29,7 +29,7 @@ A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. It
 - `set-user-organization` — assign a user to organizations and org-level groups
 - `status` — show current scopes, clients, and assignments
 
-Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap.
+Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time.
 
 ### 3. Rego Policies
 
@@ -89,7 +89,7 @@ The `sync` command:
 2. Fetches current state from Keycloak (existing scopes, clients, assignments)
 3. Computes a diff (plan): scopes to create/update, clients to create/update, scope assignments to add/remove
 4. Applies changes idempotently
-5. Writes generated client secrets to `.client.secrets.yaml`
+5. Merges the client secrets it generated into `.client.secrets.yaml`, keeping the entries this run did not touch — `celine-admin-cli` among them, which is what the next run with no `--admin-user` authenticates with
 
 The `scopes_prefix` field on each client declares scope ownership. The CLI uses this to automatically add audience mappers so that user JWTs issued through `oauth2-proxy` carry the correct audience for each service.
 

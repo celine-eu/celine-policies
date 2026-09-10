@@ -29,6 +29,7 @@ from celine.policies.cli.keycloak.sync import (
 from celine.policies.cli.keycloak.commands._utils import (
     configure_logging,
     build_settings,
+    resolve_realm,
 )
 
 logger = logging.getLogger(__name__)
@@ -150,11 +151,20 @@ def sync(
         typer.secho(f"Error loading config: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    # Override realm from config if not specified on CLI
-    if config.realm and not realm:
-        settings = settings.with_overrides(realm=config.realm)
+    # The declaration only supplies the realm for a run nobody aimed: --realm and
+    # CELINE_KEYCLOAK_REALM both outrank it. The banner names the input that won,
+    # because the realm alone does not say.
+    settings, realm_source = resolve_realm(
+        settings,
+        cli_realm=realm,
+        config_realm=config.realm,
+        config_source=str(config_path),
+    )
 
-    typer.echo(f"Syncing to Keycloak: {settings.base_url} realm={settings.realm}")
+    typer.echo(
+        f"Syncing to Keycloak: {settings.base_url} "
+        f"realm={settings.realm} (from {realm_source})"
+    )
     if overlays:
         typer.echo(
             f"Merged {len(overlays) + 1} files: "
@@ -201,7 +211,7 @@ def sync(
     # Write secrets file
     if result.client_secrets and not dry_run:
         output_path = secrets_file or Path(".client.secrets.yaml")
-        write_secrets_file(output_path, result, config)
+        write_secrets_file(output_path, result, settings.realm)
         typer.echo(f"Secrets written to: {output_path}")
 
     # Print summary

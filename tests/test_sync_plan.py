@@ -769,7 +769,7 @@ class TestWriteSecretsFile:
         result = SyncResult(
             client_secrets={"svc-x": "secret-x"}, clients_created=["svc-x"]
         )
-        write_secrets_file(path, result, KeycloakConfig(realm="celine"))
+        write_secrets_file(path, result, "celine")
 
         data = yaml.safe_load(path.read_text())
         assert data["realm"] == "celine"
@@ -784,30 +784,57 @@ class TestWriteSecretsFile:
     def test_it_carries_a_do_not_commit_warning(self, tmp_path: Path):
         """The file holds live credentials and lands in the working tree."""
         path = tmp_path / "out.yaml"
-        write_secrets_file(path, SyncResult(), KeycloakConfig())
+        write_secrets_file(path, SyncResult(), "celine")
 
         assert "DO NOT COMMIT" in path.read_text()
 
     def test_an_updated_client_is_marked_as_updated(self, tmp_path: Path):
         path = tmp_path / "out.yaml"
-        result = SyncResult(
-            client_secrets={"svc-x": "s"}, clients_updated=["svc-x"]
-        )
-        write_secrets_file(path, result, KeycloakConfig())
+        result = SyncResult(client_secrets={"svc-x": "s"}, clients_updated=["svc-x"])
+        write_secrets_file(path, result, "celine")
 
         data = yaml.safe_load(path.read_text())
         assert data["clients"]["svc-x"]["created"] is False
         assert data["clients"]["svc-x"]["updated"] is True
 
-    def test_it_overwrites_a_previous_file(self, tmp_path: Path):
-        """Repeated syncs must not append or leave a stale secret behind."""
+    def test_it_keeps_the_clients_this_run_did_not_touch(self, tmp_path: Path):
+        """The file is the store the CLI authenticates from, not a run log.
+
+        `result.client_secrets` holds only what this run created or updated, so a
+        writer that rewrote the file would delete `celine-admin-cli` — the
+        credential the next run with no `--admin-user` needs. Replaces an earlier
+        test that asserted the rewrite; see celine-policies#5.
+        """
         path = tmp_path / "out.yaml"
         write_secrets_file(
-            path, SyncResult(client_secrets={"svc-old": "old"}), KeycloakConfig()
+            path, SyncResult(client_secrets={"svc-old": "old"}), "celine"
         )
         write_secrets_file(
-            path, SyncResult(client_secrets={"svc-new": "new"}), KeycloakConfig()
+            path, SyncResult(client_secrets={"svc-new": "new"}), "celine"
         )
 
         data = yaml.safe_load(path.read_text())
-        assert set(data["clients"]) == {"svc-new"}
+        assert set(data["clients"]) == {"svc-old", "svc-new"}
+
+    def test_a_client_this_run_touched_has_its_secret_replaced(self, tmp_path: Path):
+        """Merging must not leave a rotated secret behind under the same id."""
+        path = tmp_path / "out.yaml"
+        write_secrets_file(path, SyncResult(client_secrets={"svc-x": "old"}), "celine")
+        write_secrets_file(path, SyncResult(client_secrets={"svc-x": "new"}), "celine")
+
+        data = yaml.safe_load(path.read_text())
+        assert data["clients"]["svc-x"]["secret"] == "new"
+
+    def test_the_realm_written_is_the_one_the_run_used(self, tmp_path: Path):
+        """Not the one the declaration names — that is the defect in #4, one file on.
+
+        `sync` passes `settings.realm`, so a run aimed elsewhere by `--realm` or
+        `CELINE_KEYCLOAK_REALM` does not label its credentials with the realm
+        `clients.yaml` happens to declare.
+        """
+        path = tmp_path / "out.yaml"
+        write_secrets_file(
+            path, SyncResult(client_secrets={"svc-x": "s"}), "e2e-throwaway"
+        )
+
+        assert yaml.safe_load(path.read_text())["realm"] == "e2e-throwaway"

@@ -37,6 +37,8 @@ celine-policies keycloak bootstrap --admin-user admin --admin-password admin
 
 This writes the client secret to `.client.secrets.yaml`. Subsequent commands auto-load credentials from this file.
 
+The file is the store of the credentials the CLI authenticates with, not a log of the last run: `bootstrap` and `sync` both merge into it, so neither deletes what the other wrote. It holds one realm's credentials — pointing a command at a different realm replaces its contents, and says so.
+
 ### Step 3: Sync Scopes and Clients
 
 ```bash
@@ -134,6 +136,18 @@ Most keycloak commands share these connection options:
 | `--admin-client-id` | `CELINE_KEYCLOAK_ADMIN_CLIENT_ID` | `celine-admin-cli` |
 | `--admin-client-secret` | `CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET` | (auto-loaded from `.client.secrets.yaml`) |
 | `--secrets-file` | `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` |
+
+`sync` has a third input for the realm — `realm:` in the declaration it is applying — and it is the lowest-ranked one:
+
+```text
+--realm  >  CELINE_KEYCLOAK_REALM  >  realm: in clients.yaml  >  celine
+```
+
+The declaration aims a run nobody aimed, and nothing more. `sync` prints which input won, because the value alone does not say:
+
+```console
+Syncing to Keycloak: http://keycloak.celine.localhost realm=e2e-throwaway (from CELINE_KEYCLOAK_REALM)
+```
 
 ## Testing
 

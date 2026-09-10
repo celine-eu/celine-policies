@@ -27,11 +27,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from celine.policies.cli.keycloak.client import (
     AUDIENCE_MAPPER_PREFIX,
@@ -46,6 +43,7 @@ from celine.policies.cli.keycloak.models import (
     KeycloakConfig,
     ScopeConfig,
 )
+from celine.policies.cli.keycloak.secrets_file import merge_secrets_file
 
 logger = logging.getLogger(__name__)
 
@@ -1362,29 +1360,30 @@ async def _apply_admin_permissions(
 def write_secrets_file(
     path: Path,
     result: SyncResult,
-    config: KeycloakConfig,
+    realm: str,
 ) -> None:
-    """Write client secrets to a YAML file.
+    """Record this run's client secrets in the store, keeping the rest.
+
+    `result.client_secrets` only holds the clients this run created or updated, so
+    a writer that rewrote the file would leave the realm's other credentials —
+    `celine-admin-cli` among them — deleted. Merging is what makes the file the
+    store the CLI reads back rather than a log of the last run.
 
     Args:
         path: Output path for secrets file
         result: Sync result containing secrets
-        config: Configuration for realm info
+        realm: The realm this run wrote to
     """
-    output = {
-        "# WARNING": "This file contains sensitive credentials. DO NOT COMMIT.",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "realm": config.realm,
-        "clients": {},
-    }
-
-    for client_id, secret in result.client_secrets.items():
-        output["clients"][client_id] = {
-            "client_id": client_id,
-            "secret": secret,
-            "created": client_id in result.clients_created,
-            "updated": client_id in result.clients_updated,
-        }
-
-    path.write_text(yaml.safe_dump(output, default_flow_style=False, sort_keys=False))
-    logger.info("Wrote secrets to: %s", path)
+    merge_secrets_file(
+        path,
+        realm,
+        {
+            client_id: {
+                "client_id": client_id,
+                "secret": secret,
+                "created": client_id in result.clients_created,
+                "updated": client_id in result.clients_updated,
+            }
+            for client_id, secret in result.client_secrets.items()
+        },
+    )

@@ -20,12 +20,13 @@ from pathlib import Path
 
 import pytest
 
-from celine.policies.cli.keycloak.commands._utils import build_settings
+from celine.policies.cli.keycloak.commands._utils import build_settings, resolve_realm
 from celine.policies.cli.keycloak.settings import (
     DEFAULT_ADMIN_CLIENT_ID,
     KeycloakSettings,
     SyncUsersSettings,
     _load_secret_from_file,
+    realm_is_set_in_environment,
 )
 
 SECRETS_YAML = """
@@ -324,6 +325,110 @@ class TestBuildSettings:
         settings = self._build()
         assert settings.realm == "celine"
         assert settings.admin_client_secret is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_realm — which of the three inputs aims a sync
+# ---------------------------------------------------------------------------
+
+
+class TestRealmIsSetInEnvironment:
+    """The distinction `settings.realm` cannot make on its own.
+
+    An unset `CELINE_KEYCLOAK_REALM` and one exported as the default value read
+    identically off the settings object, and `sync` has to tell them apart to
+    know whether `clients.yaml` is filling a gap or overruling a choice.
+    """
+
+    def test_it_is_false_when_nothing_is_exported(self):
+        assert realm_is_set_in_environment() is False
+
+    def test_it_is_true_when_the_variable_is_set(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CELINE_KEYCLOAK_REALM", "e2e-throwaway")
+        assert realm_is_set_in_environment() is True
+
+    def test_the_default_value_still_counts_as_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Exporting the default is a choice, and it must not be overruled either."""
+        monkeypatch.setenv("CELINE_KEYCLOAK_REALM", "celine")
+        assert realm_is_set_in_environment() is True
+
+
+class TestResolveRealm:
+    """`--realm` > `CELINE_KEYCLOAK_REALM` > the declaration > the default.
+
+    `sync` is the only command with the third input, and it used to sit *above*
+    the environment variable: the test for "nobody aimed this run" was the CLI
+    parameter alone, and `build_settings` had already folded the environment in
+    by then. So an exported realm was silently outranked by a committed one, on
+    the command that writes most (celine-policies#4).
+    """
+
+    def _settings(self, realm: str | None = None) -> KeycloakSettings:
+        return build_settings(
+            base_url=None,
+            realm=realm,
+            admin_user="admin",
+            admin_password="admin",
+            admin_client_id=None,
+            admin_client_secret=None,
+        )
+
+    def test_the_declaration_aims_a_run_nobody_aimed(self):
+        settings, source = resolve_realm(
+            self._settings(),
+            cli_realm=None,
+            config_realm="celine",
+            config_source="clients.yaml",
+        )
+        assert settings.realm == "celine"
+        assert source == "clients.yaml"
+
+    def test_the_environment_outranks_the_declaration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The defect. `clients.yaml` is committed; the variable aims one run."""
+        monkeypatch.setenv("CELINE_KEYCLOAK_REALM", "e2e-throwaway")
+        settings, source = resolve_realm(
+            self._settings(),
+            cli_realm=None,
+            config_realm="celine",
+            config_source="clients.yaml",
+        )
+        assert settings.realm == "e2e-throwaway"
+        assert source == "CELINE_KEYCLOAK_REALM"
+
+    def test_the_flag_outranks_both(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CELINE_KEYCLOAK_REALM", "e2e-throwaway")
+        settings, source = resolve_realm(
+            self._settings("flag-realm"),
+            cli_realm="flag-realm",
+            config_realm="celine",
+            config_source="clients.yaml",
+        )
+        assert settings.realm == "flag-realm"
+        assert source == "--realm"
+
+    def test_a_declaration_naming_no_realm_leaves_the_default(self):
+        settings, source = resolve_realm(
+            self._settings(),
+            cli_realm=None,
+            config_realm=None,
+            config_source="clients.yaml",
+        )
+        assert settings.realm == "celine"
+        assert source == "the default"
+
+    def test_the_source_names_the_file_that_was_passed(self):
+        """The banner has to name a file the operator recognises, not "config"."""
+        _, source = resolve_realm(
+            self._settings(),
+            cli_realm=None,
+            config_realm="celine",
+            config_source="config/keycloak.yaml",
+        )
+        assert source == "config/keycloak.yaml"
 
 
 # ---------------------------------------------------------------------------

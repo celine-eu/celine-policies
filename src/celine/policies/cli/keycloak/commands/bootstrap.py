@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
-import yaml
 
 from celine.policies.cli.keycloak.client import (
     KeycloakAdminClient,
     KeycloakAuthError,
     KeycloakError,
 )
+from celine.policies.cli.keycloak.secrets_file import merge_secrets_file
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.policies.cli.keycloak.commands._utils import configure_logging
 
@@ -142,38 +142,23 @@ def _update_secrets_file(
     secret: str,
     created: bool,
 ) -> None:
-    """Update or create the secrets file with client credentials."""
-    from datetime import datetime, timezone
+    """Put this client's credentials in the store, preserving the others.
 
-    # Load existing file if present
-    data: dict = {}
-    if secrets_file.exists():
-        try:
-            data = yaml.safe_load(secrets_file.read_text()) or {}
-        except Exception:
-            data = {}
-
-    # Ensure structure
-    if "clients" not in data or not isinstance(data["clients"], dict):
-        data["clients"] = {}
-
-    # Update metadata
-    data["generated_at"] = datetime.now(timezone.utc).isoformat()
-    data["realm"] = realm
-
-    # Update client entry (preserves other clients)
-    data["clients"][client_id] = {
-        "client_id": client_id,
-        "secret": secret,
-        "created": created,
-    }
-
-    # Add warning comment at top
-    content = "# WARNING: This file contains sensitive credentials. DO NOT COMMIT.\n"
-    content += yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
-
-    secrets_file.write_text(content)
-    logger.info("Updated secrets file: %s", secrets_file)
+    Merging is not this function's own arrangement with the file: `sync` writes
+    the same store through the same writer, which is what stops one command
+    deleting the other's credentials.
+    """
+    merge_secrets_file(
+        secrets_file,
+        realm,
+        {
+            client_id: {
+                "client_id": client_id,
+                "secret": secret,
+                "created": created,
+            }
+        },
+    )
 
 
 async def _async_bootstrap(
