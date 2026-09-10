@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from celine.policies.cli.keycloak.client import CurrentState
+from celine.policies.cli.keycloak.client import CurrentState, GroupAdminGrantState
 from celine.policies.cli.keycloak.models import (
     ClientConfig,
     KeycloakConfig,
@@ -641,6 +641,26 @@ class TestIdempotenceOnTheRealConfig:
             state.client_audience_mappers[proxy] = {
                 audience: f"mapper-{proxy}-{audience}"
                 for audience in config.get_service_client_ids() | {proxy}
+            }
+
+        # What each service account already administers. A realm that has the
+        # declared admin permissions must plan none of them again — the same
+        # property as every other section here, and the one that would otherwise
+        # rewrite a client's rights on every run.
+        declaring = config.clients_with_admin_permissions()
+        if declaring:
+            state.admin_permissions_enabled = True
+            state.admin_permissions_client_uuid = "uuid-admin-permissions"
+            state.admin_group_permissions = {
+                client.client_id: {
+                    grant.path: GroupAdminGrantState(
+                        permission_id=f"perm-{client.client_id}-{grant.group_name}",
+                        scopes=set(grant.scopes),
+                        group_id=f"gid-{grant.group_name}",
+                    )
+                    for grant in client.admin_permissions.groups
+                }
+                for client in declaring
             }
         return state
 

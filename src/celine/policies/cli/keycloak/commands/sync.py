@@ -315,6 +315,13 @@ async def _async_sync(
         # Fetch current state
         typer.echo("Fetching current state...")
         current = await client.fetch_current_state()
+
+        # What each service account may already administer. One realm read on a
+        # realm that does not use the feature, which then returns having found
+        # nothing — but it is read unconditionally so that a client dropping its
+        # `admin_permissions` block still has the grant taken away.
+        await client.fetch_admin_permission_state(current, config.get_client_ids())
+
         typer.echo(
             f"Found {len(current.scopes)} scopes, {len(current.clients)} clients"
         )

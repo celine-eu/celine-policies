@@ -40,3 +40,4 @@ edited to say something else.
 |---|---|
 | [ADR-0001](ADR-0001-merge-in-the-loader.md) | A realm declared by several files is merged in the loader, not pre-merged into a file |
 | [ADR-0002](ADR-0002-undefined-scope-grants-are-fatal.md) | A grant naming a scope no file declares stops the sync before it starts |
+| [ADR-0003](ADR-0003-declare-realm-administration-as-a-group-scoped-permission.md) | A service account's realm administration is declared, and scoped to one group |

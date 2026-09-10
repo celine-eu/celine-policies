@@ -209,6 +209,10 @@ operator's browser token is rejected on audience validation before any policy ru
 
 ```yaml
 scopes_prefix: onboarding
+admin_permissions:
+  groups:
+    - path: /participants
+      scopes: [manage-members, manage-membership, view-members]
 default_scopes:
   - onboarding.admin
 ```
@@ -216,6 +220,10 @@ default_scopes:
 Not the same client as `svc-ds-onboarding`, which is the onboarding service's *outbound*
 identity for the dataspace. One service, two clients: this one validates inbound
 audiences, that one authenticates outbound M2M.
+
+It is also the only client that administers the realm — it provisions a participant's
+login — and the `admin_permissions` block is where that is declared rather than granted by
+hand. See [Realm administration](#realm-administration) below.
 
 ### svc-onboarding-cli
 
@@ -331,6 +339,66 @@ For MQTT specifically, topic access is controlled by Rego policies (see [MQTT In
 
 ---
 
+## Realm administration
+
+Scopes say what a client may **ask for**. They say nothing about what its service account
+may **do to the realm** — create a user, reset a password, disable an account. That is a
+separate mechanism, and it is declared with `admin_permissions`:
+
+```yaml
+  - client_id: svc-onboarding
+    admin_permissions:
+      groups:
+        - path: /participants
+          scopes: [manage-members, manage-membership, view-members]
+```
+
+The grant is scoped to the members of one group. A service account holding the block above
+may create a user **into** `/participants` and read, update, disable and password-reset a
+member of it — and may do none of those things to anybody else, including operator
+accounts. Keycloak's realm-wide `manage-users` role would have reached every account in the
+realm to do the same job; there is deliberately no way to ask for it from this file.
+
+### The scopes
+
+Keycloak defines these on its `Groups` resource type. A name not on this list is refused
+when the file is loaded, before anything is authenticated.
+
+| Scope | Grants |
+|---|---|
+| `view-members` | read the group's members, and search within them |
+| `manage-members` | create, update, disable and password-reset a member |
+| `manage-membership` | add and remove members of the group |
+| `view` / `manage` | read and modify the group itself |
+| `manage-membership-of-members` | change members' membership of *other* groups |
+| `impersonate-members` | impersonate a member |
+
+**`manage-members` and `manage-membership` are a pair.** Creating a user in a group needs
+both: one authorises making the user, the other authorises putting them in the group.
+Granted either alone, Keycloak creates the permission without complaint and refuses every
+creation with a `403`. `sync` warns when it sees one without the other.
+
+### What sync does with it
+
+On a realm that declares nothing, nothing — no request is made and no action is planned.
+Where a client does declare it, `sync` enables fine-grained admin permissions on the realm
+(which leaves existing `realm-management` role grants working exactly as before), ensures
+the group exists, and creates one policy and one permission per declared group.
+
+It converges in both directions without `--prune`: narrowing the scope list rewrites the
+permission, and removing a group from the declaration revokes it. Only permissions named
+with the `celine-policies:` prefix are ever read or written, so anything created by hand in
+the admin console survives a sync untouched. A group that `sync` created is never deleted —
+revoking a permission leaves the group and its members alone.
+
+### Requirements
+
+Keycloak 26.2 or later with `ADMIN_FINE_GRAINED_AUTHZ_V2`, which is a default-enabled
+feature on the 26.6 image this repository ships. An **organization's** group cannot be
+targeted — only realm groups; see
+[ADR-0003](decisions/ADR-0003-declare-realm-administration-as-a-group-scoped-permission.md)
+for what was measured.
+
 ## clients.yaml Format
 
 ```yaml
@@ -349,6 +417,11 @@ clients:
     default_scopes:
       - service-name.admin
       - other-service.scope
+    # Optional — what this client's service account may administer.
+    admin_permissions:
+      groups:
+        - path: /some-group
+          scopes: [manage-members, manage-membership]
 ```
 
 Client secrets support environment variable substitution with `${VAR:-default}` syntax.

@@ -95,6 +95,28 @@ class AudienceMapperAction:
 
 
 @dataclass
+class AdminPermissionAction:
+    """Action on a client's fine-grained administration rights over one group.
+
+    Attributes:
+        client_id:      The client whose service account is granted the rights.
+        group_path:     Realm group whose members it may administer.
+        scopes:         Desired admin scopes; empty for a "remove".
+        action:         "add", "update" or "remove".
+        permission_id:  Keycloak permission id — set for "update" and "remove".
+        current_scopes: What the realm grants today, for the summary to show the
+                        narrowing rather than only the result.
+    """
+
+    client_id: str
+    group_path: str
+    scopes: list[str]
+    action: str  # "add", "update", "remove"
+    permission_id: str | None = None
+    current_scopes: set[str] | None = None
+
+
+@dataclass
 class SyncPlan:
     """Plan of actions to sync Keycloak to desired state."""
 
@@ -116,6 +138,22 @@ class SyncPlan:
     audience_mappers_to_add: list[AudienceMapperAction] = field(default_factory=list)
     audience_mappers_to_remove: list[AudienceMapperAction] = field(default_factory=list)
 
+    # Fine-grained admin permission actions.
+    #
+    # These converge like scope assignments and not like orphan clients: a group
+    # dropped from the declaration has its permission deleted, and a narrowed
+    # scope list rewrites it, both without --prune. A managed permission that no
+    # longer matches what the file says is drift, not an orphan — leaving it
+    # would be the same silent disagreement in the other direction.
+    enable_admin_permissions: bool = False
+    admin_permissions_to_add: list[AdminPermissionAction] = field(default_factory=list)
+    admin_permissions_to_update: list[AdminPermissionAction] = field(
+        default_factory=list
+    )
+    admin_permissions_to_remove: list[AdminPermissionAction] = field(
+        default_factory=list
+    )
+
     # Orphans (exist in Keycloak but not in config)
     orphan_scopes: list[str] = field(default_factory=list)
     orphan_clients: list[str] = field(default_factory=list)
@@ -132,6 +170,10 @@ class SyncPlan:
             or self.scope_assignments_to_remove
             or self.audience_mappers_to_add
             or self.audience_mappers_to_remove
+            or self.enable_admin_permissions
+            or self.admin_permissions_to_add
+            or self.admin_permissions_to_update
+            or self.admin_permissions_to_remove
         )
 
     @property
@@ -199,6 +241,43 @@ class SyncPlan:
                     f"  - {action.client_id} -> aud:{action.audience_client_id}"
                 )
 
+        if self.enable_admin_permissions:
+            lines.append(
+                "Realm: enable fine-grained admin permissions "
+                "(existing realm-management roles are unaffected)"
+            )
+
+        if self.admin_permissions_to_add:
+            lines.append(
+                f"Admin permissions to grant: {len(self.admin_permissions_to_add)}"
+            )
+            for action in self.admin_permissions_to_add:
+                lines.append(
+                    f"  + {action.client_id} -> {action.group_path} "
+                    f"({', '.join(action.scopes)})"
+                )
+
+        if self.admin_permissions_to_update:
+            lines.append(
+                f"Admin permissions to change: {len(self.admin_permissions_to_update)}"
+            )
+            for action in self.admin_permissions_to_update:
+                was = ", ".join(sorted(action.current_scopes or set())) or "nothing"
+                lines.append(
+                    f"  ~ {action.client_id} -> {action.group_path} "
+                    f"({was} -> {', '.join(action.scopes)})"
+                )
+
+        if self.admin_permissions_to_remove:
+            lines.append(
+                f"Admin permissions to revoke: {len(self.admin_permissions_to_remove)}"
+            )
+            for action in self.admin_permissions_to_remove:
+                was = ", ".join(sorted(action.current_scopes or set())) or "nothing"
+                lines.append(
+                    f"  - {action.client_id} -> {action.group_path} ({was})"
+                )
+
         if self.orphan_scopes:
             lines.append(
                 f"Orphan scopes (use --prune to delete): {len(self.orphan_scopes)}"
@@ -243,6 +322,12 @@ class SyncResult:
 
     # Client secrets (client_id -> secret)
     client_secrets: dict[str, str] = field(default_factory=dict)
+
+    # Fine-grained admin permissions, as (client_id, group_path) pairs.
+    admin_permissions_enabled: bool = False
+    admin_permissions_granted: list[tuple[str, str]] = field(default_factory=list)
+    admin_permissions_changed: list[tuple[str, str]] = field(default_factory=list)
+    admin_permissions_revoked: list[tuple[str, str]] = field(default_factory=list)
 
     errors: list[str] = field(default_factory=list)
 
@@ -298,6 +383,27 @@ class SyncResult:
             )
             for client_id, aud in self.audience_mappers_removed:
                 lines.append(f"  - {client_id} -> aud:{aud}")
+
+        if self.admin_permissions_enabled:
+            lines.append("Enabled fine-grained admin permissions on the realm")
+        if self.admin_permissions_granted:
+            lines.append(
+                f"Granted {len(self.admin_permissions_granted)} admin permissions"
+            )
+            for client_id, group_path in self.admin_permissions_granted:
+                lines.append(f"  + {client_id} -> {group_path}")
+        if self.admin_permissions_changed:
+            lines.append(
+                f"Changed {len(self.admin_permissions_changed)} admin permissions"
+            )
+            for client_id, group_path in self.admin_permissions_changed:
+                lines.append(f"  ~ {client_id} -> {group_path}")
+        if self.admin_permissions_revoked:
+            lines.append(
+                f"Revoked {len(self.admin_permissions_revoked)} admin permissions"
+            )
+            for client_id, group_path in self.admin_permissions_revoked:
+                lines.append(f"  - {client_id} -> {group_path}")
 
         if self.errors:
             lines.append(f"Errors: {len(self.errors)}")
@@ -540,6 +646,90 @@ def compute_sync_plan(
                     mapper_id=current_audience_map[audience],
                 )
             )
+
+    # -------------------------------------------------------------------------
+    # Fine-grained admin permissions
+    # -------------------------------------------------------------------------
+    # What a client's service account may do to the realm's users, scoped to the
+    # members of one group. Entirely inert unless a client declares it: with no
+    # declaration and nothing already granted, every list below stays empty and
+    # the realm flag is left exactly as it is.
+
+    declaring = config.clients_with_admin_permissions()
+
+    if declaring and not current.admin_permissions_enabled:
+        plan.enable_admin_permissions = True
+
+    desired_by_client: dict[str, dict[str, list[str]]] = {
+        client.client_id: {
+            grant.path: sorted(set(grant.scopes))
+            for grant in client.admin_permissions.groups
+        }
+        for client in declaring
+    }
+
+    for client in declaring:
+        for grant in client.admin_permissions.groups:
+            scopes = set(grant.scopes)
+            # The pair that has to travel together. `manage-members` authorises
+            # making the user; `manage-membership` authorises putting them in
+            # the group, and `POST /users` with a `groups` entry does both. With
+            # only one of them Keycloak accepts the permission and refuses every
+            # creation with a 403 — legible only at the far end, as a REC
+            # operator unable to complete an approval.
+            if "manage-members" in scopes and "manage-membership" not in scopes:
+                logger.warning(
+                    "Client %s may manage the members of %s but not their membership "
+                    "of it — creating a user in that group will be refused. Add "
+                    "'manage-membership' unless it is only meant to administer "
+                    "members that already exist.",
+                    client.client_id,
+                    grant.path,
+                )
+
+    for client_id, desired_grants in desired_by_client.items():
+        granted = current.admin_group_permissions.get(client_id, {})
+
+        for group_path, scopes in desired_grants.items():
+            existing = granted.get(group_path)
+            if existing is None:
+                plan.admin_permissions_to_add.append(
+                    AdminPermissionAction(
+                        client_id=client_id,
+                        group_path=group_path,
+                        scopes=scopes,
+                        action="add",
+                    )
+                )
+            elif existing.scopes != set(scopes):
+                plan.admin_permissions_to_update.append(
+                    AdminPermissionAction(
+                        client_id=client_id,
+                        group_path=group_path,
+                        scopes=scopes,
+                        action="update",
+                        permission_id=existing.permission_id,
+                        current_scopes=existing.scopes,
+                    )
+                )
+
+    # Revocations. Read from what the realm holds rather than from `declaring`,
+    # so a client that dropped its `admin_permissions` block entirely — and is
+    # therefore not in `declaring` at all — still has its grants taken away.
+    for client_id, granted in current.admin_group_permissions.items():
+        desired_grants = desired_by_client.get(client_id, {})
+        for group_path, existing in granted.items():
+            if group_path not in desired_grants:
+                plan.admin_permissions_to_remove.append(
+                    AdminPermissionAction(
+                        client_id=client_id,
+                        group_path=group_path,
+                        scopes=[],
+                        action="remove",
+                        permission_id=existing.permission_id,
+                        current_scopes=existing.scopes,
+                    )
+                )
 
     # -------------------------------------------------------------------------
     # oauth2_proxy audience mappers
@@ -955,7 +1145,23 @@ async def apply_sync_plan(
             )
 
     # -------------------------------------------------------------------------
-    # 9. Delete orphans (if --prune)
+    # 9. Fine-grained admin permissions
+    # -------------------------------------------------------------------------
+    # After the clients exist, because a permission names the client's service
+    # account through a policy that needs its uuid — and before pruning, so a
+    # revocation lands whether or not --prune was passed.
+
+    await _apply_admin_permissions(
+        client=client,
+        plan=plan,
+        current=current,
+        client_uuids=client_uuids,
+        result=result,
+        dry_run=dry_run,
+    )
+
+    # -------------------------------------------------------------------------
+    # 10. Delete orphans (if --prune)
     # -------------------------------------------------------------------------
 
     if prune:
@@ -992,6 +1198,148 @@ async def apply_sync_plan(
                 result.errors.append(f"Failed to delete scope {scope_name}: {e}")
 
     return result
+
+
+async def _apply_admin_permissions(
+    client: KeycloakAdminClient,
+    plan: SyncPlan,
+    current: CurrentState,
+    client_uuids: dict[str, str],
+    result: SyncResult,
+    dry_run: bool,
+) -> None:
+    """Converge the fine-grained admin permissions.
+
+    Returns immediately when the plan has none, which is the case for every
+    declaration that does not use the feature — so a realm that has never heard
+    of admin permissions is not even asked about them here.
+
+    Order matters within this step: the realm flag first (nothing else exists
+    until the `admin-permissions` client does), then groups, then the policy
+    that names the client, then the permissions themselves.
+    """
+    actions = (
+        plan.admin_permissions_to_add
+        + plan.admin_permissions_to_update
+        + plan.admin_permissions_to_remove
+    )
+    if not plan.enable_admin_permissions and not actions:
+        return
+
+    if dry_run:
+        if plan.enable_admin_permissions:
+            logger.info("[DRY RUN] Would enable admin permissions on the realm")
+            result.admin_permissions_enabled = True
+        for action in plan.admin_permissions_to_add:
+            logger.info(
+                "[DRY RUN] Would grant %s -> %s (%s)",
+                action.client_id,
+                action.group_path,
+                ", ".join(action.scopes),
+            )
+            result.admin_permissions_granted.append(
+                (action.client_id, action.group_path)
+            )
+        for action in plan.admin_permissions_to_update:
+            result.admin_permissions_changed.append(
+                (action.client_id, action.group_path)
+            )
+        for action in plan.admin_permissions_to_remove:
+            result.admin_permissions_revoked.append(
+                (action.client_id, action.group_path)
+            )
+        return
+
+    ap_uuid = current.admin_permissions_client_uuid
+    if plan.enable_admin_permissions:
+        try:
+            ap_uuid, enabled = await client.ensure_admin_permissions_enabled()
+            result.admin_permissions_enabled = enabled
+        except Exception as e:
+            result.errors.append(f"Failed to enable admin permissions: {e}")
+            return
+
+    if not ap_uuid:
+        result.errors.append(
+            "Admin permissions are declared but the realm has no admin-permissions "
+            "client — cannot grant them"
+        )
+        return
+
+    # Revocations first: a permission being dropped may name a group that a
+    # later grant renames or reuses.
+    for action in plan.admin_permissions_to_remove:
+        try:
+            await client.delete_admin_permission(ap_uuid, action.permission_id)
+            result.admin_permissions_revoked.append(
+                (action.client_id, action.group_path)
+            )
+        except KeycloakNotFoundError:
+            pass  # Already gone
+        except Exception as e:
+            result.errors.append(
+                f"Failed to revoke admin permission {action.client_id} -> "
+                f"{action.group_path}: {e}"
+            )
+
+    # One policy per client, created once and reused by every grant it holds.
+    policy_ids: dict[str, str] = {}
+
+    for action in plan.admin_permissions_to_add + plan.admin_permissions_to_update:
+        client_uuid = client_uuids.get(action.client_id)
+        if not client_uuid:
+            result.errors.append(
+                f"Client {action.client_id} not found — cannot grant it admin "
+                f"permissions on {action.group_path}"
+            )
+            continue
+
+        try:
+            group_id, created = await client.ensure_group(action.group_path)
+            if created:
+                logger.info(
+                    "Created group %s so %s has something to administer",
+                    action.group_path,
+                    action.client_id,
+                )
+
+            policy_id = policy_ids.get(action.client_id)
+            if policy_id is None:
+                policy_id = await client.ensure_admin_client_policy(
+                    ap_uuid, action.client_id, client_uuid
+                )
+                policy_ids[action.client_id] = policy_id
+
+            if action.action == "add":
+                await client.create_group_admin_permission(
+                    ap_uuid=ap_uuid,
+                    client_id=action.client_id,
+                    group_path=action.group_path,
+                    group_id=group_id,
+                    scopes=action.scopes,
+                    policy_id=policy_id,
+                )
+                result.admin_permissions_granted.append(
+                    (action.client_id, action.group_path)
+                )
+            else:
+                await client.update_group_admin_permission(
+                    ap_uuid=ap_uuid,
+                    permission_id=action.permission_id,
+                    client_id=action.client_id,
+                    group_path=action.group_path,
+                    group_id=group_id,
+                    scopes=action.scopes,
+                    policy_id=policy_id,
+                )
+                result.admin_permissions_changed.append(
+                    (action.client_id, action.group_path)
+                )
+        except Exception as e:
+            result.errors.append(
+                f"Failed to grant {action.client_id} admin permissions on "
+                f"{action.group_path}: {e}"
+            )
 
 
 def write_secrets_file(

@@ -20,7 +20,8 @@ A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. It
 
 **Commands:**
 - `bootstrap` — create a `celine-admin-cli` service account with realm-management roles
-- `sync` — reconcile scopes and clients in Keycloak to match `clients.yaml`
+- `sync` — reconcile scopes, clients, audience mappers and service-account
+  administration rights in Keycloak to match `clients.yaml`
 - `sync-users` — create Keycloak users from a `rec-registry` REC definition YAML
 - `sync-orgs` — create Keycloak organizations from an `owners.yaml`
 - `set-password` — set a user's password

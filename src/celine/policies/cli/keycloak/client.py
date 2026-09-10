@@ -12,6 +12,7 @@ Wraps the Keycloak Admin REST API for managing:
 from __future__ import annotations
 
 import asyncio
+import json as jsonlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -30,6 +31,44 @@ AUDIENCE_MAPPER_PREFIX = "aud-"
 # Standard role hierarchy used at both realm and organisation level.
 # Order: most-privileged first.
 ROLE_HIERARCHY: list[str] = ["admins", "managers", "editors", "viewers"]
+
+# Name prefix on every admin permission and policy this CLI manages, and the
+# same sentinel discipline as AUDIENCE_MAPPER_PREFIX: the plan reads and writes
+# only names that start with it, so a permission somebody created by hand in the
+# admin console is never diffed, narrowed or deleted by a sync.
+ADMIN_PERMISSION_PREFIX = "celine-policies:"
+
+
+def admin_permission_name(client_id: str, group_path: str) -> str:
+    """The managed name of the permission granting `client_id` rights on a group."""
+    return f"{ADMIN_PERMISSION_PREFIX}{client_id}:group:{group_path.lstrip('/')}"
+
+
+# Clients Keycloak owns, which `clients.yaml` therefore never declares. They are
+# filtered out of the current state so they cannot land in `orphan_clients`,
+# where `--prune` would delete them.
+#
+# `admin-permissions` is the one with teeth: Keycloak creates it when admin
+# permissions are enabled, and it is the resource server holding every
+# permission this tool grants. Pruning it would take them all with it.
+UNMANAGED_KEYCLOAK_CLIENT_IDS = frozenset(
+    {
+        "admin-cli",
+        "broker",
+        "realm-management",
+        "security-admin-console",
+        "admin-permissions",
+    }
+)
+
+
+def admin_policy_name(client_id: str) -> str:
+    """The managed name of the policy that says 'the caller is this client'.
+
+    One per client rather than one per permission: it is the same assertion
+    every time, and Keycloak refuses two policies with the same name anyway.
+    """
+    return f"{ADMIN_PERMISSION_PREFIX}client:{client_id}"
 
 
 class KeycloakError(Exception):
@@ -88,6 +127,36 @@ class CurrentState:
     # Only includes mappers whose name starts with AUDIENCE_MAPPER_PREFIX,
     # so manually created mappers are never touched.
     client_audience_mappers: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # --- Fine-grained admin permissions -------------------------------------
+    #
+    # All three stay at their defaults unless the declaration asks for admin
+    # permissions: `fetch_current_state` does not go looking otherwise, so a
+    # realm that does not use the feature costs no extra requests and can plan
+    # no admin-permission action.
+    admin_permissions_enabled: bool = False
+
+    # UUID of the realm's `admin-permissions` client. None until the realm has
+    # the feature enabled — Keycloak creates the client when the flag is set.
+    admin_permissions_client_uuid: str | None = None
+
+    # Managed group permissions currently in the realm, as
+    # client_id -> {group_path -> GroupAdminGrantState}. Only permissions whose
+    # name starts with ADMIN_PERMISSION_PREFIX appear here.
+    admin_group_permissions: dict[str, dict[str, "GroupAdminGrantState"]] = field(
+        default_factory=dict
+    )
+
+
+@dataclass
+class GroupAdminGrantState:
+    """One managed group permission as it currently stands in Keycloak."""
+
+    permission_id: str
+    scopes: set[str]
+    #: The group this permission resolves to, or None when the permission names
+    #: a group that has since been deleted.
+    group_id: str | None = None
 
 
 class KeycloakAdminClient:
@@ -260,12 +329,24 @@ class KeycloakAdminClient:
         response = await self._client.post(url, headers=headers, json=json)
         return self._handle_response(response, expected_status=[200, 201, 204])
 
-    async def _put(self, path: str, json: dict | None = None) -> Any:
-        """Make PUT request to admin API."""
+    async def _put(
+        self,
+        path: str,
+        json: dict | None = None,
+        expected_status: list[int] | None = None,
+    ) -> Any:
+        """Make PUT request to admin API.
+
+        `expected_status` widens the accepted set for the endpoints that do not
+        answer a PUT with 200 or 204 — the authorization services answer one
+        with 201, the same as a create.
+        """
         url = f"{self._settings.admin_url}{path}"
         headers = await self._headers()
         response = await self._client.put(url, headers=headers, json=json)
-        return self._handle_response(response, expected_status=[200, 204])
+        return self._handle_response(
+            response, expected_status=expected_status or [200, 204]
+        )
 
     async def _delete(self, path: str) -> Any:
         """Make DELETE request to admin API."""
@@ -1119,6 +1200,321 @@ class KeycloakAdminClient:
         )
 
     # -------------------------------------------------------------------------
+    # Fine-grained admin permissions
+    # -------------------------------------------------------------------------
+    #
+    # Keycloak 26.2 replaced the deprecated fine-grained admin authz with a
+    # second version, and on 26.6 — the version keycloak/version.txt pins —
+    # ADMIN_FINE_GRAINED_AUTHZ_V2 is a DEFAULT feature and enabled, not a
+    # preview. The realm flag creates an `admin-permissions` client whose
+    # authorization services hold the whole model:
+    #
+    #   resource types   Clients, Groups, Roles, Users
+    #   a policy         "the caller is client X"
+    #   a permission     "on resource R of type T, allow scopes S, per policy P"
+    #
+    # Turning the flag on does not disturb anything: a service account holding
+    # realm-management roles the classic way keeps working exactly as before,
+    # which is what makes this safe to apply to a realm already in service.
+
+    async def get_admin_permissions_client_uuid(self) -> str | None:
+        """UUID of the realm's `admin-permissions` client, or None if disabled.
+
+        Read off the realm representation rather than looked up by client id:
+        Keycloak reports it there, and a client called `admin-permissions` that
+        the realm does not point at is not the resource server.
+        """
+        realm = await self.get_realm_settings()
+        if not realm.get("adminPermissionsEnabled"):
+            return None
+        return (realm.get("adminPermissionsClient") or {}).get("id")
+
+    async def ensure_admin_permissions_enabled(self) -> tuple[str, bool]:
+        """Enable admin permissions on the realm if needed. Returns (uuid, changed).
+
+        Idempotent, and reversible: setting the flag back to false leaves the
+        `admin-permissions` client and every permission under it intact, and
+        re-enabling returns the same uuid.
+        """
+        existing = await self.get_admin_permissions_client_uuid()
+        if existing:
+            logger.debug("Admin permissions already enabled (%s)", existing)
+            return existing, False
+
+        realm = await self.get_realm_settings()
+        realm["adminPermissionsEnabled"] = True
+        await self.update_realm_settings(realm)
+
+        uuid = await self.get_admin_permissions_client_uuid()
+        if not uuid:
+            raise KeycloakError(
+                "Enabled adminPermissionsEnabled on the realm but Keycloak reports no "
+                "admin-permissions client. The server may be running without the "
+                "ADMIN_FINE_GRAINED_AUTHZ_V2 feature."
+            )
+        logger.info("Enabled fine-grained admin permissions on the realm (%s)", uuid)
+        return uuid, True
+
+    async def list_admin_permissions(self, ap_uuid: str) -> list[dict[str, Any]]:
+        """Every permission on the admin-permissions resource server."""
+        return (
+            await self._get(f"/clients/{ap_uuid}/authz/resource-server/permission") or []
+        )
+
+    async def get_admin_permission_resources(
+        self, ap_uuid: str, permission_id: str
+    ) -> list[dict[str, Any]]:
+        """Resources a permission applies to.
+
+        Each entry's `name` is the **group id** — Keycloak wraps the group in an
+        authorization resource whose own `_id` is something else entirely, so
+        the id to diff against a declaration is `name`, not `_id`.
+        """
+        return (
+            await self._get(
+                f"/clients/{ap_uuid}/authz/resource-server/policy/{permission_id}/resources"
+            )
+            or []
+        )
+
+    async def get_admin_permission_scopes(
+        self, ap_uuid: str, permission_id: str
+    ) -> list[dict[str, Any]]:
+        """Scopes a permission allows."""
+        return (
+            await self._get(
+                f"/clients/{ap_uuid}/authz/resource-server/policy/{permission_id}/scopes"
+            )
+            or []
+        )
+
+    async def find_admin_policy_by_name(
+        self, ap_uuid: str, name: str
+    ) -> dict[str, Any] | None:
+        """One policy on the admin-permissions resource server, by exact name."""
+        policies = (
+            await self._get(
+                f"/clients/{ap_uuid}/authz/resource-server/policy?name={name}"
+            )
+            or []
+        )
+        return next((p for p in policies if p.get("name") == name), None)
+
+    async def ensure_admin_client_policy(
+        self, ap_uuid: str, client_id: str, client_uuid: str
+    ) -> str:
+        """Ensure the 'the caller is this client' policy exists. Returns its id.
+
+        Idempotent. The policy is rewritten when it names the wrong client uuid,
+        which is what happens when a client is deleted and recreated: the id
+        moves and a policy still naming the old one silently matches nobody.
+        """
+        name = admin_policy_name(client_id)
+        existing = await self.find_admin_policy_by_name(ap_uuid, name)
+
+        if existing:
+            if self._policy_client_uuids(existing) == {client_uuid}:
+                return existing["id"]
+            # Rebuilt rather than spread over `existing`: the listing carries a
+            # `config` block that Keycloak will not accept back on a PUT.
+            await self._put(
+                f"/clients/{ap_uuid}/authz/resource-server/policy/client/{existing['id']}",
+                json={
+                    "id": existing["id"],
+                    "name": name,
+                    "type": "client",
+                    "logic": existing.get("logic", "POSITIVE"),
+                    "decisionStrategy": existing.get(
+                        "decisionStrategy", "UNANIMOUS"
+                    ),
+                    "clients": [client_uuid],
+                },
+                expected_status=[200, 201, 204],
+            )
+            logger.info("Repointed admin policy %s at client %s", name, client_uuid)
+            return existing["id"]
+
+        created = await self._post(
+            f"/clients/{ap_uuid}/authz/resource-server/policy/client",
+            json={"name": name, "clients": [client_uuid]},
+        )
+        logger.info("Created admin policy %s", name)
+        return created["id"]
+
+    @staticmethod
+    def _policy_client_uuids(policy: dict[str, Any]) -> set[str]:
+        """The client uuids a client policy names, in either shape Keycloak uses.
+
+        Fetched on its own, a client policy carries `clients` as a list of
+        uuids. The **same policy in a listing** carries them inside `config` as
+        a JSON-encoded string instead, and `clients` is absent entirely. Reading
+        only the first shape makes every run conclude the policy points at the
+        wrong client and rewrite it — which then fails, because the `config`
+        block a listing returns is not something the PUT endpoint accepts back.
+        """
+        direct = policy.get("clients")
+        if isinstance(direct, list):
+            return {str(c) for c in direct}
+
+        encoded = (policy.get("config") or {}).get("clients")
+        if isinstance(encoded, str):
+            try:
+                decoded = jsonlib.loads(encoded)
+            except ValueError:
+                return set()
+            if isinstance(decoded, list):
+                return {str(c) for c in decoded}
+
+        return set()
+
+    async def create_group_admin_permission(
+        self,
+        ap_uuid: str,
+        client_id: str,
+        group_path: str,
+        group_id: str,
+        scopes: list[str],
+        policy_id: str,
+    ) -> str:
+        """Grant a client's service account `scopes` over one group's members."""
+        payload = self._group_permission_payload(
+            client_id, group_path, group_id, scopes, policy_id
+        )
+        created = await self._post(
+            f"/clients/{ap_uuid}/authz/resource-server/permission/scope", json=payload
+        )
+        logger.info(
+            "Created admin permission %s (%s on %s)",
+            payload["name"],
+            ", ".join(sorted(scopes)),
+            group_path,
+        )
+        return created["id"]
+
+    async def update_group_admin_permission(
+        self,
+        ap_uuid: str,
+        permission_id: str,
+        client_id: str,
+        group_path: str,
+        group_id: str,
+        scopes: list[str],
+        policy_id: str,
+    ) -> None:
+        """Rewrite a managed group permission to match the declaration."""
+        payload = self._group_permission_payload(
+            client_id, group_path, group_id, scopes, policy_id
+        )
+        payload["id"] = permission_id
+        await self._put(
+            f"/clients/{ap_uuid}/authz/resource-server/permission/scope/{permission_id}",
+            json=payload,
+            expected_status=[200, 201, 204],
+        )
+        logger.info(
+            "Updated admin permission %s to %s on %s",
+            payload["name"],
+            ", ".join(sorted(scopes)),
+            group_path,
+        )
+
+    async def delete_admin_permission(self, ap_uuid: str, permission_id: str) -> None:
+        """Delete a managed permission."""
+        await self._delete(
+            f"/clients/{ap_uuid}/authz/resource-server/permission/scope/{permission_id}"
+        )
+        logger.info("Deleted admin permission %s", permission_id)
+
+    @staticmethod
+    def _group_permission_payload(
+        client_id: str,
+        group_path: str,
+        group_id: str,
+        scopes: list[str],
+        policy_id: str,
+    ) -> dict[str, Any]:
+        """The body Keycloak wants for a group-scoped admin permission.
+
+        `resources` takes the **group id**; Keycloak creates the authorization
+        resource that wraps it on the way in.
+        """
+        return {
+            "name": admin_permission_name(client_id, group_path),
+            "description": (
+                f"Managed by celine-policies: {client_id} administers {group_path}"
+            ),
+            "type": "scope",
+            "resourceType": "Groups",
+            "resources": [group_id],
+            "scopes": sorted(scopes),
+            "policies": [policy_id],
+            "decisionStrategy": "UNANIMOUS",
+            "logic": "POSITIVE",
+        }
+
+    async def fetch_admin_permission_state(
+        self, state: CurrentState, client_ids: set[str]
+    ) -> None:
+        """Fill in `state`'s admin-permission fields for the clients that declare it.
+
+        Only called when something declares admin permissions, and it reads only
+        names carrying ADMIN_PERMISSION_PREFIX — a permission created by hand in
+        the console is invisible here and therefore never touched.
+        """
+        ap_uuid = await self.get_admin_permissions_client_uuid()
+        state.admin_permissions_enabled = ap_uuid is not None
+        state.admin_permissions_client_uuid = ap_uuid
+
+        if not ap_uuid:
+            return
+
+        for permission in await self.list_admin_permissions(ap_uuid):
+            name = permission.get("name", "")
+            if not name.startswith(ADMIN_PERMISSION_PREFIX):
+                continue
+
+            owner, group_path = self._parse_group_permission_name(name)
+            if owner is None or group_path is None:
+                continue
+            # A permission for a client no longer in the declaration is left
+            # alone here; `compute_sync_plan` decides what to do about it.
+            if owner not in client_ids:
+                continue
+
+            permission_id = permission["id"]
+            scopes = {
+                s["name"]
+                for s in await self.get_admin_permission_scopes(ap_uuid, permission_id)
+                if s.get("name")
+            }
+            resources = await self.get_admin_permission_resources(
+                ap_uuid, permission_id
+            )
+            group_id = resources[0].get("name") if resources else None
+
+            state.admin_group_permissions.setdefault(owner, {})[group_path] = (
+                GroupAdminGrantState(
+                    permission_id=permission_id,
+                    scopes=scopes,
+                    group_id=group_id,
+                )
+            )
+
+    @staticmethod
+    def _parse_group_permission_name(name: str) -> tuple[str | None, str | None]:
+        """Read `<prefix><client_id>:group:<group name>` back into its two parts.
+
+        Returns `(None, None)` for a managed name of any other shape — the
+        client policies share the prefix, and so would a future permission over
+        some resource type other than a group.
+        """
+        rest = name[len(ADMIN_PERMISSION_PREFIX) :]
+        client_id, separator, group_name = rest.partition(":group:")
+        if not separator or not client_id or not group_name:
+            return None, None
+        return client_id, f"/{group_name}"
+
+    # -------------------------------------------------------------------------
     # State Fetching
     # -------------------------------------------------------------------------
 
@@ -1138,13 +1534,7 @@ class KeycloakAdminClient:
             if (
                 client_id
                 and not client_id.startswith("account")
-                and client_id
-                not in {
-                    "admin-cli",
-                    "broker",
-                    "realm-management",
-                    "security-admin-console",
-                }
+                and client_id not in UNMANAGED_KEYCLOAK_CLIENT_IDS
             ):
                 state.clients[client_id] = client
                 client_uuid = client["id"]

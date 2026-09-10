@@ -119,6 +119,82 @@ class ScopeConfig(BaseModel):
     )
 
 
+#: The scopes Keycloak's `Groups` admin resource type defines, read off a 26.6.0
+#: realm rather than transcribed from the documentation. A declaration naming
+#: anything else is refused at load time: Keycloak accepts an unknown scope name
+#: on the permission and simply grants nothing, so the realm would come back
+#: looking configured and refusing every call.
+GROUP_ADMIN_SCOPES = frozenset(
+    {
+        "view",
+        "manage",
+        "view-members",
+        "manage-members",
+        "manage-membership",
+        "manage-membership-of-members",
+        "impersonate-members",
+    }
+)
+
+
+class AdminGroupPermission(BaseModel):
+    """What a service account may do to the members of one group.
+
+    `manage-members` covers reading, updating, disabling and password-resetting
+    a member of the group, and nothing at all outside it: a service account
+    holding it cannot touch an operator's account and cannot create a user that
+    belongs to no group.
+
+    **Creating a user in the group needs `manage-membership` as well.** The two
+    authorise different halves of the same call — making the user, and putting
+    them in the group — and `POST /users` with a `groups` entry does both.
+    Granted only one, Keycloak creates the permission without complaint and
+    refuses every creation with a 403. Measured on 26.6.0:
+
+        view-members                                -> 403
+        manage-members                              -> 403
+        manage-members + view-members               -> 403
+        manage-membership                           -> 403
+        manage-members + manage-membership          -> 201
+    """
+
+    path: str = Field(
+        ...,
+        description="Realm group path, e.g. '/participants'. Top-level groups only.",
+    )
+    scopes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Admin scopes on that group's members "
+            f"({', '.join(sorted(GROUP_ADMIN_SCOPES))})."
+        ),
+    )
+
+    @property
+    def group_name(self) -> str:
+        """The group's name, which is its path without the leading slash."""
+        return self.path.lstrip("/")
+
+
+class AdminPermissions(BaseModel):
+    """What a client's service account may administer in the realm.
+
+    Deliberately group-shaped and nothing else. There is no field here that can
+    express a realm-wide grant, because the reason this exists rather than a
+    `realm_management_roles` list is that realm-wide `manage-users` reaches every
+    account in the realm — the operators included — to provision participants.
+    """
+
+    groups: list[AdminGroupPermission] = Field(
+        default_factory=list,
+        description="Per-group administration grants for this client's service account.",
+    )
+
+    def is_empty(self) -> bool:
+        """Whether this declares nothing, which is what makes the sync inert."""
+        return not self.groups
+
+
 class ClientConfig(BaseModel):
     """Configuration for a Keycloak client."""
 
@@ -175,6 +251,18 @@ class ClientConfig(BaseModel):
     service_account_enabled: bool = Field(
         default=True,
         description="Enable service account (client credentials flow)",
+    )
+
+    # What this client's service account may administer in the realm.
+    #
+    # Not a grant key: a second file may widen a client's *scopes*, but not what
+    # it may do to the realm's users. See GRANT_KEYS.
+    admin_permissions: AdminPermissions | None = Field(
+        default=None,
+        description=(
+            "Fine-grained admin permissions for this client's service account. "
+            "Absent means the client administers nothing, which is the default."
+        ),
     )
 
     @field_validator("name", mode="before")
@@ -284,8 +372,13 @@ class MergeError(ValueError):
 #: The only keys a file may carry on a client another file declares. An entry
 #: holding `client_id` plus nothing but these is a *grant*: it widens a client
 #: without claiming to own it. Anything else — `name`, `secret`, `scopes_prefix`,
-#: `service_account_enabled`, or a key this model does not recognise — is a
-#: statement about the client's identity, and identity has exactly one owner.
+#: `service_account_enabled`, `admin_permissions`, or a key this model does not
+#: recognise — is a statement about the client's identity, and identity has
+#: exactly one owner.
+#:
+#: `admin_permissions` is deliberately on that side of the line. A file may widen
+#: what a client it does not own may *ask for*; what that client may do to the
+#: realm's users is not a grant to hand out from a second file.
 GRANT_KEYS = ("default_scopes", "optional_scopes", "extra_audiences")
 
 #: `overlay: ds` names what a file supplies; `requires: [ds]` names what a sync
@@ -684,6 +777,16 @@ class KeycloakConfig(BaseModel):
         config = cls.model_validate(resolved)
         config._raw_secrets = raw_secrets
 
+        malformed = config.malformed_admin_permissions()
+        if malformed:
+            raise MergeError(
+                "admin_permissions is malformed: "
+                + "; ".join(malformed)
+                + ". Keycloak accepts a permission naming a scope it does not define "
+                "and grants nothing through it, so the realm would come back looking "
+                "configured and refusing every call"
+            )
+
         contested = config.contested_scope_prefixes()
         if contested:
             detail = "; ".join(
@@ -775,6 +878,65 @@ class KeycloakConfig(BaseModel):
             for prefix, client_ids in owners.items()
             if len(client_ids) > 1
         }
+
+    def clients_with_admin_permissions(self) -> list[ClientConfig]:
+        """Clients declaring something their service account may administer.
+
+        Empty for every declaration that does not use the feature, which is what
+        keeps the whole mechanism inert: `sync` fetches no admin-permission state
+        and plans no admin-permission actions when this is empty.
+        """
+        return [
+            c
+            for c in self.clients
+            if c.admin_permissions is not None and not c.admin_permissions.is_empty()
+        ]
+
+    def malformed_admin_permissions(self) -> list[str]:
+        """Everything wrong with the declared admin permissions, named per client.
+
+        Checked at load time rather than against Keycloak, because every one of
+        these is a mistake in the file and none of them fails at the API: a
+        permission naming an unknown scope is created with a 201 and grants
+        nothing.
+        """
+        problems: list[str] = []
+
+        for client in self.clients:
+            if client.admin_permissions is None:
+                continue
+
+            seen: set[str] = set()
+            for grant in client.admin_permissions.groups:
+                where = f"{client.client_id} -> {grant.path!r}"
+
+                if not grant.path.startswith("/"):
+                    problems.append(f"{where}: a group path starts with '/'")
+                elif grant.path.count("/") > 1:
+                    problems.append(
+                        f"{where}: only top-level groups are supported, and an "
+                        "organization's group is not reachable this way at all"
+                    )
+                elif not grant.group_name:
+                    problems.append(f"{where}: a group path names a group")
+
+                if grant.path in seen:
+                    problems.append(f"{where}: declared twice by the same client")
+                seen.add(grant.path)
+
+                if not grant.scopes:
+                    problems.append(
+                        f"{where}: grants no scope — remove the entry, or say what it may do"
+                    )
+                unknown = sorted(set(grant.scopes) - GROUP_ADMIN_SCOPES)
+                if unknown:
+                    problems.append(
+                        f"{where}: Keycloak defines no group admin scope "
+                        f"{', '.join(repr(u) for u in unknown)} "
+                        f"(it defines {', '.join(sorted(GROUP_ADMIN_SCOPES))})"
+                    )
+
+        return problems
 
     def validate_scope_references(self) -> list[str]:
         """Check that all scopes referenced by clients are defined.

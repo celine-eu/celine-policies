@@ -251,6 +251,34 @@ clients:
     name: REC Onboarding Console
     secret: ${SVC_ONBOARDING_SECRET:-svc-onboarding}
     scopes_prefix: onboarding
+    # Provisioning a participant's login is realm administration, and this is
+    # where it is declared rather than granted by hand. `manage-members` on one
+    # group is the whole grant: it covers creating a user *into* /participants,
+    # reading, updating, disabling and password-resetting a member, and reaches
+    # nothing outside the group. Realm-wide `manage-users` would have reached
+    # every operator account in the realm to do the same job.
+    #
+    # See docs/decisions/ADR-0003 for why this rather than realm-management
+    # roles, and for what `../onboarding` must do to use it.
+    # The group name must not be one of the role-hierarchy names this tool also
+    # creates (admins, managers, editors, viewers — see ROLE_HIERARCHY). Those
+    # are operator roles, and onboarding's access.rego grants a *realm*-level
+    # one platform-wide with no organization check: `viewers` is the least
+    # privileged of them and still reads every REC's submissions and audit
+    # trail. `participants` appears in no capability table, which is the point.
+    admin_permissions:
+      groups:
+        - path: /participants
+          scopes:
+            # manage-members and manage-membership are a pair, and creating a
+            # participant needs both: one authorises making the user, the other
+            # authorises putting them in the group. Granted either one alone,
+            # Keycloak creates the permission happily and refuses every
+            # creation with a 403. Measured, not assumed — see the store's
+            # knowledge/fine-grained-admin-permissions.md.
+            - manage-members
+            - manage-membership
+            - view-members
     default_scopes:
       # Own resources — REC operators get their capabilities from org group
       # membership, not from scopes, via the oauth2-proxy audience mapper.
