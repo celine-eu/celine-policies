@@ -426,7 +426,7 @@ own. `--no-admin-groups` turns the behaviour off.
 ### Requirements
 
 Keycloak 26.2 or later with `ADMIN_FINE_GRAINED_AUTHZ_V2`, which is a default-enabled
-feature on the 26.6 image this repository ships. An **organization's** group cannot be
+feature on the 26.7 image this repository ships. An **organization's** group cannot be
 targeted — only realm groups; see
 [ADR-0003](decisions/ADR-0003-declare-realm-administration-as-a-group-scoped-permission.md)
 for what was measured.

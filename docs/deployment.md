@@ -82,7 +82,7 @@ Environment variables with `CELINE_SYNC_USERS_` prefix:
 
 ### Keycloak
 
-The Keycloak service uses the custom image from `keycloak/Dockerfile` (KC 26.6.0 + rec theme). Key environment variables:
+The Keycloak service uses the custom image from `keycloak/Dockerfile` (KC 26.7.3 + rec theme). Key environment variables:
 
 | Variable | Value | Description |
 |----------|-------|-------------|
@@ -112,10 +112,10 @@ Configuration at `config/oauth2-proxy/oauth2-proxy.cfg`. Runs on port 4180.
 
 The `keycloak/` directory builds a custom Keycloak image:
 
-- Base: `quay.io/keycloak/keycloak:26.6.0`
+- Base: `quay.io/keycloak/keycloak:26.7.3`
 - Adds the `rec` login theme (see [`keycloak/README.md`](../keycloak/README.md))
 - Pre-builds Keycloak at image build time for faster startup
-- Version tracked in `keycloak/version.txt` (`26.6.0-1.0.3`)
+- Version tracked in `keycloak/version.txt` (`26.7.3-1.0.3`)
 
 A GitHub Actions workflow (`.github/workflows/build-keycloak.yaml`) detects changes to `keycloak/version.txt` and publishes an updated image.
 

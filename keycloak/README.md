@@ -2,11 +2,11 @@
 
 Custom Keycloak image for CELINE, bundling the `rec` login theme.
 
-Current version: `26.6.0-1.0.3` (format: `<keycloak-version>-<theme-version>`, tracked in `version.txt`).
+Current version: `26.7.3-1.0.3` (format: `<keycloak-version>-<theme-version>`, tracked in `version.txt`).
 
 ## Docker image
 
-The `Dockerfile` extends the official Keycloak 26.6.0 image, copies the theme, and runs `kc.sh build` at image-build time for faster container startup.
+The `Dockerfile` extends the official Keycloak 26.7.3 image, copies the theme, and runs `kc.sh build` at image-build time for faster container startup.
 
 ```bash
 docker build -t celine-keycloak .
