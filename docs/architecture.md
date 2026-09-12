@@ -4,7 +4,7 @@ This document describes the components, authorization model, and design of the c
 
 ## Components
 
-The repository contains three main pieces:
+The repository contains four main pieces:
 
 ### 1. MQTT Auth Service
 
@@ -14,7 +14,30 @@ The service uses `celine-sdk`'s `PolicyEngine` (built on [regorus](https://githu
 
 **Endpoints:** `/user` (auth), `/acl` (topic access), `/superuser` (admin check), `/health`.
 
-### 2. Keycloak CLI
+### 2. Provisioning Service
+
+A FastAPI application (`src/celine/provisioning/`) that is the **only thing that writes a
+participant account** into the celine realm. `keycloak sync-users` calls the same package;
+`../onboarding` calls the service and holds no Keycloak grant of its own.
+
+**Endpoints:** `PUT /participants/{community}/{key}` (ensure the account, its REC
+organization and its org group), `POST /participants/{community}/{key}/password-reset`,
+`POST /participants/{community}/{key}/disable`, `POST /reconcile/{community}`, `/health`.
+
+It is stateless — a retry is another `PUT`, and idempotency comes from the keys — and it
+authorises by `provisioning.*` scopes like every other service.
+
+**It holds realm-wide Keycloak administration** (`manage-users` + `manage-realm`), which is
+what makes organization membership possible at all: no fine-grained permission on 26.6.0
+can express the Organizations API. The grant is acceptable only because **nothing outside
+the network can reach the service**, and that is a property of the ingress configuration
+rather than of any code here. See
+[ADR-0007](decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
+
+**It cannot bootstrap the realm it authenticates against.** `keycloak bootstrap` and
+`keycloak sync` create the client whose credential it presents, so they run first.
+
+### 3. Keycloak CLI
 
 A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. It reads `clients.yaml` — which defines all platform OAuth scopes and service clients — and idempotently provisions them in Keycloak.
 
@@ -31,7 +54,7 @@ A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. It
 
 Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time.
 
-### 3. Rego Policies
+### 4. Rego Policies
 
 Two policy files under `policies/celine/`:
 

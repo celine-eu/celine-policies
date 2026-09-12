@@ -12,6 +12,7 @@ The `docker-compose.yaml` defines the full development stack:
 | `keycloak-sync` | Same as `mqtt_auth` | — | Runs `bootstrap` + `sync` on startup, then exits |
 | `sync-users` | Same as `mqtt_auth` | — | Imports example REC users, then exits |
 | `mqtt_auth` | From `./Dockerfile` | 8009 | MQTT auth HTTP backend |
+| `provisioning` | Same as `mqtt_auth` | 8010, **not published** | The only writer of participant accounts |
 | `mosquitto` | `ghcr.io/lhns/mosquitto-go-auth:3.3.0-mosquitto_2.0.22` | 1883, 1884 | MQTT broker (TCP + WebSocket) |
 | `redis` | `redis:7.2-alpine` | — | Cache backend |
 | `oauth2-proxy` | `quay.io/oauth2-proxy/oauth2-proxy:v7.11.0` | 4180 | OAuth2 reverse proxy |
@@ -22,7 +23,23 @@ The `docker-compose.yaml` defines the full development stack:
 2. **keycloak-sync** runs bootstrap + sync, then exits
 3. **sync-users** imports example users, then exits
 4. **mqtt_auth** starts after keycloak-sync and sync-users complete
-5. **mosquitto** starts after redis is up and mqtt_auth is healthy
+5. **provisioning** starts after keycloak-sync completes — it authenticates as
+   `svc-provisioning`, a client `sync` creates, so it cannot bootstrap the realm it
+   authenticates against
+6. **mosquitto** starts after redis is up and mqtt_auth is healthy
+
+### The provisioning service has no published port, and that is the guard
+
+`provisioning` is declared with `expose` and not `ports`. It holds realm-wide Keycloak
+administration, and the whole argument for that grant being acceptable is that nothing
+outside the network reaches it — see
+[ADR-0007](decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
+
+**Publishing the port, or adding a route to it in the ingress, converts `manage-realm` into
+an internet-facing credential.** It would still check scopes on the token, because it
+authorises by `provisioning.*` like every other service — but that is defence in depth, not
+the control, and it is not what the grant was justified by. The corresponding guard lives
+in `../celine-dev`'s Caddyfile, where somebody adding a route will read it.
 
 ## Dockerfile
 
@@ -79,6 +96,51 @@ Environment variables with `CELINE_SYNC_USERS_` prefix:
 | `CELINE_SYNC_USERS_TEMP_PASSWORD` | (random) | Fixed password for all users |
 | `CELINE_SYNC_USERS_TEMPORARY` | `true` | Force password reset on first login |
 | `CELINE_SYNC_USERS_DRY_RUN` | `false` | Preview mode |
+| `CELINE_SYNC_USERS_REGISTRY_URL` | — | rec-registry base URL. Setting it selects the live registry instead of a file |
+| `CELINE_SYNC_USERS_REGISTRY_CLIENT_ID` | `celine-cli` | Keycloak client the registry is read as |
+| `CELINE_SYNC_USERS_REGISTRY_CLIENT_SECRET` | — | Its secret. Falls back to that client's entry in the secrets file |
+| `CELINE_SYNC_USERS_COMMUNITIES` | (empty) | Space-separated community keys. Empty → every community |
+
+#### Which source a run reconciles
+
+A **file** is a picture of the community at export time, so a run against one
+leaves out everybody `onboarding` has approved since it was taken. A run against
+the **registry** reconciles what is true. Both are supported and neither is
+deprecated: bootstrap runs before the registry holds anything, and an offline run
+is a real case.
+
+```bash
+# the file path, unchanged
+celine-policies keycloak sync-users greenland.yaml
+
+# the live registry, every community it holds
+celine-policies keycloak sync-users --from-registry \
+  --registry-url http://api.celine.localhost/rec-registry
+
+# one community, and report divergence without writing anything
+celine-policies keycloak sync-users --from-registry \
+  --registry-url http://api.celine.localhost/rec-registry \
+  --community gr-renewable-community --check
+```
+
+Passing both a path and `--from-registry` is refused rather than resolved.
+
+`--check` writes nothing and exits non-zero when a member of the source has no
+Keycloak account, is outside their REC organization, or is outside a group
+`clients.yaml` declares under `admin_permissions`. It exists because none of
+those is visible to a health probe: the failure they produce is a person who logs
+in and cannot see their own community.
+
+**Only `active` members are provisioned.** The registry keys a member `pending`
+before approval and `suspended` or `inactive` after withdrawal; those are skipped
+with a log line. A member carrying no `status` at all is treated as active, which
+is what keeps hand-authored seed files working. Nothing is ever disabled —
+skipping provisioning and revoking access are different acts.
+
+The registry client needs `rec-registry.export`. The default, `celine-cli`, holds
+`rec-registry.admin`, which is wider than that: see
+[ADR-0006](decisions/ADR-0006-the-registry-is-the-source-of-members.md) for why,
+and what to change to narrow it.
 
 ### Keycloak
 

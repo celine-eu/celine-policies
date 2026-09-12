@@ -43,3 +43,5 @@ edited to say something else.
 | [ADR-0003](ADR-0003-declare-realm-administration-as-a-group-scoped-permission.md) | A service account's realm administration is declared, and scoped to one group |
 | [ADR-0004](ADR-0004-a-group-grant-carries-view-and-belongs-to-one-client.md) | A group grant carries `view`, and a group belongs to one client |
 | [ADR-0005](ADR-0005-sync-users-files-participants-in-the-administered-group.md) | `sync-users` files participants in the group the declaration administers |
+| [ADR-0006](ADR-0006-the-registry-is-the-source-of-members.md) | The REC registry is the source of members, and a YAML file is a seed |
+| [ADR-0007](ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md) | Realm-wide administration is declarable, for a holder with no public route |

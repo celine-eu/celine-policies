@@ -662,6 +662,19 @@ class TestIdempotenceOnTheRealConfig:
                 }
                 for client in declaring
             }
+
+        # And what each already holds realm-wide. A realm matching the
+        # declaration must plan no grant again — the grant is additive, so a
+        # plan that kept producing it would re-assign the same roles on every
+        # run and never say it had finished.
+        holders = config.clients_with_realm_management_roles()
+        if holders:
+            state.available_realm_management_roles = {
+                role for c in holders for role in c.realm_management_roles
+            }
+            state.realm_management_roles = {
+                c.client_id: set(c.realm_management_roles) for c in holders
+            }
         return state
 
     def test_nothing_is_planned_against_a_matching_realm(

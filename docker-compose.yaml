@@ -90,6 +90,63 @@ services:
       - "keycloak.celine.localhost:host-gateway"
       - "api.celine.localhost:host-gateway"
 
+  provisioning:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - uvicorn
+      - celine.provisioning.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8010"
+    environment:
+      # It authenticates as svc-provisioning, whose realm-wide grant is what
+      # ADR-0007 is about. `keycloak-sync` creates that client and records the
+      # secret, which is why the dependency below is on its *completion* and not
+      # on Keycloak being up: this service cannot bootstrap the realm it
+      # authenticates against.
+      - ENV=dev
+      - CELINE_KEYCLOAK_ADMIN_CLIENT_ID=svc-provisioning
+      - CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET=svc-provisioning
+      - CELINE_PROVISIONING_REGISTRY_CLIENT_ID=svc-provisioning
+      - CELINE_PROVISIONING_REGISTRY_CLIENT_SECRET=svc-provisioning
+      # Left unset: `POST /reconcile/{community}` and the lifecycle calls refuse
+      # with a message naming the variable rather than the process failing to
+      # start. The upsert needs no registry, and a local stack that only
+      # onboards should not be held up by a reconcile it never calls.
+      # - CELINE_PROVISIONING_REGISTRY_URL=http://rec-registry:8000
+    # Deliberately **not** published to the host. The whole security argument
+    # for a service holding manage-users and manage-realm is that nothing
+    # outside the network reaches it — see ADR-0007. Adding a `ports:` entry
+    # here, or a route to it in the ingress, converts that credential into an
+    # internet-facing one.
+    expose:
+      - "8010"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          ".venv/bin/python",
+          "-c",
+          "import httpx;
+            httpx.get('http://localhost:8010/health').raise_for_status()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      keycloak-sync:
+        condition: service_completed_successfully
+    networks:
+      - celine_security_net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "keycloak.celine.localhost:host-gateway"
+      - "api.celine.localhost:host-gateway"
+
   mosquitto:
     image: ghcr.io/lhns/mosquitto-go-auth:3.3.0-mosquitto_2.0.22
     ports:

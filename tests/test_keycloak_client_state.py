@@ -450,3 +450,76 @@ class TestRequiredRealmRoles:
         # organizations and groups live on the realm
         assert {"manage-realm", "view-realm"} <= required
         assert {"query-groups", "query-users"} <= required
+
+
+class TestReadingOneUsersMembership:
+    """Two reads `--check` rests on, and both are "ask about one, not list all".
+
+    The listing alternatives are the trap. `GET /organizations/{id}/members`
+    takes no `first`/`max`, so a large organization answers with whatever page
+    Keycloak chooses and a member past the end reads as absent. And
+    `GET /groups/{id}/members` ignores `search` and `exact` (ADR-0004), so
+    finding one participant in a flat group holding every participant on the
+    deployment is a paged scan.
+
+    Either one under-reports, and a check that manufactures findings is worse
+    than no check: an operator who chases one false positive stops reading the
+    next real finding.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_member_answers_true(self, kc: KeycloakAdminClient):
+        kc._get = AsyncMock(return_value={"id": "uuid-1"})
+
+        assert await kc.is_user_in_organization("org-1", "uuid-1") is True
+        kc._get.assert_awaited_once_with("/organizations/org-1/members/uuid-1")
+
+    @pytest.mark.asyncio
+    async def test_a_non_member_answers_false_rather_than_raising(
+        self, kc: KeycloakAdminClient
+    ):
+        """Keycloak says 404 for "not a member", which is not an error here."""
+        from celine.policies.cli.keycloak.client import KeycloakNotFoundError
+
+        kc._get = AsyncMock(side_effect=KeycloakNotFoundError("nope"))
+
+        assert await kc.is_user_in_organization("org-1", "uuid-1") is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_user_in_organization_uses_the_same_check(
+        self, kc: KeycloakAdminClient
+    ):
+        """One membership test, so the check and the write cannot disagree.
+
+        A `--check` that reported a member absent while the sync considered them
+        present — or the reverse — would make the two commands argue about the
+        same realm.
+        """
+        kc.is_user_in_organization = AsyncMock(return_value=True)
+        kc.add_user_to_organization = AsyncMock()
+
+        assert await kc.ensure_user_in_organization("org-1", "uuid-1") is False
+        kc.add_user_to_organization.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_users_groups_come_back_as_paths(self, kc: KeycloakAdminClient):
+        kc._get = AsyncMock(
+            return_value=[
+                {"id": "g-1", "name": "participants", "path": "/participants"},
+                {"id": "g-2", "name": "viewers", "path": "/viewers"},
+            ]
+        )
+
+        groups = await kc.get_user_groups("uuid-1")
+
+        assert [g["path"] for g in groups] == ["/participants", "/viewers"]
+        kc._get.assert_awaited_once_with("/users/uuid-1/groups")
+
+    @pytest.mark.asyncio
+    async def test_a_user_in_no_group_is_an_empty_list_not_none(
+        self, kc: KeycloakAdminClient
+    ):
+        """`_get` returns None on an empty body, and the caller iterates."""
+        kc._get = AsyncMock(return_value=None)
+
+        assert await kc.get_user_groups("uuid-1") == []

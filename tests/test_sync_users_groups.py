@@ -25,7 +25,10 @@ import pytest
 
 from celine.policies.cli.keycloak.client import KeycloakError
 from celine.policies.cli.keycloak.commands import sync_users as sync_users_module
-from celine.policies.cli.keycloak.commands.sync_users import _async_sync_users
+from celine.policies.cli.keycloak.commands.sync_users import (
+    CommunityPlan,
+    _async_sync_users,
+)
 from celine.policies.cli.keycloak.settings import KeycloakSettings, SyncUsersSettings
 
 COMMUNITY = {"id": "greenland", "name": "Greenland", "description": "", "type": "rec"}
@@ -105,13 +108,19 @@ def fake(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-async def run(kc_settings, sync_settings, **kwargs):
+async def run(kc_settings, sync_settings, *, participants=None, communities=None, **kwargs):
+    if communities is None:
+        communities = [
+            CommunityPlan(
+                community=COMMUNITY,
+                participants=PARTICIPANTS if participants is None else participants,
+                operators=[],
+            )
+        ]
     return await _async_sync_users(
         kc_settings=kc_settings,
         sync_settings=sync_settings,
-        community_type="rec",
-        participants=PARTICIPANTS,
-        community=COMMUNITY,
+        communities=communities,
         **kwargs,
     )
 
@@ -273,3 +282,336 @@ class TestAMissingGroupFailsBeforeAnyUserIsTouched:
 
         assert "keycloak sync" in str(excinfo.value)
         assert "--no-admin-groups" in str(excinfo.value)
+
+
+class TestTheAccountIsNamedAfterTheRegistryRow:
+    """`user_id` names the account, and the key is only the fallback.
+
+    The command used to derive the username from the member key and ignore the
+    `user_id` it had already loaded. That is invisible against a
+    hand-maintained file — the same hand wrote both columns — and it duplicates
+    every onboarded participant against the live registry, because
+    `../onboarding` writes `key = submission.ref` and `user_id` = the username
+    Keycloak returned.
+
+    Nothing here talks to a Keycloak, so what is covered is which username
+    `sync-users` decides to provision. That a re-run against a real realm is
+    then a no-op rather than a second account is checked by hand; see the
+    store's `playbooks/verifying-a-realm-against-a-real-keycloak.md`.
+    """
+
+    ONBOARDED = [{"key": "20260912-a3f9c2", "user_id": "alice@example.com"}]
+
+    @pytest.mark.asyncio
+    async def test_the_user_id_is_provisioned_not_the_key(
+        self, fake, kc_settings, sync_settings
+    ):
+        kc = fake()
+
+        created, _, errors = await run(
+            kc_settings, sync_settings, participants=self.ONBOARDED
+        )
+
+        assert errors == []
+        assert kc.created_users == ["alice@example.com"]
+        assert created == ["alice@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_the_account_onboarding_made_is_adopted_not_duplicated(
+        self, fake, kc_settings, sync_settings
+    ):
+        """The defect, stated as the behaviour that closes it.
+
+        With the account already present under the name onboarding gave it, the
+        run must skip rather than create. Deriving from the key would have found
+        nothing and created `20260912-a3f9c2` beside it.
+        """
+        kc = fake(existing_users={"alice@example.com"})
+
+        created, skipped, errors = await run(
+            kc_settings, sync_settings, participants=self.ONBOARDED
+        )
+
+        assert errors == []
+        assert kc.created_users == []
+        assert created == []
+        assert skipped == ["alice@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_a_row_with_no_user_id_still_uses_the_key(
+        self, fake, kc_settings, sync_settings
+    ):
+        """The seed case keeps working, which is why the fallback survives."""
+        kc = fake()
+
+        await run(
+            kc_settings,
+            sync_settings,
+            participants=[{"key": "GL-00001", "user_id": None}],
+        )
+
+        assert kc.created_users == ["gl-00001"]
+
+    @pytest.mark.asyncio
+    async def test_the_dry_run_looks_up_the_same_name_it_would_create(
+        self, fake, kc_settings
+    ):
+        """The two branches used to compute the username separately.
+
+        A dry run that probes one name and a live run that creates another is
+        the worst of both: the plan says "exists" and the run makes a duplicate.
+        """
+        kc = fake()
+        settings = SyncUsersSettings(temp_password="pw", dry_run=True)
+
+        await run(kc_settings, settings, participants=self.ONBOARDED)
+
+        kc.get_user_by_username.assert_awaited_once_with("alice@example.com")
+
+    @pytest.mark.asyncio
+    async def test_mock_does_not_double_an_address_that_is_already_one(
+        self, fake, kc_settings, sync_settings
+    ):
+        """`--mock` appends a domain, and the username is now often an email.
+
+        `f"{username}@celine.localhost"` would produce
+        `alice@example.com@celine.localhost` — an address Keycloak accepts and
+        nobody can receive mail at.
+        """
+        kc = fake()
+        captured: dict = {}
+
+        async def ensure_user(username: str, **kwargs):
+            captured[username] = kwargs
+            kc.created_users.append(username)
+            return f"uuid-{username}", True
+
+        kc.ensure_user = ensure_user
+
+        await run(kc_settings, sync_settings, participants=self.ONBOARDED, mock=True)
+
+        assert captured["alice@example.com"]["email"] == "alice@example.com"
+
+    @pytest.mark.asyncio
+    async def test_mock_still_synthesises_one_for_a_seeded_key(
+        self, fake, kc_settings, sync_settings
+    ):
+        kc = fake()
+        captured: dict = {}
+
+        async def ensure_user(username: str, **kwargs):
+            captured[username] = kwargs
+            kc.created_users.append(username)
+            return f"uuid-{username}", True
+
+        kc.ensure_user = ensure_user
+
+        await run(
+            kc_settings,
+            sync_settings,
+            participants=[{"key": "gl-00001", "user_id": "gl-00001"}],
+            mock=True,
+        )
+
+        assert captured["gl-00001"]["email"] == "gl-00001@celine.localhost"
+
+
+class TestTheRealmScaffoldRunsOncePerRunNotOncePerCommunity:
+    """Claim scopes, realm groups and the proxy audience mapper are realm-wide.
+
+    There was one community per run before, so realm-level and community-level
+    work were interleaved and the distinction did not exist. Reconciling every
+    REC in one pass is what makes it matter: running the realm half per
+    community is a multiple of the same idempotent writes, and it grows with
+    the number of communities rather than staying flat.
+    """
+
+    COMMUNITIES = [
+        CommunityPlan(
+            community={"id": "greenland", "name": "Greenland", "description": ""},
+            participants=[{"key": "gl-1", "user_id": "gl-1"}],
+            operators=[],
+        ),
+        CommunityPlan(
+            community={"id": "blueland", "name": "Blueland", "description": ""},
+            participants=[{"key": "bl-1", "user_id": "bruno@example.com"}],
+            operators=[],
+        ),
+    ]
+
+    @pytest.mark.asyncio
+    async def test_the_realm_level_calls_happen_exactly_once(
+        self, fake, kc_settings, sync_settings
+    ):
+        kc = fake()
+
+        await run(kc_settings, sync_settings, communities=self.COMMUNITIES)
+
+        assert kc.ensure_organizations_enabled.await_count == 1
+        assert kc.ensure_realm_claim_scopes.await_count == 1
+        assert kc.ensure_realm_groups.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_the_organization_is_ensured_once_per_community(
+        self, fake, kc_settings, sync_settings
+    ):
+        kc = fake()
+
+        await run(kc_settings, sync_settings, communities=self.COMMUNITIES)
+
+        aliases = [c.kwargs["alias"] for c in kc.ensure_organization.await_args_list]
+        assert aliases == ["greenland", "blueland"]
+
+    @pytest.mark.asyncio
+    async def test_every_community_s_members_are_provisioned(
+        self, fake, kc_settings, sync_settings
+    ):
+        kc = fake()
+
+        created, _, errors = await run(
+            kc_settings, sync_settings, communities=self.COMMUNITIES
+        )
+
+        assert errors == []
+        assert kc.created_users == ["gl-1", "bruno@example.com"]
+        assert created == ["gl-1", "bruno@example.com"]
+
+    @pytest.mark.asyncio
+    async def test_the_declared_group_is_resolved_once_and_filled_for_everybody(
+        self, fake, kc_settings, sync_settings
+    ):
+        """One resolution, every community's members in it.
+
+        The group is realm-level and flat (ADR-0005), so it is resolved with the
+        rest of the realm scaffold — and a participant of the second community
+        must land in it just the same, or that community is the one onboarding
+        cannot find.
+        """
+        kc = fake(groups={"/participants": {"id": "gid-participants"}})
+
+        await run(
+            kc_settings,
+            sync_settings,
+            communities=self.COMMUNITIES,
+            admin_group_paths=["/participants"],
+        )
+
+        assert kc.resolved_paths == ["/participants"]
+        assert kc.group_adds == [
+            ("uuid-gl-1", "gid-participants"),
+            ("uuid-bruno@example.com", "gid-participants"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_missing_group_fails_before_the_first_community(
+        self, fake, kc_settings, sync_settings
+    ):
+        """Resolution is up front, so no community is half provisioned."""
+        kc = fake(groups={})
+
+        with pytest.raises(KeycloakError, match="/participants"):
+            await run(
+                kc_settings,
+                sync_settings,
+                communities=self.COMMUNITIES,
+                admin_group_paths=["/participants"],
+            )
+
+        assert kc.created_users == []
+
+
+class TestAdoptingAnOnboardedAccountDoesNotModifyIt:
+    """With registration open, most members already have an account.
+
+    `../onboarding` provisions the Keycloak user *first* and the registry member
+    second, so from the next deploy onwards `sync-users` is mostly an adopter
+    rather than a creator: the account exists, it has the participant's real
+    email, and the participant has already signed in with it.
+
+    What it must therefore never do is write to one. Overwriting an email or
+    resetting a password on a live account is not a sync — it is an outage for
+    one person, and it would be caused by the command that was supposed to be
+    reconciling them.
+    """
+
+    ONBOARDED = [{"key": "20260912-a3f9c2", "user_id": "alice@example.com"}]
+
+    @pytest.mark.asyncio
+    async def test_no_password_is_set_on_an_account_that_already_exists(
+        self, fake, kc_settings, sync_settings
+    ):
+        kc = fake(existing_users={"alice@example.com"})
+
+        await run(kc_settings, sync_settings, participants=self.ONBOARDED)
+
+        kc.set_user_password.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reset_password_is_opt_in_and_still_available(
+        self, fake, kc_settings, sync_settings
+    ):
+        """The seed-demo case has to keep working; it is just not the default."""
+        kc = fake(existing_users={"alice@example.com"})
+
+        await run(
+            kc_settings,
+            sync_settings,
+            participants=self.ONBOARDED,
+            reset_password=True,
+        )
+
+        kc.set_user_password.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mock_does_not_overwrite_a_real_email_on_an_existing_account(
+        self, fake, kc_settings, sync_settings
+    ):
+        """`--mock` fills fields on accounts it creates, and must stop there.
+
+        `ensure_user` returns early for a user that exists, so the email,
+        firstName and lastName passed to it are only ever used on a create.
+        Pinned because `--mock` is exactly what a developer reaches for while
+        testing this against a realm holding real onboarded accounts.
+        """
+        kc = fake(existing_users={"alice@example.com"})
+        captured: list = []
+
+        async def ensure_user(username: str, **kwargs):
+            captured.append((username, kwargs))
+            return f"uuid-{username}", False
+
+        kc.ensure_user = ensure_user
+
+        await run(kc_settings, sync_settings, participants=self.ONBOARDED, mock=True)
+
+        assert captured[0][0] == "alice@example.com"
+        assert kc.created_users == []
+        kc.set_user_password.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_the_organization_and_the_group_are_still_ensured(
+        self, fake, kc_settings, sync_settings
+    ):
+        """Adopting is not doing nothing — it is the half onboarding cannot do.
+
+        Organization membership is the whole reason this run matters for an
+        already-provisioned participant: `../onboarding` sets the group and not
+        the organization, so an onboarded member has no `organization` claim
+        until something reconciles them. This is that something.
+        """
+        kc = fake(
+            existing_users={"alice@example.com"},
+            groups={"/participants": {"id": "gid-participants"}},
+        )
+
+        await run(
+            kc_settings,
+            sync_settings,
+            participants=self.ONBOARDED,
+            admin_group_paths=["/participants"],
+        )
+
+        kc.ensure_user_in_organization.assert_awaited_once_with(
+            "org-1", "uuid-alice@example.com"
+        )
+        assert kc.group_adds == [("uuid-alice@example.com", "gid-participants")]

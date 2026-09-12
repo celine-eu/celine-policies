@@ -14,6 +14,20 @@ from celine.policies.cli.keycloak.settings import (
     realm_is_set_in_environment,
 )
 
+# The bundle-reading half moved to `celine.provisioning.bundle`, beside the
+# provisioning it feeds: the service reconciling a community reads the same
+# bundle this command does, and a second parser is how the two come to disagree.
+# Re-exported here because every `keycloak` command imports them from this
+# module, and moving code is not a reason to move every import with it.
+from celine.provisioning.bundle import (  # noqa: F401
+    ACTIVE_MEMBER_STATUS,
+    derive_username,
+    load_rec_community_info,
+    load_rec_operators,
+    load_rec_participants,
+    participant_username,
+)
+
 
 def configure_logging(verbose: bool) -> None:
     """Configure logging based on verbosity."""
@@ -96,31 +110,18 @@ def resolve_realm(
     return settings, "the default"
 
 
-def load_rec_participants(rec_yaml: Path) -> list[dict]:
-    """Extract participant records from a REC registry YAML.
+def read_rec_documents(rec_yaml: Path) -> list[dict]:
+    """Parse a REC bundle file into one document per community.
 
-    Returns a list of dicts with keys: user_id, key, name.
-    Participants without a user_id are skipped with a warning.
+    `safe_load_all` rather than `safe_load`: the registry's export is a
+    multidocument stream whenever it covers more than one community, and a file
+    somebody saved from it is the same bytes. A single-community file yields a
+    one-element list, so the caller has one shape to handle either way.
     """
-    logger = logging.getLogger(__name__)
-    raw = yaml.safe_load(rec_yaml.read_text())
-    # Support both "members" (new schema) and "participants" (legacy)
-    participants_raw = raw.get("members") or raw.get("participants", {})
-
-    participants = []
-    for key, data in participants_raw.items():
-        user_id = data.get("user_id")
-        if not user_id:
-            logger.warning("Participant %s has no user_id — skipping", key)
-            continue
-        participants.append(
-            {
-                "key": key,
-                "user_id": user_id,
-                "name": data.get("name", key),
-            }
-        )
-    return participants
+    docs = [doc for doc in yaml.safe_load_all(rec_yaml.read_text()) if doc]
+    if not docs:
+        raise ValueError(f"{rec_yaml} contains no YAML document")
+    return docs
 
 
 def load_owners(owner_yamls: list[Path]) -> list[dict]:
@@ -160,53 +161,3 @@ def load_owners(owner_yamls: list[Path]) -> list[dict]:
     return list(merged.values())
 
 
-def load_rec_operators(rec_yaml: Path) -> list[dict]:
-    """Extract DSO operator records from a REC registry YAML (community.operators).
-
-    Returns a list of dicts: id, name, country, contact.
-    Operators without an id are skipped.
-    """
-    logger = logging.getLogger(__name__)
-    raw = yaml.safe_load(rec_yaml.read_text())
-    operators_raw = raw.get("community", {}).get("operators", {})
-    operators = []
-    for op_id, data in (operators_raw or {}).items():
-        if not op_id:
-            logger.warning("Operator entry without id — skipping")
-            continue
-        operators.append(
-            {
-                "id": op_id,
-                "name": data.get("name", op_id),
-                "country": data.get("country"),
-                "contact": data.get("contact"),
-            }
-        )
-    return operators
-
-
-def load_rec_community_info(rec_yaml: Path) -> dict:
-    """Extract community metadata from a REC registry YAML.
-
-    Returns a dict with keys: id, name, description, type.
-    Raises ValueError if community.id is missing.
-    """
-    raw = yaml.safe_load(rec_yaml.read_text())
-    community = raw.get("community", {})
-    rec_id = community.get("id")
-    if not rec_id:
-        raise ValueError(f"YAML {rec_yaml} is missing community.id")
-    return {
-        "id": rec_id,
-        "name": community.get("name", rec_id),
-        "description": community.get("description", ""),
-        "type": community.get("type", "rec"),
-    }
-
-
-def derive_username(participant_key: str) -> str:
-    """Stable Keycloak username from the participant key (e.g. 'gl-00001').
-
-    Unique within the community, no PII, safe to hand out during demos.
-    """
-    return participant_key.lower()

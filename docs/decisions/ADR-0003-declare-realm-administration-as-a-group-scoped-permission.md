@@ -1,7 +1,9 @@
 # ADR-0003 — A service account's realm administration is declared, and scoped to one group
 
 **Date:** 2026-09-10
-**Status:** accepted
+**Status:** accepted — the refusal of a `realm_management_roles` field is superseded by
+[ADR-0007](ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
+Everything else here stands.
 
 ## Context
 

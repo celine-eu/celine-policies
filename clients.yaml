@@ -188,6 +188,18 @@ scopes:
   - name: mqtt.admin
     description: MQTT superuser access
 
+  # Provisioning
+  # The service that writes participant accounts into the realm, and the only
+  # thing that does. Its authorization is by scope like every other service:
+  # ingress restriction is defence in depth, not the control, and a caller
+  # inside the network still presents a token and still holds one of these.
+  - name: provisioning.admin
+    description: Full access to the provisioning service
+  - name: provisioning.participants.write
+    description: Create or update one participant's account, reset its password, disable it
+  - name: provisioning.reconcile
+    description: Sweep one community from the registry and reconcile the realm against it
+
 # =============================================================================
 # CLIENTS
 # =============================================================================
@@ -375,6 +387,43 @@ clients:
     scopes_prefix: mlflow
     default_scopes:
       - mlflow.admin
+
+  # The participant provisioning service — see ADR-0007, and the store's
+  # `plans/provisioning-is-a-service-and-it-is-the-only-keycloak-writer.md`.
+  #
+  # It is the only client in this file holding realm-wide administration, and
+  # the grant is coarse on purpose:
+  #
+  #   manage-users   realm-wide user search, edit and password reset — the calls
+  #                  the group-scoped grant on svc-onboarding had to work around
+  #                  (ADR-0003 through ADR-0005).
+  #   manage-realm   the Organizations API, which no fine-grained permission on
+  #                  26.6.0 can express at all.
+  #
+  # Not the `realm-admin` composite, which also carries client and
+  # identity-provider administration this service never performs. `sync` does
+  # that, as a CLI, with an operator's credential.
+  #
+  # **What makes it safe is that nothing outside the network can reach it, and
+  # this file cannot enforce that.** A route added to this service by accident
+  # converts manage-realm into an internet-facing credential. The guard lives
+  # with the ingress configuration in `../celine-dev`; if you are adding a
+  # route to this service, that is the thing to read first.
+  - client_id: svc-provisioning
+    name: Participant Provisioning Service
+    secret: ${SVC_PROVISIONING_SECRET:-svc-provisioning}
+    scopes_prefix: provisioning
+    realm_management_roles:
+      - manage-users
+      - manage-realm
+    default_scopes:
+      # Own resources
+      - provisioning.admin
+      # Dependencies — `POST /reconcile/{community}` sweeps a community from the
+      # registry. Export and nothing else: this service reconciles Keycloak
+      # *from* the registry and must never be able to write to it, least of all
+      # to replacement-import over it.
+      - rec-registry.export
 
   - client_id: celine-cli
     name: CELINE Admin CLI

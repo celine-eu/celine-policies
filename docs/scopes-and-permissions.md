@@ -120,6 +120,16 @@ the other.
 |-------|-------------|
 | `mqtt.admin` | MQTT superuser access |
 
+### Provisioning
+
+The service that writes participant accounts into the realm, and the only thing that does.
+
+| Scope | Description |
+|-------|-------------|
+| `provisioning.admin` | Full access to the provisioning service |
+| `provisioning.participants.write` | Create or update one participant's account, reset its password, disable it |
+| `provisioning.reconcile` | Sweep one community from the registry and reconcile the realm against it |
+
 ---
 
 ## Service Clients
@@ -237,6 +247,36 @@ default_scopes:
   - onboarding.admin
 ```
 
+### svc-provisioning
+
+The participant provisioning service. It holds **realm-wide** administration — the only
+client that does — and is the only thing that writes a participant account:
+
+```yaml
+scopes_prefix: provisioning
+realm_management_roles:
+  - manage-users
+  - manage-realm
+default_scopes:
+  - provisioning.admin
+  - rec-registry.export
+```
+
+`manage-users` carries the realm-wide user search, edit and password reset that the
+group-scoped grant on `svc-onboarding` has to work around; `manage-realm` carries the
+Organizations API, which no fine-grained permission on 26.6.0 can express. Not the
+`realm-admin` composite, which also grants client and identity-provider administration
+this service never performs — `sync` does that, as a CLI, with an operator's credential.
+
+`rec-registry.export` and nothing else on the registry side: this service reconciles
+Keycloak *from* the registry and must never be able to write to it.
+
+**What makes the coarse grant safe is that nothing outside the network can reach it, and
+this repository cannot enforce that.** A route added to this service by accident converts
+`manage-realm` into an internet-facing credential. The guard lives with the ingress
+configuration, not here. See
+[ADR-0007](decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
+
 ### celine-cli
 
 Admin CLI client — no `scopes_prefix` (sudo client, exempt from audience mapper generation):
@@ -343,7 +383,19 @@ For MQTT specifically, topic access is controlled by Rego policies (see [MQTT In
 
 Scopes say what a client may **ask for**. They say nothing about what its service account
 may **do to the realm** — create a user, reset a password, disable an account. That is a
-separate mechanism, and it is declared with `admin_permissions`:
+separate mechanism, and there are two ways to declare it.
+
+| Field | Reach | Who holds it |
+|---|---|---|
+| `admin_permissions` | the members of one named group | a service that faces the public |
+| `realm_management_roles` | realm-wide | a service with no public route |
+
+The first is below. The second is one line, is deliberately hard to justify, and is
+described under [Realm-wide administration](#realm-wide-administration).
+
+### Group-scoped administration
+
+Declared with `admin_permissions`:
 
 ```yaml
   - client_id: svc-onboarding
@@ -357,7 +409,7 @@ The grant is scoped to the members of one group. A service account holding the b
 may create a user **into** `/participants` and read, update, disable and password-reset a
 member of it — and may do none of those things to anybody else, including operator
 accounts. Keycloak's realm-wide `manage-users` role would have reached every account in the
-realm to do the same job; there is deliberately no way to ask for it from this file.
+realm to do the same job.
 
 ### The scopes
 
@@ -407,6 +459,50 @@ with the `celine-policies:` prefix are ever read or written, so anything created
 the admin console survives a sync untouched. A group that `sync` created is never deleted —
 revoking a permission leaves the group and its members alone.
 
+## Realm-wide administration
+
+One client holds it — `svc-provisioning` — and the field is one line:
+
+```yaml
+  - client_id: svc-provisioning
+    realm_management_roles:
+      - manage-users
+      - manage-realm
+```
+
+These are `realm-management` client roles, assigned to the client's service account. They
+are **realm-wide**: `manage-users` is update, delete, password reset and disable on every
+account in the realm, and `manage-realm` includes the Organizations API. There is no
+narrower way to reach organization membership — the fine-grained resource types are
+`Clients`, `Groups`, `Roles` and `Users`, with no Organizations among them, and the
+Organizations API answers `403` even with realm-wide `Users: view + manage` granted the
+fine-grained way.
+
+**What makes it acceptable is the holder, not the grant.** A service with no public route
+can hold a coarse grant; the service that faces the public onboarding wizard could not,
+which is what `admin_permissions` exists for. That argument is a property of the ingress
+configuration and **cannot be enforced from this repository** — a route added to
+`svc-provisioning` by accident converts `manage-realm` into an internet-facing credential.
+
+**What `sync` does with it.** Nothing at all on a declaration that names no roles. Where a
+client declares them, `sync` prints the holders in yellow on every run, ensures the
+realm-management audience mapper (without it the role mappings never reach the token and
+every Admin API call is a `403` with the roles plainly assigned), and assigns the roles the
+service account is missing.
+
+It is **additive and never revokes**: nothing here can tell a role this tool granted from
+one an operator granted by hand, so a role held but not declared is left alone and dropping
+the field takes nothing away. Withdrawing realm administration is a deliberate act, done
+where it can be seen.
+
+A role the realm-management client does not offer **stops the sync before it writes
+anything**, naming every offender and listing what is available — the same treatment
+[ADR-0002](decisions/ADR-0002-undefined-scope-grants-are-fatal.md) gives a grant naming an
+undeclared scope, and for the same reason.
+
+Read [ADR-0007](decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md)
+before adding a second holder.
+
 ### What sync-users does with it
 
 `sync-users` reads the same block and adds every participant it processes to the groups it
@@ -422,6 +518,38 @@ Admin groups: /participants (declared by svc-onboarding)
 The group must already exist — `sync` creates it when it grants the permission, and
 `sync-users` fails before touching any user rather than creating realm structure of its
 own. `--no-admin-groups` turns the behaviour off.
+
+### Where sync-users gets its members, and the scope that costs
+
+`sync-users` reads REC definitions either from a YAML file or, with `--from-registry`, from
+the live rec-registry. The file is a picture of the community at export time, so a run
+against one leaves out everybody `onboarding` has approved since; the registry reconciles
+what is true. See
+[ADR-0006](decisions/ADR-0006-the-registry-is-the-source-of-members.md).
+
+Reading the registry needs a Keycloak client holding **`rec-registry.export`** and an
+audience of `svc-rec-registry`. The default is `celine-cli`, which holds
+`rec-registry.admin` — and that is wider in a direction worth stating plainly: through the
+admin override it also satisfies `rec-registry.import`, which deletes a community with
+every member in it, and `rec-registry.members.purge`.
+
+Nothing in `clients.yaml` was changed for this, and no realm narrowing is in place. What
+keeps it bounded is the code: `src/celine/policies/cli/keycloak/registry.py` names one
+read-only registry method, and a test fails if a second is touched. To narrow it properly,
+declare a client with `rec-registry.export` alone and point `--registry-client-id` at it —
+no code change is needed.
+
+`--check` reads the same sources and writes nothing, exiting non-zero when a member of the
+source has no account, is outside their REC organization, or is outside a group declared
+here. Organization membership is not a health probe, so this is the probe:
+
+```console
+$ celine-policies keycloak sync-users --from-registry \
+    --registry-url http://api.celine.localhost/rec-registry --check
+gr-renewable-community:
+  ✗ gr-renewable-community/20260910-1a2b3c4d (a.person@example.org): not in the REC
+    organization — no `organization` claim, so no org-scoped policy resolves them
+```
 
 ### Requirements
 

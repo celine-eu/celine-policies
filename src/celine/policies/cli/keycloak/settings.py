@@ -241,6 +241,18 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
                                             Unset → random password per user.
         CELINE_SYNC_USERS_DRY_RUN           "true" / "1" to enable dry-run
         CELINE_SYNC_USERS_VERBOSE           "true" / "1" to enable verbose
+
+    Reading the live registry instead of a file:
+        CELINE_SYNC_USERS_REGISTRY_URL      rec-registry base URL. Setting it is
+                                            what selects the registry source.
+        CELINE_SYNC_USERS_REGISTRY_CLIENT_ID
+                                            Keycloak client to read it as.
+                                            default: celine-cli
+        CELINE_SYNC_USERS_REGISTRY_CLIENT_SECRET
+                                            Its secret. Falls back to the entry
+                                            for that client in the secrets file.
+        CELINE_SYNC_USERS_COMMUNITIES       Space-separated community keys.
+                                            Unset → every community.
     """
 
     model_config = SettingsConfigDict(
@@ -251,6 +263,22 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
     rec_yaml: Path | None = Field(
         default=None,
         description="Path to REC registry YAML file",
+    )
+    registry_url: str | None = Field(
+        default=None,
+        description="rec-registry base URL; set to read the live registry",
+    )
+    registry_client_id: str = Field(
+        default="celine-cli",
+        description="Keycloak client used to authenticate to rec-registry",
+    )
+    registry_client_secret: str | None = Field(
+        default=None,
+        description="Secret for the registry client; falls back to the secrets file",
+    )
+    communities: list[str] = Field(
+        default=[],
+        description="Community keys to reconcile. Empty → every community.",
     )
     groups: list[str] = Field(
         default=[],
@@ -282,6 +310,10 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
         temporary: bool | None = None,
         dry_run: bool | None = None,
         verbose: bool | None = None,
+        registry_url: str | None = None,
+        registry_client_id: str | None = None,
+        registry_client_secret: str | None = None,
+        communities: list[str] | None = None,
     ) -> "SyncUsersSettings":
         """Return a new instance with any provided CLI overrides applied."""
         return SyncUsersSettings(
@@ -293,7 +325,39 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
             temporary=temporary if temporary is not None else self.temporary,
             dry_run=dry_run if dry_run is not None else self.dry_run,
             verbose=verbose if verbose is not None else self.verbose,
+            registry_url=(
+                registry_url if registry_url is not None else self.registry_url
+            ),
+            registry_client_id=(
+                registry_client_id
+                if registry_client_id is not None
+                else self.registry_client_id
+            ),
+            registry_client_secret=(
+                registry_client_secret
+                if registry_client_secret is not None
+                else self.registry_client_secret
+            ),
+            communities=communities if communities is not None else self.communities,
         )
+
+    def resolve_registry_secret(self, secrets_file: Path) -> str | None:
+        """The registry client's secret, from the flag, the env or the store.
+
+        The secrets file is the last of the three because it is the least
+        explicit, and it is consulted at all because `sync` writes every client
+        it created or updated there — so on a realm this CLI provisioned, the
+        credential is usually already on disk.
+
+        **It is not always there.** `write_secrets_file` records only the
+        clients a given run touched, so a realm whose `celine-cli` was synced
+        long ago has an entry for it and one synced before that convention does
+        not. Returning None here is therefore ordinary, and the caller's refusal
+        has to name all three inputs rather than only this one.
+        """
+        if self.registry_client_secret:
+            return self.registry_client_secret
+        return _load_secret_from_file(secrets_file, self.registry_client_id)
 
     def generate_password(self) -> str:
         """Return the configured temp password, or generate a random one."""

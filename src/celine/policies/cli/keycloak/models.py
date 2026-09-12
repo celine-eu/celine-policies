@@ -287,6 +287,28 @@ class ClientConfig(BaseModel):
         ),
     )
 
+    # Realm-wide administration, which is a different and much larger thing than
+    # the field above.
+    #
+    # ADR-0003 refused this field, and ADR-0007 adds it for one holder. The
+    # refusal was right about the reach and wrong about nothing else: every role
+    # here is realm-wide, `manage-users` reaches every account in the realm, and
+    # `manage-realm` carries the Organizations API, which no fine-grained
+    # permission on 26.6.0 can express. What changed is not the reach but the
+    # holder — a service with no public route can hold a coarse grant, and the
+    # public front door never could.
+    #
+    # Also not a grant key. `sync` warns on every client that declares it, and a
+    # role Keycloak does not have stops the sync before it writes anything.
+    realm_management_roles: list[str] = Field(
+        default_factory=list,
+        description=(
+            "realm-management client roles to assign to this client's service "
+            "account (e.g. manage-users, manage-realm). Realm-wide: prefer "
+            "admin_permissions, and read ADR-0007 before adding a second holder."
+        ),
+    )
+
     @field_validator("name", mode="before")
     @classmethod
     def default_name_from_client_id(cls, v: str, info) -> str:
@@ -931,6 +953,16 @@ class KeycloakConfig(BaseModel):
             for grant in client.admin_permissions.groups:
                 paths.setdefault(grant.path, []).append(client.client_id)
         return {path: sorted(set(ids)) for path, ids in sorted(paths.items())}
+
+    def clients_with_realm_management_roles(self) -> list[ClientConfig]:
+        """Clients declaring realm-wide administration, in declaration order.
+
+        The list is expected to be short and to stay short — one holder, the
+        provisioning service — which is why `sync` names every entry rather than
+        counting them. A second name appearing in a diff is the thing a reviewer
+        has to see.
+        """
+        return [c for c in self.clients if c.realm_management_roles]
 
     def malformed_admin_permissions(self) -> list[str]:
         """Everything wrong with the declared admin permissions, named per client.

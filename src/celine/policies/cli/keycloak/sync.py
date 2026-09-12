@@ -116,6 +116,27 @@ class AdminPermissionAction:
 
 
 @dataclass
+class RealmManagementRoleAction:
+    """Realm-wide administration to grant one client's service account.
+
+    There is no "remove" counterpart and that is deliberate — see
+    `KeycloakAdminClient.assign_realm_management_roles`. Nothing here can tell a
+    role this tool granted from one an operator granted by hand, so revoking is
+    left to a person rather than inferred from a diff.
+
+    Attributes:
+        client_id: The client whose service account is granted the roles.
+        roles:     The roles it is missing, which is what this action adds.
+        held:      What it already has, so the summary shows the delta and not
+                   only the declaration.
+    """
+
+    client_id: str
+    roles: list[str]
+    held: set[str] = field(default_factory=set)
+
+
+@dataclass
 class SyncPlan:
     """Plan of actions to sync Keycloak to desired state."""
 
@@ -153,6 +174,13 @@ class SyncPlan:
         default_factory=list
     )
 
+    # Realm-wide administration (ADR-0007). Additive only, and expected to hold
+    # exactly one entry: a second client appearing here is the thing a reviewer
+    # has to notice, which is why the summary names them rather than counting.
+    realm_management_roles_to_grant: list[RealmManagementRoleAction] = field(
+        default_factory=list
+    )
+
     # Orphans (exist in Keycloak but not in config)
     orphan_scopes: list[str] = field(default_factory=list)
     orphan_clients: list[str] = field(default_factory=list)
@@ -173,6 +201,7 @@ class SyncPlan:
             or self.admin_permissions_to_add
             or self.admin_permissions_to_update
             or self.admin_permissions_to_remove
+            or self.realm_management_roles_to_grant
         )
 
     @property
@@ -277,6 +306,15 @@ class SyncPlan:
                     f"  - {action.client_id} -> {action.group_path} ({was})"
                 )
 
+        if self.realm_management_roles_to_grant:
+            lines.append("Realm administration to grant (realm-wide):")
+            for action in self.realm_management_roles_to_grant:
+                held = ", ".join(sorted(action.held)) or "nothing"
+                lines.append(
+                    f"  ! {action.client_id} -> {', '.join(action.roles)} "
+                    f"(holds {held})"
+                )
+
         if self.orphan_scopes:
             lines.append(
                 f"Orphan scopes (use --prune to delete): {len(self.orphan_scopes)}"
@@ -327,6 +365,9 @@ class SyncResult:
     admin_permissions_granted: list[tuple[str, str]] = field(default_factory=list)
     admin_permissions_changed: list[tuple[str, str]] = field(default_factory=list)
     admin_permissions_revoked: list[tuple[str, str]] = field(default_factory=list)
+
+    # Realm-wide administration, as (client_id, role) pairs.
+    realm_management_roles_granted: list[tuple[str, str]] = field(default_factory=list)
 
     errors: list[str] = field(default_factory=list)
 
@@ -403,6 +444,14 @@ class SyncResult:
             )
             for client_id, group_path in self.admin_permissions_revoked:
                 lines.append(f"  - {client_id} -> {group_path}")
+
+        if self.realm_management_roles_granted:
+            lines.append(
+                f"Granted realm-wide administration to "
+                f"{len({c for c, _ in self.realm_management_roles_granted})} client(s)"
+            )
+            for client_id, role in self.realm_management_roles_granted:
+                lines.append(f"  ! {client_id} -> realm-management:{role}")
 
         if self.errors:
             lines.append(f"Errors: {len(self.errors)}")
@@ -743,6 +792,53 @@ def compute_sync_plan(
                         action="remove",
                         permission_id=existing.permission_id,
                         current_scopes=existing.scopes,
+                    )
+                )
+
+    # -------------------------------------------------------------------------
+    # Realm-wide administration (ADR-0007)
+    # -------------------------------------------------------------------------
+    # Additive: a role the account holds and the declaration does not name is
+    # left alone, because nothing here can tell a role this tool granted from
+    # one an operator granted by hand. Revocation is a deliberate act.
+    #
+    # A role this Keycloak does not offer stops the sync before it writes
+    # anything, which is the treatment ADR-0002 gives an undeclared scope. The
+    # failure it replaces is a realm that syncs clean and answers 403 to the one
+    # call the client exists to make.
+
+    declaring_realm_admin = config.clients_with_realm_management_roles()
+    if declaring_realm_admin:
+        offered = current.available_realm_management_roles
+        unknown: dict[str, list[str]] = {}
+        for client_config in declaring_realm_admin if offered is not None else []:
+            missing_from_keycloak = [
+                role
+                for role in client_config.realm_management_roles
+                if role not in offered
+            ]
+            if missing_from_keycloak:
+                unknown[client_config.client_id] = missing_from_keycloak
+
+        if unknown:
+            detail = "; ".join(
+                f"{client_id}: {', '.join(roles)}" for client_id, roles in unknown.items()
+            )
+            raise ValueError(
+                f"realm_management_roles names {sum(len(r) for r in unknown.values())} "
+                f"role(s) the realm-management client does not have — {detail}. "
+                f"Available: {', '.join(sorted(offered or ()))}"
+            )
+
+        for client_config in declaring_realm_admin:
+            held = current.realm_management_roles.get(client_config.client_id, set())
+            missing = [r for r in client_config.realm_management_roles if r not in held]
+            if missing:
+                plan.realm_management_roles_to_grant.append(
+                    RealmManagementRoleAction(
+                        client_id=client_config.client_id,
+                        roles=missing,
+                        held=held,
                     )
                 )
 
@@ -1174,6 +1270,54 @@ async def apply_sync_plan(
         result=result,
         dry_run=dry_run,
     )
+
+    # -------------------------------------------------------------------------
+    # 9b. Realm-wide administration
+    # -------------------------------------------------------------------------
+    # After the clients exist, because the roles are assigned to a service
+    # account that does not exist until its client does — a client this run
+    # created has no entry in `current` and every declared role reads as
+    # missing, which is correct.
+
+    for rm_action in plan.realm_management_roles_to_grant:
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Would grant %s realm-management roles: %s",
+                rm_action.client_id,
+                ", ".join(rm_action.roles),
+            )
+            result.realm_management_roles_granted.extend(
+                (rm_action.client_id, role) for role in rm_action.roles
+            )
+            continue
+
+        client_uuid = client_uuids.get(rm_action.client_id)
+        if not client_uuid:
+            existing = await client.get_client_by_client_id(rm_action.client_id)
+            client_uuid = existing["id"] if existing else None
+        if not client_uuid:
+            result.errors.append(
+                f"Cannot grant realm administration to {rm_action.client_id}: "
+                f"client not found after sync"
+            )
+            continue
+
+        try:
+            # Without the audience mapper the role mappings never reach the
+            # token: `resource_access` comes back empty and every Admin API call
+            # is a 403 with the roles plainly assigned in the console.
+            await client.ensure_realm_management_audience_mapper(client_uuid)
+            await client.assign_realm_management_roles(
+                client_uuid, list(rm_action.roles)
+            )
+            result.realm_management_roles_granted.extend(
+                (rm_action.client_id, role) for role in rm_action.roles
+            )
+        except Exception as e:
+            result.errors.append(
+                f"Failed to grant realm-management roles to "
+                f"{rm_action.client_id}: {e}"
+            )
 
     # -------------------------------------------------------------------------
     # 10. Delete orphans (if --prune)

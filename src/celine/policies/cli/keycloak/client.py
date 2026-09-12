@@ -147,6 +147,26 @@ class CurrentState:
         default_factory=dict
     )
 
+    # --- Realm-wide administration ------------------------------------------
+    #
+    # Filled only for the clients that declare `realm_management_roles`, and
+    # only when something does — like the block above, a realm that does not use
+    # the feature costs no extra requests.
+
+    #: Every role the realm-management client offers, which is what makes a
+    #: misspelt declaration fatal at plan time rather than a 403 in production.
+    #:
+    #: **`None` means "not consulted", which is not "the realm has none".** An
+    #: empty set would collapse those two, and the collapse has a direction:
+    #: every declared role would read as misspelt and a sync that is merely
+    #: uninformed would refuse to run. `fetch_realm_management_role_state` sets
+    #: it, `compute_sync_plan` validates only when it is set, and a plan built
+    #: without it still grants — which is what an empty realm needs anyway.
+    available_realm_management_roles: set[str] | None = None
+
+    #: client_id -> the realm-management roles its service account holds today.
+    realm_management_roles: dict[str, set[str]] = field(default_factory=dict)
+
 
 @dataclass
 class GroupAdminGrantState:
@@ -1136,13 +1156,28 @@ class KeycloakAdminClient:
         )
         logger.info("realm-management audience mapper created")
 
-    async def assign_realm_management_roles(self, client_uuid: str) -> None:
-        """Ensure the service account has all required realm-management roles.
+    async def assign_realm_management_roles(
+        self, client_uuid: str, roles: "list[str] | None" = None
+    ) -> None:
+        """Ensure the service account holds the named realm-management roles.
+
+        `roles` defaults to `REQUIRED_REALM_MGMT_ROLES`, which is what
+        `bootstrap` grants the admin CLI. A caller passing its own list is a
+        client declaring `realm_management_roles` — see ADR-0007 — and gets
+        exactly what it declared and nothing else.
+
+        **Additive.** A role the account holds and the list does not name is
+        left alone: this method cannot tell a role it granted from one an
+        operator granted by hand, and the classic model has no sentinel to tell
+        it with. Revoking realm administration is a deliberate act, done where
+        it can be seen.
 
         Idempotent: fetches currently assigned roles first and only assigns
-        what is missing. Raises if any required role is missing or cannot be
+        what is missing. Raises if any named role is missing or cannot be
         verified after assignment.
         """
+        wanted = list(roles) if roles is not None else list(self.REQUIRED_REALM_MGMT_ROLES)
+
         sa_user = await self.get_service_account_user(client_uuid)
         user_id = sa_user["id"]
 
@@ -1154,7 +1189,7 @@ class KeycloakAdminClient:
         all_roles = await self.get_client_roles(rm_client_uuid)
         role_map = {r["name"]: r for r in all_roles}
 
-        for role_name in self.REQUIRED_REALM_MGMT_ROLES:
+        for role_name in wanted:
             if role_name not in role_map:
                 raise KeycloakError(
                     f"Required role '{role_name}' not found in realm-management. "
@@ -1165,9 +1200,7 @@ class KeycloakAdminClient:
         current_role_names = {r["name"] for r in current_roles}
 
         missing_roles = [
-            role_map[name]
-            for name in self.REQUIRED_REALM_MGMT_ROLES
-            if name not in current_role_names
+            role_map[name] for name in wanted if name not in current_role_names
         ]
 
         if not missing_roles:
@@ -1185,11 +1218,7 @@ class KeycloakAdminClient:
         # Verify assignment succeeded
         assigned_roles = await self.get_user_client_roles(user_id, rm_client_uuid)
         assigned_names = {r["name"] for r in assigned_roles}
-        still_missing = [
-            name
-            for name in self.REQUIRED_REALM_MGMT_ROLES
-            if name not in assigned_names
-        ]
+        still_missing = [name for name in wanted if name not in assigned_names]
         if still_missing:
             raise KeycloakError(
                 f"Role assignment failed — still missing after assign: {still_missing}"
@@ -1501,6 +1530,42 @@ class KeycloakAdminClient:
                 )
             )
 
+    async def fetch_realm_management_role_state(
+        self, state: CurrentState, client_ids: "set[str]"
+    ) -> None:
+        """Fill in `state`'s realm-management fields for the clients named.
+
+        Reads the offered role list once, so a declaration naming a role this
+        Keycloak does not have is refused at plan time — the same treatment
+        ADR-0002 gives a grant naming an undeclared scope, and for the same
+        reason: the alternative is a realm that syncs clean and answers 403.
+
+        A client with no service account yet — one this run is about to create —
+        simply has no entry, and every role it declares reads as missing.
+        """
+        rm_client = await self.get_realm_management_client()
+        if not rm_client:
+            raise KeycloakError("realm-management client not found")
+        rm_client_uuid = rm_client["id"]
+
+        state.available_realm_management_roles = {
+            r["name"] for r in await self.get_client_roles(rm_client_uuid) if r.get("name")
+        }
+
+        for client_id in sorted(client_ids):
+            client = await self.get_client_by_client_id(client_id)
+            if not client:
+                continue
+            try:
+                sa_user = await self.get_service_account_user(client["id"])
+            except KeycloakError:
+                logger.debug("Client %s has no service account yet", client_id)
+                continue
+            held = await self.get_user_client_roles(sa_user["id"], rm_client_uuid)
+            state.realm_management_roles[client_id] = {
+                r["name"] for r in held if r.get("name")
+            }
+
     @staticmethod
     def _parse_group_permission_name(name: str) -> tuple[str | None, str | None]:
         """Read `<prefix><client_id>:group:<group name>` back into its two parts.
@@ -1578,6 +1643,54 @@ class KeycloakAdminClient:
         if results:
             return results[0]
         return None
+
+    async def get_user_by_email(self, email: str) -> "dict[str, Any] | None":
+        """Get a Keycloak user by exact email address. Returns None if not found.
+
+        **This is how an account that already exists is found under a username
+        this platform did not choose.** Two writers have named accounts here —
+        `sync-users` after a member key, `../onboarding` after the address the
+        person gave — and a participant who signed up before either convention
+        may authenticate as something else entirely. The address is the only
+        identifier all three agree on, which is why the provisioning service
+        resolves by it and reads the username back rather than deriving one.
+
+        Needs realm-wide user search (`manage-users` or `view-users`); the
+        group-scoped grant of ADR-0003 cannot make this call at all, which is
+        the whole reason the create-then-scan-on-409 dance exists.
+
+        Returns the first match. Keycloak does not enforce email uniqueness
+        unless the realm's `duplicateEmailsAllowed` is false, so a realm that
+        allows duplicates can return more than one and this takes the first —
+        deliberately, because picking between them is not a decision an
+        automated provisioning call should make.
+        """
+        results = await self._get(f"/users?email={email}&exact=true")
+        if results:
+            return results[0]
+        return None
+
+    async def set_user_enabled(self, user_id: str, enabled: bool) -> bool:
+        """Enable or disable an account. Returns whether it changed.
+
+        Disabling is how access is revoked without destroying anything: the
+        account, its memberships and its history stay, and re-enabling is one
+        call. Deleting a user is not the same act and is not offered here.
+
+        Reads first so a no-op reports as one — a revocation that was already in
+        force must not look like a revocation that just happened.
+        """
+        user = await self.get_user_by_id(user_id)
+        if user is None:
+            raise KeycloakNotFoundError(f"User not found: {user_id}")
+        if bool(user.get("enabled")) == enabled:
+            return False
+
+        payload = dict(user)
+        payload["enabled"] = enabled
+        await self._put(f"/users/{user_id}", json=payload, expected_status=[204])
+        logger.info("Set user %s enabled=%s", user_id, enabled)
+        return True
 
     async def ensure_user(
         self,
@@ -1886,6 +1999,31 @@ class KeycloakAdminClient:
         await self._post(f"/organizations/{org_id}/members", json=user_id)
         logger.info("Added user %s to organization %s", user_id, org_id)
 
+    async def is_user_in_organization(self, org_id: str, user_id: str) -> bool:
+        """Whether a user is a member of an organization, asked one user at a time.
+
+        Deliberately not `get_organization_members`: that endpoint takes no
+        `first`/`max`, so a large organization answers with whatever page
+        Keycloak feels like and a member past the end reads as absent. A check
+        that under-reports membership is worse than no check — it would report
+        drift that is not there, and an operator who chases one false finding
+        stops reading the next real one.
+        """
+        try:
+            await self._get(f"/organizations/{org_id}/members/{user_id}")
+            return True
+        except KeycloakNotFoundError:
+            return False
+
+    async def get_user_groups(self, user_id: str) -> list[dict[str, Any]]:
+        """The groups a user belongs to, read from the user rather than the group.
+
+        The other direction — `GET /groups/{id}/members` — ignores `search` and
+        `exact` (ADR-0004), so finding one member there is a paged scan of the
+        whole group. Asking the user is one call and cannot miss.
+        """
+        return await self._get(f"/users/{user_id}/groups") or []
+
     async def ensure_user_in_organization(self, org_id: str, user_id: str) -> bool:
         """Ensure a user is a member of an organization.
 
@@ -1893,12 +2031,9 @@ class KeycloakAdminClient:
         Uses a direct membership check rather than listing all members to avoid
         pagination gaps on large organizations.
         """
-        try:
-            await self._get(f"/organizations/{org_id}/members/{user_id}")
+        if await self.is_user_in_organization(org_id, user_id):
             logger.debug("User %s already in organization %s", user_id, org_id)
             return False
-        except KeycloakNotFoundError:
-            pass
         try:
             await self.add_user_to_organization(org_id, user_id)
             return True

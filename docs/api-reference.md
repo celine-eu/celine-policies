@@ -1,13 +1,19 @@
 # API Reference
 
-HTTP endpoints exposed by the MQTT auth service (`celine.mqtt_auth`).
+HTTP endpoints exposed by this repository's two services — the MQTT auth service
+(`celine.mqtt_auth`) and the provisioning service (`celine.provisioning`).
 
 ## Base URL
 
-| Environment | URL |
-|-------------|-----|
-| Development | `http://localhost:8009` |
-| Docker Compose | `http://mqtt_auth:8009` |
+| Service | Environment | URL |
+|---|---|---|
+| MQTT auth | Development | `http://localhost:8009` |
+| MQTT auth | Docker Compose | `http://mqtt_auth:8009` |
+| Provisioning | Docker Compose | `http://provisioning:8010` |
+
+**The provisioning service has no public URL and must not be given one.** It is reachable
+only from inside the network; see
+[ADR-0007](decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
 
 ## Authentication
 
@@ -159,3 +165,118 @@ ReDoc API documentation.
 | 500 | Internal error (e.g. policy parse failure) |
 
 The MQTT auth endpoints always return a `MqttResponse` body with `ok` and `reason` fields. HTTP status 403 is set alongside `ok: false` to satisfy mosquitto-go-auth's expected behavior.
+
+---
+
+# Provisioning service
+
+`celine.provisioning` — the only thing that writes a participant account into the celine
+realm. Stateless: a retry is another call, and idempotency comes from the keys.
+
+## Authentication
+
+A bearer token, as everywhere else. A token that does not verify is `401`; a token without
+the scope is `403`. `provisioning.admin` satisfies any of the scopes below.
+
+| Endpoint | Scope |
+|---|---|
+| `PUT /participants/{community}/{key}` | `provisioning.participants.write` |
+| `POST /participants/{community}/{key}/password-reset` | `provisioning.participants.write` |
+| `POST /participants/{community}/{key}/disable` | `provisioning.participants.write` |
+| `POST /reconcile/{community}` | `provisioning.reconcile` |
+
+Scope checks are **not** what keeps this service safe — its lack of a route is. The scope
+check is defence in depth, for a caller already inside the network.
+
+## PUT /participants/{community}/{key}
+
+Ensure the account exists, is in the REC organization, and is in its org group.
+
+**Request:**
+
+```json
+{"email": "a.person@example.org", "first_name": "A", "last_name": "Person"}
+```
+
+The address **transits and is stored nowhere** — not in this service, which keeps no
+state, and not in the registry, which has no email column. It is on the Keycloak account,
+which is where an address somebody logs in with belongs.
+
+**Response (200):**
+
+```json
+{"user_id": "3f1c…", "username": "a.person@example.org", "created": true}
+```
+
+`user_id` is the **Keycloak uuid**, which `../onboarding` needs for its dataspace step.
+`username` is what the account authenticates as, **read back from Keycloak** rather than
+computed — an account that already existed may authenticate under a convention nobody here
+chose — and it is the value that becomes the registry's `Member.user_id`. Note the name
+collision: the registry's `user_id` column holds a *username*.
+
+Always `200`. A create and a no-op are the same request with the same meaning; `created`
+says which happened.
+
+**The registry is not written from here.** The caller writes the member row, with the
+username this call returned — which keeps the registry single-writer and the step order
+fail-closed: the login exists before the row that keys on it.
+
+## POST /participants/{community}/{key}/password-reset
+
+Issue a one-time credential. The member is resolved through the registry, whose
+`Member.user_id` is the username.
+
+**Response (200):**
+
+```json
+{"user_id": "3f1c…", "username": "gl-00001", "temporary_password": "…"}
+```
+
+Temporary by construction: the participant must change it at next login, so what comes
+back is a handover and never their password.
+
+## POST /participants/{community}/{key}/disable
+
+Revoke access. The account, its memberships and everything keyed on its uuid survive —
+disabling is not deletion, and reversing it is one call.
+
+**Response (200):**
+
+```json
+{"user_id": "3f1c…", "username": "gl-00001", "changed": true}
+```
+
+`changed: false` means the revocation was already in force, which must not read as one
+that just happened.
+
+## POST /reconcile/{community}
+
+Provision every **active** member the registry holds for one community, then assert that
+each of them is in the REC's organization. Members that are not active are skipped and not
+disabled — skipping provisioning and revoking access are different acts.
+
+**Response (200):**
+
+```json
+{"community": "greenland", "members": 45, "created": 2, "existing": 43, "divergences": []}
+```
+
+**Response (500)** when the assertion finds anything: the same body, under `detail`, with
+the divergences listed. Everything checked is something this same call claimed to have
+done, so a finding is a provisioning call that reported success and had not succeeded. It
+fails loudly rather than repairing quietly — a `200` with a list nobody reads is how 10 of
+45 members ended up outside their own organization with nothing saying so.
+
+What calls this on a schedule is a deployment concern. The route is an entry point and
+nothing here is a scheduler.
+
+## Error responses
+
+| Code | Meaning |
+|---|---|
+| 401 | No bearer token, or it does not verify — renew the credential |
+| 403 | Verified, but the caller does not hold the scope — ask for a grant |
+| 404 | No such member, or no account for one |
+| 422 | The body is missing the address |
+| 500 | A reconcile ended with divergences |
+| 502 | Keycloak or the registry failed — a dependency, not this service refusing |

@@ -332,6 +332,21 @@ async def _async_sync(
         # `admin_permissions` block still has the grant taken away.
         await client.fetch_admin_permission_state(current, config.get_client_ids())
 
+        # And what each already holds realm-wide (ADR-0007). Read only for the
+        # clients that declare `realm_management_roles`, because there is
+        # nothing to converge for the rest: the grant is additive, so a client
+        # that declares none is not consulted and not changed.
+        declaring_realm_admin = config.clients_with_realm_management_roles()
+        if declaring_realm_admin:
+            typer.secho(
+                "  ! realm-wide administration is declared by: "
+                + ", ".join(c.client_id for c in declaring_realm_admin),
+                fg=typer.colors.YELLOW,
+            )
+            await client.fetch_realm_management_role_state(
+                current, {c.client_id for c in declaring_realm_admin}
+            )
+
         typer.echo(
             f"Found {len(current.scopes)} scopes, {len(current.clients)} clients"
         )

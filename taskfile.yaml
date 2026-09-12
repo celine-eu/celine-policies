@@ -57,6 +57,29 @@ tasks:
     cmds:
       - uv run celine-policies keycloak sync-users {{.REC_YAML}} --password "demo" --mock --group /viewers
 
+  keycloak:sync-users:registry:
+    deps: [keycloak:bootstrap]
+    desc: "Sync Keycloak users from the live rec-registry (every community)"
+    # The file-driven task above reconciles a snapshot, so it leaves out
+    # everybody onboarding has approved since the export. This one reads the
+    # registry. `celine-cli`'s secret is the clients.yaml placeholder in dev —
+    # which is exactly what ENV=dev at the top of this file allows.
+    vars:
+      REGISTRY_URL: '{{.CLI_ARGS | default "http://api.celine.localhost/rec-registry"}}'
+    cmds:
+      - uv run celine-policies keycloak sync-users --from-registry
+        --registry-url {{.REGISTRY_URL}} --registry-client-secret celine-cli
+        --password "demo" --mock --group /viewers
+
+  keycloak:sync-users:check:
+    desc: "Report members whose Keycloak state does not match the registry"
+    vars:
+      REGISTRY_URL: '{{.CLI_ARGS | default "http://api.celine.localhost/rec-registry"}}'
+    cmds:
+      - uv run celine-policies keycloak sync-users --from-registry
+        --registry-url {{.REGISTRY_URL}} --registry-client-secret celine-cli
+        --check
+
   keycloak:sync-orgs:
     deps: [keycloak:bootstrap]
     desc: "Sync Keycloak organizations from owners yaml"

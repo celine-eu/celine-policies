@@ -2,10 +2,16 @@
 
 Authentication, authorization, and identity management for the CELINE platform.
 
-This repository provides two services:
+This repository provides three services:
 
 1. **`mqtt_auth`** — A FastAPI HTTP backend for [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth) that validates JWTs and evaluates OPA (Rego) policies to control MQTT topic access.
-2. **`celine-policies` CLI** — A typer-based CLI that performs idempotent synchronization of OAuth scopes, service clients, users, and organizations into Keycloak.
+2. **`provisioning`** — A FastAPI service that is the **only writer of participant accounts** in the celine realm: it ensures an account, its REC organization and its org group, and it sweeps a community from the registry. It holds realm-wide Keycloak administration and therefore has **no public route** — see [ADR-0007](docs/decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
+3. **`celine-policies` CLI** — A typer-based CLI that performs idempotent synchronization of OAuth scopes, service clients, users, and organizations into Keycloak.
+
+The line between the CLI and the provisioning service is **who drives the state**, not how
+often it changes: clients, scopes, audience mappers and realm groups are driven by
+`clients.yaml` and belong to `keycloak sync`; REC organizations, org groups, participants
+and memberships are driven by the registry and belong to the service.
 
 It also ships a custom Keycloak Docker image with the `rec` login theme (see [`keycloak/README.md`](keycloak/README.md)).
 
@@ -47,6 +53,15 @@ celine-policies/
 │   │   ├── routes.py       # /user, /acl, /superuser endpoints
 │   │   ├── models.py       # Pydantic request/response models
 │   │   └── config.py       # MqttAuthSettings (pydantic-settings)
+│   ├── provisioning/       # The only writer of participant accounts
+│   │   ├── provisioner.py  # The Admin API sequence; no typer, no FastAPI
+│   │   ├── bundle.py       # Reading a REC bundle (file or registry: same parser)
+│   │   ├── registry.py     # GET /admin/export on the live rec-registry
+│   │   ├── service.py      # What each route does, with no FastAPI in it
+│   │   ├── routes.py       # PUT /participants, password-reset, disable, reconcile
+│   │   ├── api_models.py   # Wire models; the one place keycloak_id becomes user_id
+│   │   ├── config.py       # ProvisioningSettings
+│   │   └── main.py         # App factory (create_app)
 │   └── policies/cli/       # celine-policies CLI
 │       ├── main.py          # Typer entrypoint
 │       └── keycloak/        # Keycloak management commands

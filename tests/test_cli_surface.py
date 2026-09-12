@@ -139,6 +139,23 @@ class TestSyncUsersOptions:
         declaration does not own."""
         assert "--no-admin-groups" in help_text
 
+    def test_the_live_registry_can_be_selected(self, help_text: str):
+        """Reconciling a file leaves out everybody onboarded since it was taken."""
+        assert "--from-registry" in help_text
+        assert "--registry-url" in help_text
+
+    def test_the_registry_client_is_configurable(self, help_text: str):
+        """So a client holding `rec-registry.export` alone can replace the default."""
+        assert "--registry-client-id" in help_text
+        assert "--registry-client-sec" in help_text  # truncated in the help table
+
+    def test_a_run_can_be_narrowed_to_named_communities(self, help_text: str):
+        assert "--community" in help_text
+
+    def test_checking_without_reconciling_is_offered(self, help_text: str):
+        """Organization membership is not a health probe, so this is the probe."""
+        assert "--check" in help_text
+
 
 class TestSyncOrgsOptions:
     @pytest.fixture
