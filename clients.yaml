@@ -340,6 +340,20 @@ clients:
       # call anything with it grants nothing; a missing one blocks the cutover.
       # The audience mapper onto svc-provisioning is derived from this line.
       - provisioning.participants.write
+      # **The REC registry, which this service has always called and never been
+      # granted.** Approval registers the member (`members.write`), the dataspace
+      # step writes their DID onto that row with the same grant, and the POD
+      # export reads back what each consenting DID holds (`lookup`, which covers
+      # both lookup actions — see `../rec-registry`'s middleware).
+      #
+      # Measured on demo3, 2026-09-12, before this was added: every call answered
+      # **401**, not 403. Holding no `rec-registry.*` scope means no audience
+      # mapper onto `svc-rec-registry` is derived, so the registry refuses the
+      # token before it looks at a scope — and `ensure_member_did` never raises
+      # by design, so the symptom was a member who consents and contributes no
+      # supply points to any export.
+      - rec-registry.members.write
+      - rec-registry.lookup
 
   # The `onboarding-cli` review/enablement commands. Holds the superset because it
   # is the break-glass and e2e driver; a narrower client is what a scheduled job
@@ -446,6 +460,17 @@ clients:
     realm_management_roles:
       - manage-users
       - manage-realm
+      # **26.7 split the Organizations API out into its own roles, and this
+      # service reached it without them by accident.** `manage-realm` still
+      # carries it for a token that has no realm-management *roles claim* — and
+      # this client has none, because it declares scopes and therefore never got
+      # the `roles` client scope. A token that carries the claim is judged by it
+      # alone, and without this role `GET /organizations` answers `200 []`
+      # rather than `403`: the caller reads "no organizations" and acts on it.
+      # Measured on 26.7.3, 2026-09-12, on `celine-admin-cli`, which was in
+      # exactly that state. Declared here so this service's access rests on a
+      # grant instead of on which client scopes it happens to hold.
+      - manage-organizations
     default_scopes:
       # Own resources
       - provisioning.admin

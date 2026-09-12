@@ -111,6 +111,29 @@ machine the boundary is the machine. **In a real deployment it is unestablished*
 the thing to settle before this ships: see the store's
 `knowledge/the-provisioning-service-is-safe-only-because-it-is-unreachable.md`.
 
+**26.7 split the Organizations API into its own roles, and `manage-realm` alone reaches it
+only by accident — measured 2026-09-12 on 26.7.3.** realm-management gained
+`manage-organizations`, `view-organizations` and `query-organizations`. An admin token that
+carries a realm-management **roles claim** is judged against them; a token that carries none
+falls through to its service account's real roles. Three clients on one realm:
+
+| roles claim in token | service-account roles | `GET /organizations` |
+|---|---|---|
+| eight roles, no organization role | `manage-realm`, `manage-users` | **`200 []`** |
+| absent | `manage-realm`, `manage-users` | `200` + every organization |
+| absent | none | `403` |
+
+`svc-provisioning` was in the middle row — it declares scopes and so never received the
+`roles` client scope — so it saw organizations while `celine-admin-cli`, holding strictly
+more roles, saw none. **And the failure is `200 []`, not `403`**, including for
+`GET /organizations/{id}` on an organization that exists: `sync-users --check` reported every
+REC as missing against a realm holding all of them.
+
+So `manage-organizations` is declared here, and `REQUIRED_REALM_MGMT_ROLES` gained
+`view-organizations` and `manage-organizations` for `celine-admin-cli`. This does not widen
+what this ADR argued for — the Organizations API was always the point of `manage-realm` —
+it stops that access resting on which client scopes a client happens to hold.
+
 **Authorisation is still by scope.** `provisioning.participants.write` and
 `provisioning.reconcile`, like every other service. Ingress restriction is defence in
 depth, not the control: a caller inside the network still presents a token and still has to

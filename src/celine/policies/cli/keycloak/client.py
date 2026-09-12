@@ -183,7 +183,35 @@ class KeycloakAdminClient:
     """Async client for Keycloak Admin REST API."""
 
     # Roles required on realm-management for celine-admin-cli to operate.
-    # Covers: client/scope sync, user provisioning, group management.
+    # Covers: client/scope sync, user provisioning, group management, and — since
+    # Keycloak 26.7 — organizations.
+    #
+    # **`manage-realm` is not enough for the Organizations API here, and how it
+    # fails is the problem.** 26.7 added dedicated `*-organizations` roles to
+    # realm-management, and an admin token that *carries a realm-management roles
+    # claim* is judged against them. Without them the endpoints do not answer
+    # `403`: `GET /organizations` answers **`200 []`**, and
+    # `GET /organizations/{id}` answers `200 []` for an organization that exists.
+    # So every caller reads "this realm has no organizations" and acts on it —
+    # `sync-users --check` reported every REC as missing against a realm holding
+    # all of them, which is how this was found (demo3, 26.7.3, 2026-09-12).
+    #
+    # `svc-provisioning` holds `manage-users` + `manage-realm` and **does** see
+    # organizations, which is what makes this confusing. Measured, three clients
+    # on the same realm:
+    #
+    #   roles claim in token    service-account roles       GET /organizations
+    #   the ten below           manage-realm, manage-users  200 []
+    #   absent                  manage-realm, manage-users  200 + every org
+    #   absent                  none                        403
+    #
+    # A token with no roles claim falls through to the account's real roles; a
+    # token that has one is judged by it alone. `svc-provisioning` is in the
+    # middle row **because it declares scopes and so has no `roles` client
+    # scope** — an accident of its configuration rather than a decision, which is
+    # why `clients.yaml` now declares `manage-organizations` for it too instead
+    # of relying on it. Anything that gains the `roles` scope without the
+    # organization roles breaks the same silent way.
     REQUIRED_REALM_MGMT_ROLES = [
         "manage-clients",
         "manage-realm",
@@ -193,6 +221,11 @@ class KeycloakAdminClient:
         "view-users",
         "query-groups",
         "query-users",
+        # 26.7+. `view-organizations` is a composite and carries the query role;
+        # `manage-organizations` is not, and `sync-users` creates organizations,
+        # org roles and memberships — so both, rather than either.
+        "view-organizations",
+        "manage-organizations",
     ]
 
     # Well-known Keycloak built-in scopes to ignore during sync.

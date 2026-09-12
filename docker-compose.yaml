@@ -1,13 +1,6 @@
 networks:
   celine_security_net:
 
-volumes:
-  # Keycloak's dev-file H2 database. See the `keycloak` service's `volumes:` for
-  # why it is here rather than in the container layer, and note that
-  # `docker compose down -v` in this directory is the realm — clients, both
-  # organizations, and every participant account — not a cache.
-  keycloak-data:
-
 services:
   keycloak-sync:
     build:
@@ -216,6 +209,28 @@ services:
     networks:
       - celine_security_net
 
+  # Keycloak's database, created the way every other celine service creates its
+  # own — `../onboarding`'s `init-db` is the same nine lines. It is a `CREATE
+  # DATABASE` and nothing else: the schema is Keycloak's own to migrate, and it
+  # does that on every start.
+  keycloak-db:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGHOST: ${DB_HOST:-172.17.0.1}
+      PGPORT: ${DB_PORT:-15432}
+      PGUSER: ${DB_USER:-postgres}
+      PGPASSWORD: ${DB_PASSWORD:-securepassword123}
+    entrypoint: >
+      sh -c '
+        until pg_isready; do sleep 1; done
+        psql -tc "SELECT 1 FROM pg_database WHERE datname = '"'"'keycloak'"'"'" | grep -q 1 ||
+          psql -c "CREATE DATABASE keycloak"
+        echo "Database keycloak ready"
+      '
+    networks:
+      - celine_security_net
+
   keycloak:
     build:
       context: ./keycloak
@@ -223,13 +238,34 @@ services:
 
     command: start-dev --import-realm
     environment:
-      KC_DB: dev-file
-
-      # pgsql
-      # KC_DB: postgres
-      # KC_DB_URL: jdbc:postgresql://db:5432/keycloak
-      # KC_DB_USERNAME: keycloak
-      # KC_DB_PASSWORD: keycloak
+      # **The platform's Postgres, like every other celine service.**
+      #
+      # This was `KC_DB: dev-file` until 2026-09-12, with the Postgres block
+      # commented out beside it pointing at a `db:5432` service that does not
+      # exist in this file — written for a database that was never added. So the
+      # realm lived in H2, inside the container's writable layer, and Keycloak
+      # was the one service on this platform whose data was not in
+      # `../celine-pipelines`' `datasets-db`: `celine-community`,
+      # `celine-forecasting`, `celine-grid`, `celine-roi`, `flexibility-api` and
+      # `../onboarding` all keep theirs there.
+      #
+      # What that cost: the realm — clients, organizations, and every
+      # participant account with the password its owner chose — was discarded by
+      # `up -d --build keycloak`, which is exactly what applying a bump to
+      # `keycloak/version.txt` *is*. A named volume on `data/h2` fixed the
+      # symptom on 2026-09-12 and is gone again with this, because H2 dev-file
+      # is also not a supported upgrade path: the 26.6.0 → 26.7.3 migration ran
+      # on it that day and worked, on a path Keycloak does not support.
+      #
+      # `172.17.0.1:15432`, not a service name: `datasets-db` is in another
+      # compose project and nothing joins this network from one. That is the
+      # platform's own convention — `../../config/caddy/Caddyfile` reaches every
+      # service the same way, and the defaults below are the ones every other
+      # service's `db-create` job already uses.
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://${DB_HOST:-172.17.0.1}:${DB_PORT:-15432}/keycloak
+      KC_DB_USERNAME: ${DB_USER:-postgres}
+      KC_DB_PASSWORD: ${DB_PASSWORD:-securepassword123}
 
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
@@ -245,27 +281,16 @@ services:
       KC_PROXY: edge
       KC_PROXY_HEADERS: forwarded
     volumes:
-      # **The realm survives the container now.** `KC_DB: dev-file` writes H2 to
-      # `/opt/keycloak/data/h2`, and until 2026-09-12 that was the container's
-      # writable layer: every `up -d --build keycloak` — which is what applying a
-      # bump to `keycloak/version.txt` *is* — discarded the realm. The import
-      # below plus `keycloak sync` rebuild most of it, and that is why this was
-      # survivable for a long time.
-      #
-      # It stopped being survivable when the realm started holding things no seed
-      # can produce: participant accounts created by `../onboarding` through the
-      # provisioning service, in their community's organization, with the
-      # passwords those people chose. Testing how a new user lands is testing
-      # exactly the state a rebuild throws away. Downstream it is worse — a
-      # deployment's identity registry stores a Keycloak **user id** per member
-      # DID, so a rebuilt realm strands every one of those mappings on an id that
-      # no longer exists (46 of them on demo3, 2026-09-12).
-      #
-      # Only `h2`, not all of `/opt/keycloak/data`: `import/` and the themes are
-      # bind mounts from this repository and stay that way.
-      - keycloak-data:/opt/keycloak/data/h2
+      # **No volume for the database, because the database is not here.** A
+      # `keycloak-data:/opt/keycloak/data/h2` volume stood here for a few hours
+      # on 2026-09-12, between finding that a container rebuild discarded the
+      # realm and moving the realm to Postgres. Its durability now belongs to
+      # `celine-pipelines_postgres_data`, with every other service's.
       - ./config/keycloak/import:/opt/keycloak/data/import:ro
       - ./keycloak/themes/rec:/opt/keycloak/themes/rec:ro
+    depends_on:
+      keycloak-db:
+        condition: service_completed_successfully
     networks:
       - celine_security_net
     healthcheck:
