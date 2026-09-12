@@ -212,6 +212,39 @@ scopes:
 #   - Automatically add audience mappers on clients that reference foreign scopes
 #
 # Clients without scopes_prefix (mqtt, celine-cli) are exempt from audience mapping.
+#
+# -----------------------------------------------------------------------------
+# WHO ADMINISTERS THE REALM
+# -----------------------------------------------------------------------------
+# A scope says what a client may *ask for*. Administering the realm — making a
+# user, resetting a password, adding somebody to an organization — is a separate
+# thing, and it has exactly three holders. The list is short on purpose; adding a
+# fourth is a change somebody has to argue for, and two tests fail if one appears
+# without the argument.
+#
+#   celine-admin-cli    realm-wide, eight realm-management roles. The operator
+#                       credential `keycloak bootstrap` creates. NOT declared
+#                       below, deliberately: `sync` runs as it, so declaring it
+#                       would make the sync able to rewrite its own credential.
+#                       It is exempt from --prune for the same reason — see
+#                       DEFAULT_ADMIN_CLIENT_ID.
+#
+#   svc-provisioning    realm-wide, `manage-users` + `manage-realm`. The only
+#                       writer of participant accounts, and safe to hold that
+#                       only because it has no public route. ADR-0007.
+#
+# Nothing else here can touch a realm object — **`svc-onboarding` included**. It
+# held a fine-grained grant over `/participants` until svc-provisioning took the
+# job over; it now calls that service and holds no Keycloak right. Do not add one
+# back: a service facing the internet does not administer accounts.
+#
+# `celine-cli` below is a *sudo API* client despite the name: it holds every
+# service's `.admin` scope and no Keycloak right at all. The two are easy to
+# confuse and are not the same thing.
+#
+# No client declares `admin_permissions` any more. The mechanism stays — it is
+# how a group-scoped grant would be declared if one were ever right — but it is
+# inert, and `sync` plans nothing for a realm that declares none.
 # =============================================================================
 
 clients:
@@ -277,43 +310,36 @@ clients:
     name: REC Onboarding Console
     secret: ${SVC_ONBOARDING_SECRET:-svc-onboarding}
     scopes_prefix: onboarding
-    # Provisioning a participant's login is realm administration, and this is
-    # where it is declared rather than granted by hand. `manage-members` on one
-    # group is the whole grant: it covers creating a user *into* /participants,
-    # reading, updating, disabling and password-resetting a member, and reaches
-    # nothing outside the group. Realm-wide `manage-users` would have reached
-    # every operator account in the realm to do the same job.
+    # **This client administers nothing in the realm, and that is the point.**
     #
-    # See docs/decisions/ADR-0003 for why this rather than realm-management
-    # roles, and for what `../onboarding` must do to use it.
-    # The group name must not be one of the role-hierarchy names this tool also
-    # creates (admins, managers, editors, viewers — see ROLE_HIERARCHY). Those
-    # are operator roles, and onboarding's access.rego grants a *realm*-level
-    # one platform-wide with no organization check: `viewers` is the least
-    # privileged of them and still reads every REC's submissions and audit
-    # trail. `participants` appears in no capability table, which is the point.
-    admin_permissions:
-      groups:
-        - path: /participants
-          scopes:
-            # manage-members and manage-membership are a pair, and creating a
-            # participant needs both: one authorises making the user, the other
-            # authorises putting them in the group. Granted either one alone,
-            # Keycloak creates the permission happily and refuses every
-            # creation with a 403. Measured, not assumed — see the store's
-            # knowledge/fine-grained-admin-permissions.md.
-            - manage-members
-            - manage-membership
-            - view-members
-            # And `view`, without which the grant cannot resolve the group it
-            # administers: the three member scopes leave `group-by-path` and
-            # `GET /groups/{id}` both 403, and every member call is addressed by
-            # that id. Creating a participant works and finding one never does.
-            - view
+    # It used to hold a fine-grained grant over `/participants` — four admin
+    # scopes on one group (ADR-0003 through ADR-0005) — because it was the thing
+    # provisioning a participant's login, and it is the public onboarding front
+    # door. That grant was the narrowest Keycloak can express and it was still
+    # the wrong shape: a service facing the internet held admin rights over
+    # accounts, and it could not finish the job anyway, because organization
+    # membership is the Organizations API and no fine-grained permission
+    # expresses it.
+    #
+    # `svc-provisioning` has taken it over. Onboarding calls that service with
+    # `provisioning.participants.write` below and holds no Keycloak right at
+    # all — which is the outcome ADR-0007 was written for, and the reason the
+    # coarse grant over there is acceptable.
+    #
+    # **Do not add one back.** If something here needs a realm object changed,
+    # it belongs behind the provisioning service.
     default_scopes:
       # Own resources — REC operators get their capabilities from org group
       # membership, not from scopes, via the oauth2-proxy audience mapper.
       - onboarding.admin
+      # Dependencies — provisioning a participant's login, which this service
+      # will do by calling svc-provisioning instead of the Keycloak Admin API.
+      # Granted ahead of the switch on purpose: it is what makes that switch a
+      # code change in `../onboarding` rather than a realm change that has to
+      # land in the same breath. A scope held by a service that does not yet
+      # call anything with it grants nothing; a missing one blocks the cutover.
+      # The audience mapper onto svc-provisioning is derived from this line.
+      - provisioning.participants.write
 
   # The `onboarding-cli` review/enablement commands. Holds the superset because it
   # is the break-glass and e2e driver; a narrower client is what a scheduled job
@@ -397,8 +423,8 @@ clients:
   #   manage-users   realm-wide user search, edit and password reset — the calls
   #                  the group-scoped grant on svc-onboarding had to work around
   #                  (ADR-0003 through ADR-0005).
-  #   manage-realm   the Organizations API, which no fine-grained permission on
-  #                  26.6.0 can express at all.
+  #   manage-realm   the Organizations API, which no fine-grained permission
+  #                  expresses at all, on any version this platform has run.
   #
   # Not the `realm-admin` composite, which also carries client and
   # identity-provider administration this service never performs. `sync` does

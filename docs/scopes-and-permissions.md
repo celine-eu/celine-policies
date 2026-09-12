@@ -219,21 +219,28 @@ operator's browser token is rejected on audience validation before any policy ru
 
 ```yaml
 scopes_prefix: onboarding
-admin_permissions:
-  groups:
-    - path: /participants
-      scopes: [manage-members, manage-membership, view-members, view]
 default_scopes:
   - onboarding.admin
+  - provisioning.participants.write
 ```
+
+**It administers nothing in the realm, and that is the point.** It held a fine-grained
+grant over `/participants` for as long as it was the thing provisioning a participant's
+login — the narrowest grant Keycloak can express, and still the wrong shape: a service
+facing the internet with admin rights over accounts, which could not finish the job anyway
+because organization membership is the Organizations API. `svc-provisioning` took it over,
+and `provisioning.participants.write` above is how onboarding reaches it. The audience
+mapper onto `svc-provisioning` is derived from that one line.
+
+Do not add a grant back. If something here needs a realm object changed, it belongs behind
+the provisioning service.
 
 Not the same client as `svc-ds-onboarding`, which is the onboarding service's *outbound*
 identity for the dataspace. One service, two clients: this one validates inbound
 audiences, that one authenticates outbound M2M.
 
-It is also the only client that administers the realm — it provisions a participant's
-login — and the `admin_permissions` block is where that is declared rather than granted by
-hand. See [Realm administration](#realm-administration) below.
+See [Realm administration](#realm-administration) below for what that block is and who
+else holds one.
 
 ### svc-onboarding-cli
 
@@ -264,7 +271,7 @@ default_scopes:
 
 `manage-users` carries the realm-wide user search, edit and password reset that the
 group-scoped grant on `svc-onboarding` has to work around; `manage-realm` carries the
-Organizations API, which no fine-grained permission on 26.6.0 can express. Not the
+Organizations API, which no fine-grained permission expresses at all. Not the
 `realm-admin` composite, which also grants client and identity-provider administration
 this service never performs — `sync` does that, as a CLI, with an operator's credential.
 
@@ -393,6 +400,24 @@ separate mechanism, and there are two ways to declare it.
 The first is below. The second is one line, is deliberately hard to justify, and is
 described under [Realm-wide administration](#realm-wide-administration).
 
+### Who holds one
+
+Two, and the list is meant to stay short — a third entry is a change somebody has to argue
+for, and the test suite fails if one appears in `clients.yaml` without it.
+
+| Holder | Reach | Why |
+|---|---|---|
+| `celine-admin-cli` | realm-wide, eight `realm-management` roles | the operator credential `keycloak bootstrap` creates. **Not declared in `clients.yaml`**: `sync` runs as it, so declaring it would let a sync rewrite its own credential — and it is exempt from `--prune` for the same reason |
+| `svc-provisioning` | realm-wide, `manage-users` + `manage-realm` | the only writer of participant accounts, safe to hold that only because it has no public route |
+
+**No client declares `admin_permissions`.** `svc-onboarding` held one over `/participants`
+until `svc-provisioning` took the job over; the group-scoped mechanism below is documented
+and tested because it is the right shape if a grant is ever needed again, not because
+anything uses it.
+
+`celine-cli` is **not** an administrator despite the name — it is a sudo *API* client
+holding every service's `.admin` scope and no Keycloak right at all.
+
 ### Group-scoped administration
 
 Declared with `admin_permissions`:
@@ -476,7 +501,7 @@ account in the realm, and `manage-realm` includes the Organizations API. There i
 narrower way to reach organization membership — the fine-grained resource types are
 `Clients`, `Groups`, `Roles` and `Users`, with no Organizations among them, and the
 Organizations API answers `403` even with realm-wide `Users: view + manage` granted the
-fine-grained way.
+fine-grained way. Measured on 26.6.0 and re-run on the 26.7.3 this repository ships.
 
 **What makes it acceptable is the holder, not the grant.** A service with no public route
 can hold a coarse grant; the service that faces the public onboarding wizard could not,
@@ -508,12 +533,20 @@ before adding a second holder.
 `sync-users` reads the same block and adds every participant it processes to the groups it
 declares, so a grant over a group is a grant over the participants this tool creates. It
 applies to accounts that already exist as well as new ones, which makes a re-run the
-backfill for participants provisioned before the group was declared:
+backfill for participants provisioned before the group was declared.
 
-```console
-$ celine-policies keycloak sync-users greenland.yaml
-Admin groups: /participants (declared by svc-onboarding)
-```
+**Nothing declares one, so it files participants into no realm group.** `/participants` is
+not refilled, and **the group has been deleted** — an operator's deliberate act on
+2026-09-12, because it authorised nothing: it appeared in no capability table and no client
+was granted over it. `sync` will not recreate it; it only ever made the group because a
+client declared a grant over it, and none does.
+
+`sync` never deletes a group itself, and that has not changed — deleting one deletes
+everybody's membership of it quietly, which is not something a declaration-driven tool
+should do as a side effect of an edit. Deleting the group removed 45 inert memberships on
+the local dev realm and nothing else: the accounts, their `/viewers` membership and their
+REC organization membership — the one that carries the `organization` claim — are
+untouched.
 
 The group must already exist — `sync` creates it when it grants the permission, and
 `sync-users` fails before touching any user rather than creating realm structure of its

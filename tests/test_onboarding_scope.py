@@ -87,11 +87,20 @@ class TestOnboardingClients:
         assert onb.scopes_prefix == "onboarding"
         assert "onboarding.admin" in onb.default_scopes
 
-    def test_svc_onboarding_needs_no_audience_mappers(self):
-        """It references only its own scopes, so nothing is derived."""
+    def test_svc_onboarding_calls_exactly_one_other_service(self):
+        """It used to reference only its own scopes and derive no mapper at all.
+
+        It now holds `provisioning.participants.write`, granted ahead of the
+        cutover that makes it call `svc-provisioning` for a participant's login
+        instead of reaching Keycloak itself — so exactly one audience is derived,
+        and a second appearing here means somebody widened what the public
+        onboarding front door can call.
+        """
         config = _config()
         onb = next(c for c in config.clients if c.client_id == "svc-onboarding")
-        assert onb.desired_audiences(config.build_prefix_to_client_map()) == set()
+        assert onb.desired_audiences(config.build_prefix_to_client_map()) == {
+            "svc-provisioning"
+        }
 
     def test_user_tokens_will_carry_the_console_audience(self):
         """oauth2-proxy gets a mapper for every client with a scopes_prefix.

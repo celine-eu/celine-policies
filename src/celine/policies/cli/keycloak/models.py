@@ -119,8 +119,9 @@ class ScopeConfig(BaseModel):
     )
 
 
-#: The scopes Keycloak's `Groups` admin resource type defines, read off a 26.6.0
-#: realm rather than transcribed from the documentation. A declaration naming
+#: The scopes Keycloak's `Groups` admin resource type defines, read off a live
+#: realm rather than transcribed from the documentation (26.6.0 at the time;
+#: unchanged on 26.7.3). A declaration naming
 #: anything else is refused at load time: Keycloak accepts an unknown scope name
 #: on the permission and simply grants nothing, so the realm would come back
 #: looking configured and refusing every call.
@@ -294,9 +295,9 @@ class ClientConfig(BaseModel):
     # refusal was right about the reach and wrong about nothing else: every role
     # here is realm-wide, `manage-users` reaches every account in the realm, and
     # `manage-realm` carries the Organizations API, which no fine-grained
-    # permission on 26.6.0 can express. What changed is not the reach but the
-    # holder — a service with no public route can hold a coarse grant, and the
-    # public front door never could.
+    # permission expresses on any version this platform has run. What changed is
+    # not the reach but the holder — a service with no public route can hold a
+    # coarse grant, and the public front door never could.
     #
     # Also not a grant key. `sync` warns on every client that declares it, and a
     # role Keycloak does not have stops the sync before it writes anything.

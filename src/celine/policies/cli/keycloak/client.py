@@ -1234,9 +1234,9 @@ class KeycloakAdminClient:
     # -------------------------------------------------------------------------
     #
     # Keycloak 26.2 replaced the deprecated fine-grained admin authz with a
-    # second version, and on 26.6 — the version keycloak/version.txt pins —
-    # ADMIN_FINE_GRAINED_AUTHZ_V2 is a DEFAULT feature and enabled, not a
-    # preview. The realm flag creates an `admin-permissions` client whose
+    # second version. ADMIN_FINE_GRAINED_AUTHZ_V2 is a DEFAULT feature and
+    # enabled rather than a preview — measured on 26.6.0 when this was written,
+    # and still true on the 26.7.3 that `keycloak/version.txt` now pins. The realm flag creates an `admin-permissions` client whose
     # authorization services hold the whole model:
     #
     #   resource types   Clients, Groups, Roles, Users

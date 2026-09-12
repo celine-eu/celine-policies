@@ -233,3 +233,57 @@ def test_the_provisioning_service_cannot_write_to_the_registry():
         s for s in client.default_scopes if s.startswith("rec-registry.")
     ]
     assert registry_scopes == ["rec-registry.export"]
+
+
+# --- the posture as a whole ----------------------------------------------
+
+
+def test_the_declaration_holds_exactly_one_realm_administrator():
+    """Two hold Keycloak administration and only one is declarable here —
+    `celine-admin-cli` is created by `bootstrap` and deliberately absent, because
+    `sync` runs as it.
+
+    `svc-onboarding`'s group-scoped grant over `/participants` is **gone**:
+    svc-provisioning took the job over, so the public onboarding front door holds
+    no Keycloak right at all.
+
+    The count is the review surface. A second holder is a change somebody has to
+    argue for, and this is what makes it fail rather than pass unnoticed."""
+    config = KeycloakConfig.from_yaml(Path("clients.yaml"))
+
+    group_scoped = [c.client_id for c in config.clients_with_admin_permissions()]
+    realm_wide = [c.client_id for c in config.clients_with_realm_management_roles()]
+
+    assert group_scoped == []
+    assert realm_wide == ["svc-provisioning"]
+
+
+def test_the_admin_cli_client_is_never_an_orphan():
+    """`sync` authenticates as `celine-admin-cli` and `clients.yaml` does not
+    declare it, which is exactly the shape of an orphan. Pruning it deletes the
+    credential the pruning run is using."""
+    from celine.policies.cli.keycloak.client import CurrentState
+    from celine.policies.cli.keycloak.settings import DEFAULT_ADMIN_CLIENT_ID
+
+    config = KeycloakConfig.from_yaml(Path("clients.yaml"))
+    current = CurrentState()
+    for client_id in [DEFAULT_ADMIN_CLIENT_ID, "something-nobody-declared"]:
+        current.clients[client_id] = {"id": f"uuid-{client_id}", "clientId": client_id}
+
+    plan = compute_sync_plan(config, current)
+
+    assert DEFAULT_ADMIN_CLIENT_ID not in plan.orphan_clients
+    assert "something-nobody-declared" in plan.orphan_clients
+
+
+def test_onboarding_can_call_the_provisioning_service_before_it_does():
+    """The scope is granted ahead of the cutover so that switch is a code change
+    in `../onboarding` rather than a realm change in the same breath. The
+    audience mapper onto svc-provisioning is derived from it."""
+    config = KeycloakConfig.from_yaml(Path("clients.yaml"))
+    onboarding = next(c for c in config.clients if c.client_id == "svc-onboarding")
+
+    assert "provisioning.participants.write" in onboarding.default_scopes
+    assert "svc-provisioning" in onboarding.desired_audiences(
+        config.build_prefix_to_client_map()
+    )

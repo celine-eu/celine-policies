@@ -1,7 +1,14 @@
 # ADR-0005 — `sync-users` files participants in the group the declaration administers
 
 **Date:** 2026-09-10
-**Status:** accepted
+**Status:** superseded by
+[ADR-0007](ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
+
+`sync-users` still reads `admin_permissions` and still files participants into every group
+it names — the behaviour is untouched. Nothing declares one any more, so it files them
+into none, and `/participants` stops being refilled. The group is left in the realm with
+its existing members; it authorises nothing, and removing it is an operator's deliberate
+act with no deadline.
 
 ## Context
 

@@ -40,8 +40,8 @@ edited to say something else.
 |---|---|
 | [ADR-0001](ADR-0001-merge-in-the-loader.md) | A realm declared by several files is merged in the loader, not pre-merged into a file |
 | [ADR-0002](ADR-0002-undefined-scope-grants-are-fatal.md) | A grant naming a scope no file declares stops the sync before it starts |
-| [ADR-0003](ADR-0003-declare-realm-administration-as-a-group-scoped-permission.md) | A service account's realm administration is declared, and scoped to one group |
+| [ADR-0003](ADR-0003-declare-realm-administration-as-a-group-scoped-permission.md) | A service account's realm administration is declared, and scoped to one group — *superseded by ADR-0007* |
 | [ADR-0004](ADR-0004-a-group-grant-carries-view-and-belongs-to-one-client.md) | A group grant carries `view`, and a group belongs to one client |
-| [ADR-0005](ADR-0005-sync-users-files-participants-in-the-administered-group.md) | `sync-users` files participants in the group the declaration administers |
+| [ADR-0005](ADR-0005-sync-users-files-participants-in-the-administered-group.md) | `sync-users` files participants in the group the declaration administers — *superseded by ADR-0007* |
 | [ADR-0006](ADR-0006-the-registry-is-the-source-of-members.md) | The REC registry is the source of members, and a YAML file is a seed |
 | [ADR-0007](ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md) | Realm-wide administration is declarable, for a holder with no public route |

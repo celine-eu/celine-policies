@@ -19,7 +19,10 @@ from celine.policies.cli.keycloak.client import (
     KeycloakError,
 )
 from celine.policies.cli.keycloak.secrets_file import merge_secrets_file
-from celine.policies.cli.keycloak.settings import KeycloakSettings
+from celine.policies.cli.keycloak.settings import (
+    DEFAULT_ADMIN_CLIENT_ID,
+    KeycloakSettings,
+)
 from celine.policies.cli.keycloak.commands._utils import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -48,7 +51,7 @@ def bootstrap(
     client_id: Annotated[
         str,
         typer.Option("--client-id", help="Client ID for the admin CLI client"),
-    ] = "celine-admin-cli",
+    ] = DEFAULT_ADMIN_CLIENT_ID,
     secrets_file: Annotated[
         Optional[Path],
         typer.Option("--secrets-file", "-s", help="Secrets file path"),

@@ -33,9 +33,10 @@ machinery that exists for no other reason:
   [ADR-0004](ADR-0004-a-group-grant-carries-view-and-belongs-to-one-client.md).
 
 And it still cannot do the job. Organization membership is the Organizations API, which
-stays `403` on 26.6.0 even with realm-wide `Users: view + manage` granted the fine-grained
-way; the fine-grained resource types are exactly `Clients`, `Groups`, `Roles` and `Users`,
-with no Organizations among them. So participant provisioning was split between two
+stays `403` even with realm-wide `Users: view + manage` granted the fine-grained way; the
+fine-grained resource types are exactly `Clients`, `Groups`, `Roles` and `Users`, with no
+Organizations among them. Measured on 26.6.0 when ADR-0003 was written and unchanged on
+the 26.7.3 `keycloak/version.txt` now pins. So participant provisioning was split between two
 repositories that each held part of the right to do it — `sync-users` setting organization
 membership, `../onboarding` setting the group — and on 2026-09-11, **10 of 45**
 `/participants` members on demo3 had no `organization` claim as a result.
@@ -101,14 +102,38 @@ absence.** A second client declaring this field is a change somebody has to argu
 test suite pins that `clients.yaml` has exactly one holder and that it does not hold
 `realm-admin`, so widening the reach fails a test rather than passing unnoticed.
 
-**`svc-onboarding` keeps its group-scoped grant until it stops needing it.** The order is
-not negotiable: the service runs and its grant is verified, *then* `../onboarding` switches
-to the API, and only then does the `admin_permissions` block leave `clients.yaml` and
-`sync-users` stop filling `/participants`. Reversing the last two leaves a deployed
-onboarding with no way to provision anybody. ADR-0003's decision stands until that lands,
-and the group it created is left in the realm afterwards — it authorises nothing, so
-removing it is cleanup without a deadline.
+**`svc-onboarding`'s group-scoped grant is withdrawn, and with it everything that existed
+to make it survivable.** ADR-0003 through ADR-0005 are superseded in substance, not only in
+their refusal of this field: no client declares `admin_permissions`, `sync-users` files
+participants into no realm group, and `../onboarding` holds no Keycloak right at all — it
+calls this service with `provisioning.participants.write`. The mechanism stays in the code
+and in the tests, because a group-scoped grant is still the right shape if one is ever
+needed again; nothing needs one now.
 
-**It removes the dependency on 26.7.** `manage-realm` carries the Organizations API on
-26.6.0, so organization membership stops being blocked on the upgrade. The upgrade remains
-wanted for its own reasons.
+**Withdrawing it is not free, and the cost is a deploy window.** `sync` converges admin
+permissions without `--prune`, so the next sync revokes the permission — and an onboarding
+still calling the Admin API then fails every approval with a `403`, surfacing to a REC
+operator as "Login identity could not be provisioned". The realm change and
+`../onboarding`'s cutover therefore have to land together. That was a deliberate decision
+taken with that cost understood, rather than the staged order this ADR was first drafted
+with.
+
+**The `/participants` group is left in the realm.** `sync` never deletes a group it made —
+deleting one deletes everybody's membership of it quietly — so the group survives with its
+members and authorises nothing at all: it appears in no capability table and no client is
+granted over it. Removing it is an operator's deliberate act, and there is no deadline on
+it.
+
+**The grant was verified before this was accepted, and the negative control is half of
+it.** On a throwaway realm with `manage-users` + `manage-realm` and nothing else, every
+call the provisioning package makes succeeds: the realm write that enables organizations,
+the organization with its org roles and org groups, creating a user and placing it in both,
+the two realm-wide searches ADR-0003's grant forbids, password reset, disable and
+re-enable, and both ensures re-run idempotently. **`list_clients` is refused**, which is
+what makes this measurably not `realm-admin`. Run on 26.6.0 and on 26.7.3 with identical
+results; the details are in the store's work directory for this plan.
+
+**It removed the dependency on the 26.7 upgrade, which has since landed anyway.**
+`manage-realm` carried the Organizations API on 26.6.0 too, so this decision never needed
+the upgrade to be true — it was taken while 26.6.0 was still the pinned version. That is
+now history rather than a live consideration: the platform runs 26.7.3 and 26.6.x is gone.

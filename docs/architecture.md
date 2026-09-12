@@ -28,8 +28,8 @@ It is stateless — a retry is another `PUT`, and idempotency comes from the key
 authorises by `provisioning.*` scopes like every other service.
 
 **It holds realm-wide Keycloak administration** (`manage-users` + `manage-realm`), which is
-what makes organization membership possible at all: no fine-grained permission on 26.6.0
-can express the Organizations API. The grant is acceptable only because **nothing outside
+what makes organization membership possible at all: no fine-grained permission expresses
+the Organizations API. The grant is acceptable only because **nothing outside
 the network can reach the service**, and that is a property of the ingress configuration
 rather than of any code here. See
 [ADR-0007](decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).

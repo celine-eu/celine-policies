@@ -1,9 +1,14 @@
 # ADR-0003 — A service account's realm administration is declared, and scoped to one group
 
 **Date:** 2026-09-10
-**Status:** accepted — the refusal of a `realm_management_roles` field is superseded by
+**Status:** superseded by
 [ADR-0007](ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
-Everything else here stands.
+
+The grant this record describes no longer exists: `svc-onboarding` administers nothing, and
+`svc-provisioning` writes participant accounts instead. What stands is everything measured
+here about **how** a group-scoped grant behaves — the mechanism is unchanged and still the
+right shape if one is ever needed again. What is superseded is the conclusion that the
+onboarding console should hold one, and the refusal of a `realm_management_roles` field.
 
 ## Context
 

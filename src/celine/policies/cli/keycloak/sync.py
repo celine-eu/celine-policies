@@ -44,6 +44,7 @@ from celine.policies.cli.keycloak.models import (
     ScopeConfig,
 )
 from celine.policies.cli.keycloak.secrets_file import merge_secrets_file
+from celine.policies.cli.keycloak.settings import DEFAULT_ADMIN_CLIENT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -542,11 +543,23 @@ def compute_sync_plan(
                 )
             )
 
-    # Find orphan clients
+    # Find orphan clients.
+    #
+    # The admin CLI client is exempt and must stay exempt: `sync` authenticates
+    # as it, `clients.yaml` deliberately does not declare it, and the two
+    # together make it look exactly like an orphan. Pruning it deletes the
+    # credential the pruning run is using. Named rather than spelled out, so the
+    # exemption is greppable from the constant and not only from this loop —
+    # the clients Keycloak owns are exempted through
+    # `UNMANAGED_KEYCLOAK_CLIENT_IDS` for the same reason.
+    #
+    # A bootstrap run given `--client-id` something else is **not** protected by
+    # this. That is a real hole and a deliberate one to leave: guessing which
+    # client is "the admin one" from a flag nobody recorded would be worse.
     for client_id in current_client_ids:
         if client_id not in desired_client_ids:
             if managed_prefix is None or client_id.startswith(managed_prefix):
-                if client_id != "celine-admin-cli":
+                if client_id != DEFAULT_ADMIN_CLIENT_ID:
                     plan.orphan_clients.append(client_id)
 
     # -------------------------------------------------------------------------

@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 # Default secrets file path
 DEFAULT_SECRETS_FILE = Path(".client.secrets.yaml")
+#: The client `bootstrap` creates for the operator CLI. It holds
+#: `REQUIRED_REALM_MGMT_ROLES` — realm-wide client, realm and user administration
+#: — and it is **not declared in `clients.yaml`**, because `sync` runs *as* it.
+#: That combination is why it needs naming rather than repeating: a client the
+#: declaration does not mention is an orphan, and pruning this one deletes the
+#: credential the pruning run is authenticated with.
 DEFAULT_ADMIN_CLIENT_ID = "celine-admin-cli"
 
 # Values of ENV that mean "the clients.yaml fallbacks are what I want".

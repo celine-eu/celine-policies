@@ -671,12 +671,13 @@ class TestTheGroupsParticipantsAreFiledIn:
             "/participants",
         ]
 
-    def test_the_real_declaration_names_the_participants_group(self):
+    def test_the_real_declaration_names_no_group_at_all(self):
+        """`sync-users` reads this to decide which realm groups to file every
+        participant into. Empty means it files them into none, which is what
+        stops `/participants` being refilled now that nothing administers it."""
         config = KeycloakConfig.from_yaml(Path("clients.yaml"))
 
-        assert config.admin_permission_group_paths() == {
-            "/participants": ["svc-onboarding"]
-        }
+        assert config.admin_permission_group_paths() == {}
 
 
 class TestTheRealmsOwnClientIsNotAnOrphan:
@@ -707,29 +708,44 @@ class TestTheRealmsOwnClientIsNotAnOrphan:
 
 
 class TestTheRealDeclaration:
-    def test_svc_onboarding_may_administer_participants_and_nothing_else(self):
+    """Nothing ships a group-scoped grant any more, and that is the assertion.
+
+    `svc-onboarding` held one over `/participants` for as long as it was the
+    thing provisioning a participant's login. `svc-provisioning` took that over
+    (ADR-0007), so the public onboarding front door now holds no Keycloak right
+    at all — it calls a service instead.
+
+    The mechanism below it is untouched and still tested: a group-scoped grant
+    is the right shape if one is ever needed again. What is pinned here is that
+    none is needed now.
+    """
+
+    def test_no_client_administers_a_group(self):
         config = KeycloakConfig.from_yaml(Path("clients.yaml"))
-        declaring = config.clients_with_admin_permissions()
 
-        assert [c.client_id for c in declaring] == ["svc-onboarding"]
+        assert config.clients_with_admin_permissions() == []
 
-        grants = declaring[0].admin_permissions.groups
-        assert [g.path for g in grants] == ["/participants"]
-
-    def test_it_carries_the_pair_creation_needs(self):
+    def test_svc_onboarding_holds_no_keycloak_right(self):
+        """It faces the internet. It calls the provisioning service instead."""
         config = KeycloakConfig.from_yaml(Path("clients.yaml"))
-        scopes = set(
-            config.clients_with_admin_permissions()[0].admin_permissions.groups[0].scopes
+        onboarding = next(
+            c for c in config.clients if c.client_id == "svc-onboarding"
         )
-        assert {"manage-members", "manage-membership"} <= scopes
 
-    def test_it_carries_view_so_the_grant_can_find_its_group(self):
-        """Without it the service creates participants and finds none of them."""
+        assert onboarding.admin_permissions is None
+        assert onboarding.realm_management_roles == []
+        assert "provisioning.participants.write" in onboarding.default_scopes
+
+    def test_a_realm_declaring_none_plans_nothing_and_asks_keycloak_nothing(self):
+        """No request is made and no action planned, so dropping the grant costs
+        a realm that never used the feature exactly nothing."""
         config = KeycloakConfig.from_yaml(Path("clients.yaml"))
-        scopes = set(
-            config.clients_with_admin_permissions()[0].admin_permissions.groups[0].scopes
-        )
-        assert "view" in scopes
+
+        plan = compute_sync_plan(config, CurrentState())
+
+        assert plan.enable_admin_permissions is False
+        assert plan.admin_permissions_to_add == []
+        assert plan.admin_permissions_to_update == []
 
     def test_the_shipped_declaration_warns_about_no_half_grant(self, caplog):
         """Neither half-grant. The unrelated `oauth2_proxy` audience warning is
