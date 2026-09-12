@@ -430,11 +430,15 @@ clients:
   # identity-provider administration this service never performs. `sync` does
   # that, as a CLI, with an operator's credential.
   #
-  # **What makes it safe is that nothing outside the network can reach it, and
-  # this file cannot enforce that.** A route added to this service by accident
-  # converts manage-realm into an internet-facing credential. The guard lives
-  # with the ingress configuration in `../celine-dev`; if you are adding a
-  # route to this service, that is the thing to read first.
+  # **What makes it safe is that nothing outside the deployment can reach it,
+  # and this file cannot enforce that.** Since 2026-09-12 it has exactly one
+  # route — `provisioning.internal.celine.localhost`, a host of its own, never a
+  # path under the public `api.celine.localhost` — because `expose` alone was
+  # unreachable by every caller this platform actually has, `../onboarding`
+  # included. A second route, or that hostname on a public zone, converts
+  # manage-realm into an internet-facing credential. The guard lives with the
+  # ingress configuration in `../celine-dev`; if you are adding a route to this
+  # service, that block is the thing to read first.
   - client_id: svc-provisioning
     name: Participant Provisioning Service
     secret: ${SVC_PROVISIONING_SECRET:-svc-provisioning}

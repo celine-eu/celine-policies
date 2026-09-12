@@ -92,6 +92,25 @@ converts `manage-realm` into an internet-facing credential.** The guard belongs 
 ingress configuration in `../celine-dev`, where somebody adding a route will read it, and
 `clients.yaml` says so at the declaration.
 
+**And "no route" was the wrong shape of that guard — amended 2026-09-12, the same day.**
+`docker-compose.yaml` published no port and `../celine-dev`'s Caddyfile carried a
+DO-NOT-ADD-A-ROUTE block, on the reasoning that callers reach this service by container
+name on `celine_security_net`. **No caller can.** Nothing joins that network from another
+compose project, so `http://provisioning:8010` resolved from nowhere: `../onboarding` runs
+in a project and a network of its own, and on a developer's machine as often from source on
+the host with no Docker network at all. Measured on the demo3 deployment — neither half of
+onboarding could resolve the name, so the login step this ADR exists to enable could not be
+exercised anywhere.
+
+So the port is published and there is one route, `provisioning.internal.celine.localhost`,
+a **host of its own** rather than a path under the public `api.celine.localhost`. The
+property this ADR rests on is unchanged and is still not enforceable from this repository —
+**nothing outside the deployment may reach this service** — but it is now one hostname and
+one published port to keep off a public zone rather than an absence to preserve. On a dev
+machine the boundary is the machine. **In a real deployment it is unestablished**, and it is
+the thing to settle before this ships: see the store's
+`knowledge/the-provisioning-service-is-safe-only-because-it-is-unreachable.md`.
+
 **Authorisation is still by scope.** `provisioning.participants.write` and
 `provisioning.reconcile`, like every other service. Ingress restriction is defence in
 depth, not the control: a caller inside the network still presents a token and still has to

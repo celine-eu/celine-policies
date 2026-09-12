@@ -1,6 +1,13 @@
 networks:
   celine_security_net:
 
+volumes:
+  # Keycloak's dev-file H2 database. See the `keycloak` service's `volumes:` for
+  # why it is here rather than in the container layer, and note that
+  # `docker compose down -v` in this directory is the realm — clients, both
+  # organizations, and every participant account — not a cache.
+  keycloak-data:
+
 services:
   keycloak-sync:
     build:
@@ -113,18 +120,50 @@ services:
       - CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET=svc-provisioning
       - CELINE_PROVISIONING_REGISTRY_CLIENT_ID=svc-provisioning
       - CELINE_PROVISIONING_REGISTRY_CLIENT_SECRET=svc-provisioning
-      # Left unset: `POST /reconcile/{community}` and the lifecycle calls refuse
-      # with a message naming the variable rather than the process failing to
-      # start. The upsert needs no registry, and a local stack that only
-      # onboards should not be held up by a reconcile it never calls.
-      # - CELINE_PROVISIONING_REGISTRY_URL=http://rec-registry:8000
-    # Deliberately **not** published to the host. The whole security argument
-    # for a service holding manage-users and manage-realm is that nothing
-    # outside the network reaches it — see ADR-0007. Adding a `ports:` entry
-    # here, or a route to it in the ingress, converts that credential into an
-    # internet-facing one.
-    expose:
-      - "8010"
+      # **The registry, and it is not optional for as much as it looks.**
+      #
+      # `POST /reconcile/{community}` needs it — and so do `password-reset` and
+      # `disable`, which resolve `(community, key)` through the export. So a
+      # stack that "only onboards" still needs it the first time a REC operator
+      # disables somebody: measured on the demo3 deployment 2026-09-12, where
+      # `disable` answered `502 No registry configured` while the upsert worked.
+      # Unset is still a clear refusal naming this variable rather than a
+      # failure to start, which is why it stays overridable and empty-able.
+      #
+      # `172.17.0.1:8004` is where `../rec-registry` answers on a celine-dev
+      # machine, whichever half of it is running — the platform's own convention
+      # (`../../config/caddy/Caddyfile` reaches every service as `host-gw:<port>`
+      # for the same reason). **Not `http://rec-registry:8000`**, which was the
+      # commented suggestion here and resolves from nowhere: that service is in
+      # its own compose project and nothing joins this network from another one.
+      - CELINE_PROVISIONING_REGISTRY_URL=${CELINE_PROVISIONING_REGISTRY_URL:-http://172.17.0.1:8004}
+    # **Published, and the security argument moved rather than went away.**
+    #
+    # `expose` alone made this unreachable by anything outside *this compose
+    # project*, which is not the boundary ADR-0007 argues from. Nothing joins
+    # `celine_security_net` from another project, so `http://provisioning:8010`
+    # resolved from no caller this platform actually has: `../onboarding` runs
+    # in a project and a network of its own, and on a developer's machine it as
+    # often runs from source on the host with no Docker network at all.
+    # Measured on the demo3 deployment, 2026-09-12 — **neither half of
+    # onboarding could resolve the name**, so the login step could not be
+    # exercised anywhere.
+    #
+    # So the port is published, and the route added in
+    # `../../config/caddy/Caddyfile` is a **host of its own** —
+    # `provisioning.internal.celine.localhost`, never a path under the public
+    # `api.celine.localhost`. What ADR-0007 rests on is unchanged and is still
+    # not enforceable from this file: **nothing outside the deployment may
+    # reach this service.** On a dev machine that boundary is the machine; in a
+    # real deployment it is whatever keeps that hostname and this port off the
+    # internet, and it is the thing to establish before this ships anywhere.
+    #
+    # Authorisation is by scope either way — a caller presents a token carrying
+    # `provisioning.*` or gets a 403. That was always defence in depth rather
+    # than the control, and locally it is now what the reach of this port rests
+    # on.
+    ports:
+      - "8010:8010"
     healthcheck:
       test:
         [
@@ -206,6 +245,25 @@ services:
       KC_PROXY: edge
       KC_PROXY_HEADERS: forwarded
     volumes:
+      # **The realm survives the container now.** `KC_DB: dev-file` writes H2 to
+      # `/opt/keycloak/data/h2`, and until 2026-09-12 that was the container's
+      # writable layer: every `up -d --build keycloak` — which is what applying a
+      # bump to `keycloak/version.txt` *is* — discarded the realm. The import
+      # below plus `keycloak sync` rebuild most of it, and that is why this was
+      # survivable for a long time.
+      #
+      # It stopped being survivable when the realm started holding things no seed
+      # can produce: participant accounts created by `../onboarding` through the
+      # provisioning service, in their community's organization, with the
+      # passwords those people chose. Testing how a new user lands is testing
+      # exactly the state a rebuild throws away. Downstream it is worse — a
+      # deployment's identity registry stores a Keycloak **user id** per member
+      # DID, so a rebuilt realm strands every one of those mappings on an id that
+      # no longer exists (46 of them on demo3, 2026-09-12).
+      #
+      # Only `h2`, not all of `/opt/keycloak/data`: `import/` and the themes are
+      # bind mounts from this repository and stay that way.
+      - keycloak-data:/opt/keycloak/data/h2
       - ./config/keycloak/import:/opt/keycloak/data/import:ro
       - ./keycloak/themes/rec:/opt/keycloak/themes/rec:ro
     networks:
