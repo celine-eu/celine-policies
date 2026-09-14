@@ -93,8 +93,9 @@ class ProvisioningSettings(BaseSettings):
         default=300,
         ge=0,
         description=(
-            "Seconds during which POST .../invitation refuses a second send to the "
-            "same account. In memory, per replica: a double-click guard."
+            "Seconds after a successful send during which any further send to the "
+            "same account is refused, by the route (429) or the upsert (cooldown). "
+            "A failed send starts none. In memory, per replica: a double-click guard."
         ),
     )
     email_mode: EmailMode = Field(

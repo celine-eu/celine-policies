@@ -23,13 +23,20 @@ from celine.provisioning.config import ProvisioningSettings
 from celine.provisioning.routes import get_service, get_settings, router
 from celine.provisioning.service import (
     AccountDisabled,
+    AccountNotFound,
+    CommunityNotFound,
     DisableResult,
     Divergence,
+    HasPassword,
     InvitationCooldown,
     InvitationResult,
     MemberNotFound,
+    NoEmail,
+    NoPassword,
     ProvisioningError,
     ReconcileResult,
+    RegistryUnavailable,
+    SendFailed,
     UpsertResult,
 )
 
@@ -64,8 +71,8 @@ class FakeService:
             invitation=self.invitation if invite else "not_requested",
         )
 
-    async def send_invitation(self, *, community, key):
-        self.calls.append(("send_invitation", community, key))
+    async def send_invitation(self, *, community, key, intent):
+        self.calls.append(("send_invitation", community, key, intent))
         if self.raises:
             raise self.raises
         return InvitationResult(
@@ -121,6 +128,8 @@ RECONCILE = ("provisioning.reconcile",)
 ADMIN = ("provisioning.admin",)
 
 BODY = {"email": "a.person@example.org"}
+INVITE = {"intent": "invitation"}
+RESET = {"intent": "password_reset"}
 
 
 # --- authentication and authorisation ------------------------------------
@@ -132,6 +141,7 @@ def test_no_token_is_refused(app_with):
     response = client.put("/participants/greenland/gl-00001", json=BODY)
 
     assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "missing_token"
     assert service.calls == []
 
 
@@ -143,6 +153,7 @@ def test_a_token_that_does_not_verify_is_refused(app_with):
     )
 
     assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "invalid_token"
     assert service.calls == []
 
 
@@ -156,7 +167,8 @@ def test_a_valid_token_without_the_scope_is_forbidden(app_with):
     )
 
     assert response.status_code == 403
-    assert "provisioning.participants.write" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "insufficient_scope"
+    assert "provisioning.participants.write" in response.json()["detail"]["message"]
     assert service.calls == []
 
 
@@ -197,8 +209,9 @@ def test_provisioning_admin_satisfies_every_route(app_with, method, path):
     worse than one that repeats it."""
     client, _ = app_with(scopes=ADMIN)
 
+    body = BODY if method == "put" else INVITE if path.endswith("/invitation") else None
     response = getattr(client, method)(
-        path, json=BODY if method == "put" else None, headers={"Authorization": "Bearer x"}
+        path, json=body, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 200
@@ -281,7 +294,15 @@ def test_a_locale_the_themes_do_not_carry_is_refused_with_422(app_with, locale):
 
 
 @pytest.mark.parametrize(
-    "invitation", ["has_password", "not_on_dev_list", "account_disabled"]
+    "invitation",
+    [
+        "has_password",
+        "no_email",
+        "not_on_dev_list",
+        "account_disabled",
+        "cooldown",
+        "send_failed",
+    ],
 )
 def test_an_invitation_that_was_not_sent_is_still_a_200_with_the_reason(
     app_with, invitation
@@ -299,6 +320,22 @@ def test_an_invitation_that_was_not_sent_is_still_a_200_with_the_reason(
     assert response.status_code == 200
     assert response.json()["invitation"] == invitation
     assert response.json()["invited"] is False
+
+
+def test_a_keycloak_failure_on_the_upsert_is_502_with_its_code(app_with):
+    """The account step itself failing, as opposed to its email."""
+    client, _ = app_with(
+        scopes=WRITE, service=FakeService(raises=ProvisioningError("account vanished"))
+    )
+
+    response = client.put(
+        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": {"code": "provisioning_failed", "message": "account vanished"}
+    }
 
 
 def test_the_upsert_is_always_200_so_a_retry_looks_like_the_same_call(app_with):
@@ -319,6 +356,7 @@ def test_an_invitation_reports_what_was_emailed_and_carries_no_credential(app_wi
 
     response = client.post(
         "/participants/greenland/gl-00001/invitation",
+        json=INVITE,
         headers={"Authorization": "Bearer x"},
     )
 
@@ -331,19 +369,80 @@ def test_an_invitation_reports_what_was_emailed_and_carries_no_credential(app_wi
         "lifespan": 604800,
     }
     assert "password" not in response.text.replace("UPDATE_PASSWORD", "")
-    assert service.calls == [("send_invitation", "greenland", "gl-00001")]
+    assert service.calls == [("send_invitation", "greenland", "gl-00001", "invitation")]
 
 
-def test_an_invitation_to_a_member_nobody_has_is_404(app_with):
-    client, _ = app_with(
-        scopes=WRITE, service=FakeService(raises=MemberNotFound("greenland has no member 'x'"))
-    )
+@pytest.mark.parametrize("intent", ["invitation", "password_reset"])
+def test_the_intent_reaches_the_service_as_given(app_with, intent):
+    client, service = app_with(scopes=WRITE)
 
     response = client.post(
-        "/participants/greenland/x/invitation", headers={"Authorization": "Bearer x"}
+        "/participants/greenland/gl-00001/invitation",
+        json={"intent": intent},
+        headers={"Authorization": "Bearer x"},
+    )
+
+    assert response.status_code == 200
+    assert service.calls == [("send_invitation", "greenland", "gl-00001", intent)]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [None, {}, {"intent": "reset"}, {"intent": ""}, {"intent": "INVITATION"}],
+    ids=["no-body", "empty", "unknown", "blank", "wrong-case"],
+)
+def test_an_invitation_without_a_known_intent_is_refused_before_the_service(
+    app_with, body
+):
+    """The intent is required, with no default (requester, 2026-09-14, A2): a
+    default would be the service choosing the email for the caller."""
+    client, service = app_with(scopes=WRITE)
+
+    response = client.post(
+        "/participants/greenland/gl-00001/invitation",
+        json=body,
+        headers={"Authorization": "Bearer x"},
+    )
+
+    assert response.status_code == 422
+    assert service.calls == []
+
+
+NOT_FOUND = [
+    (CommunityNotFound("The registry has no community 'greenland'"), "community_not_found"),
+    (MemberNotFound("greenland has no active member 'x'"), "member_not_found"),
+    (AccountNotFound("greenland/x is registered as 'x', and the realm has no such account"), "account_not_found"),
+]
+
+
+@pytest.mark.parametrize("path", ["invitation", "disable"])
+@pytest.mark.parametrize("error,code", NOT_FOUND, ids=[c for _, c in NOT_FOUND])
+def test_every_404_says_which_thing_is_missing(app_with, path, error, code):
+    """One status, three causes. The code tells them apart, so a consumer never
+    has to parse the sentence or ask the registry again (requester, 2026-09-14:
+    "the more informative the better"). The sentence stays, for a person."""
+    client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
+
+    response = client.post(
+        f"/participants/greenland/x/{path}",
+        json=INVITE if path == "invitation" else None,
+        headers={"Authorization": "Bearer x"},
     )
 
     assert response.status_code == 404
+    assert response.json() == {"detail": {"code": code, "message": str(error)}}
+
+
+def test_a_sweep_of_a_community_the_registry_does_not_have_is_404(app_with):
+    client, _ = app_with(
+        scopes=RECONCILE,
+        service=FakeService(raises=CommunityNotFound("The registry has no community 'nowhere'")),
+    )
+
+    response = client.post("/reconcile/nowhere", headers={"Authorization": "Bearer x"})
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "community_not_found"
 
 
 def test_an_invitation_to_a_disabled_account_is_409(app_with):
@@ -352,11 +451,40 @@ def test_an_invitation_to_a_disabled_account_is_409(app_with):
     )
 
     response = client.post(
-        "/participants/greenland/x/invitation", headers={"Authorization": "Bearer x"}
+        "/participants/greenland/x/invitation", json=INVITE, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 409
-    assert "disabled" in response.json()["detail"]
+    assert response.json() == {
+        "detail": {"code": "account_disabled", "message": "greenland/x is disabled"}
+    }
+
+
+CONFLICTS = [
+    (HasPassword("greenland/x already has a password"), INVITE, "has_password"),
+    (NoPassword("greenland/x has no password to reset"), RESET, "no_password"),
+    (NoEmail("greenland/x has no email address"), INVITE, "no_email"),
+    (NoEmail("greenland/x has no email address"), RESET, "no_email"),
+]
+
+
+@pytest.mark.parametrize(
+    "error,body,code", CONFLICTS, ids=[f"{c}-{b['intent']}" for _, b, c in CONFLICTS]
+)
+def test_an_intent_the_account_does_not_fit_or_no_address_is_409_with_its_code(
+    app_with, error, body, code
+):
+    """A consumer names the other button from the code, never from the
+    sentence, and no `Retry-After`: pressing the other button works at once."""
+    client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
+
+    response = client.post(
+        "/participants/greenland/x/invitation", json=body, headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": code, "message": str(error)}}
+    assert "retry-after" not in response.headers
 
 
 def test_an_invitation_within_the_cooldown_is_429_with_retry_after(app_with):
@@ -366,38 +494,37 @@ def test_an_invitation_within_the_cooldown_is_429_with_retry_after(app_with):
     )
 
     response = client.post(
-        "/participants/greenland/x/invitation", headers={"Authorization": "Bearer x"}
+        "/participants/greenland/x/invitation", json=INVITE, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 429
     assert response.headers["retry-after"] == "42"
+    assert response.json() == {"detail": {"code": "cooldown", "message": "too soon"}}
 
 
-def test_a_member_nobody_has_is_404_and_not_a_server_error(app_with):
-    client, _ = app_with(
-        scopes=WRITE, service=FakeService(raises=MemberNotFound("greenland has no member 'x'"))
-    )
-
-    response = client.post(
-        "/participants/greenland/x/disable", headers={"Authorization": "Bearer x"}
-    )
-
-    assert response.status_code == 404
-
-
-def test_a_registry_or_keycloak_failure_is_502(app_with):
+@pytest.mark.parametrize(
+    "error,code",
+    [
+        (RegistryUnavailable("registry unreachable"), "registry_unavailable"),
+        (SendFailed("Keycloak did not email greenland/gl-00001"), "send_failed"),
+        (ProvisioningError("something else"), "provisioning_failed"),
+    ],
+)
+def test_a_registry_or_keycloak_failure_is_502_with_its_code(app_with, error, code):
     """It is a dependency that failed, not this service refusing — an operator
-    reading a 500 goes to the wrong logs."""
-    client, _ = app_with(
-        scopes=WRITE, service=FakeService(raises=ProvisioningError("registry unreachable"))
-    )
+    reading a 500 goes to the wrong logs. `send_failed` starts no cooldown, so
+    it is worth retrying."""
+    client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
 
     response = client.post(
         "/participants/greenland/gl-00001/invitation",
+        json=INVITE,
         headers={"Authorization": "Bearer x"},
     )
 
     assert response.status_code == 502
+    assert response.json() == {"detail": {"code": code, "message": str(error)}}
+    assert "retry-after" not in response.headers
 
 
 # --- the sweep ------------------------------------------------------------
@@ -447,10 +574,78 @@ def test_a_sweep_that_leaves_a_member_outside_its_organization_fails_loudly(app_
 
     assert response.status_code == 500
     detail = response.json()["detail"]
+    assert detail["code"] == "reconcile_diverged"
+    assert "1 member" in detail["message"]
+    # the report is still the body, where the SDK reads it
     assert detail["divergences"][0]["key"] == "gl-00001"
+    assert detail["community"] == "greenland"
 
 
 # --- the shape of the surface --------------------------------------------
+
+
+def _openapi() -> dict:
+    from celine.provisioning.main import create_app
+
+    return create_app().openapi()
+
+
+def test_the_contract_lists_the_new_invitation_codes():
+    """A contract change: a generated client with the old enum raises on these,
+    so the SDK is regenerated before this service is deployed."""
+    schemas = _openapi()["components"]["schemas"]
+
+    assert schemas["InvitationOutcome"]["enum"] == [
+        "not_requested",
+        "sent",
+        "has_password",
+        "not_on_dev_list",
+        "account_disabled",
+        "cooldown",
+        "send_failed",
+        "no_email",
+    ]
+    # the route's own 200 outcomes are unchanged: the rest are status codes there
+    assert schemas["InvitationSendOutcome"]["enum"] == ["sent", "not_on_dev_list"]
+
+
+def test_the_invitation_route_requires_an_intent_body():
+    """1.3.0: a breaking change for a caller that posted no body, which is why
+    the SDK's `send_invitation` gains a required `intent`."""
+    spec = _openapi()
+    operation = spec["paths"]["/participants/{community}/{key}/invitation"]["post"]
+
+    assert operation["requestBody"]["required"] is True
+    ref = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    request = spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+    assert request["required"] == ["intent"]
+    assert spec["components"]["schemas"]["InvitationIntent"]["enum"] == [
+        "invitation",
+        "password_reset",
+    ]
+    assert spec["info"]["version"] == "1.3.0"
+
+
+def test_every_route_declares_its_errors_with_the_shared_body():
+    spec = _openapi()
+    expected = {
+        ("/participants/{community}/{key}", "put"): {"401", "403", "502"},
+        ("/participants/{community}/{key}/invitation", "post"): {"401", "403", "404", "409", "429", "502"},
+        ("/participants/{community}/{key}/disable", "post"): {"401", "403", "404", "502"},
+        ("/reconcile/{community}", "post"): {"401", "403", "404", "502"},
+    }
+
+    for (path, method), statuses in expected.items():
+        responses = spec["paths"][path][method]["responses"]
+        for status_code in statuses:
+            ref = responses[status_code]["content"]["application/json"]["schema"]["$ref"]
+            assert ref == "#/components/schemas/ErrorResponse", (path, status_code)
+
+    detail = spec["components"]["schemas"]["ErrorDetail"]
+    assert set(detail["required"]) == {"code", "message"}
+    # a string, not an enum: a new code must not break a generated client
+    assert detail["properties"]["code"]["type"] == "string"
+    assert "enum" not in detail["properties"]["code"]
 
 
 def test_the_service_exposes_four_routes_and_a_health_check():

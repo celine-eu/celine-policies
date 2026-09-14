@@ -43,10 +43,16 @@ def create_app() -> FastAPI:
             "The only writer of participant accounts in the celine realm. "
             "Internal: no public route, and authorization by provisioning.* scopes."
         ),
+        # 1.3.0: `POST …/invitation` requires `{"intent": "invitation" |
+        # "password_reset"}` and refuses a mismatch (`409 has_password` /
+        # `no_password`); `no_email` on both the upsert (`invitation`) and the
+        # route (`409`).
+        # 1.2.0: `invitation` gains `cooldown` and `send_failed`, and every error
+        # body is `{"detail": {"code", "message"}}`.
         # 1.1.0: `…/password-reset` replaced by `…/invitation`, and the upsert
         # gained `locale`, `invite` and `invitation`. Bumped so the SDK's spec
         # snapshot is a new version rather than an overwrite in place.
-        version="1.1.0",
+        version="1.3.0",
         docs_url="/docs",
         redoc_url="/redoc",
     )

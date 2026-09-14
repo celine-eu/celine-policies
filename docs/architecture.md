@@ -18,12 +18,14 @@ The service uses `celine-sdk`'s `PolicyEngine` (built on [regorus](https://githu
 
 A FastAPI application (`src/celine/provisioning/`) that is the **only thing that writes a
 participant account** into the celine realm. `keycloak sync-users` calls the same package;
-`../onboarding` calls the service and holds no Keycloak grant of its own.
+`../onboarding` calls the service and holds no Keycloak grant of its own. It is the
+**only** client granted a `provisioning.*` scope: onboarding is the single point of access to
+the provisioner.
 
 **Endpoints:** `PUT /participants/{community}/{key}` (ensure the account, its REC
 organization and its org group, and optionally invite the person),
-`POST /participants/{community}/{key}/invitation` (re-send an invitation, or reset a
-password, by email), `POST /participants/{community}/{key}/disable`,
+`POST /participants/{community}/{key}/invitation` (email an invitation or a password
+reset, as the body's `intent` names), `POST /participants/{community}/{key}/disable`,
 `POST /reconcile/{community}`, `/health`.
 
 **No password is ever generated, returned or emailed.** Keycloak sends every email, through

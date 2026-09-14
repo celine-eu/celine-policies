@@ -36,6 +36,7 @@ from celine.policies.cli.keycloak.registry import (
     issuer_url,
 )
 from celine.policies.cli.keycloak.settings import KeycloakSettings, SyncUsersSettings
+from celine.provisioning.registry import RegistryCommunityNotFound
 
 GREENLAND = """
     community:
@@ -290,6 +291,54 @@ class TestFetchRecDocuments:
         )
 
         assert touched == []
+
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "content,keys,unknown_community",
+        [
+            # the registry's own answer for an unknown key
+            (b'{"detail":"\'Community not found: nowhere\'"}', ["nowhere"], True),
+            # FastAPI's unrouted path: a wrong registry URL, an outage
+            (b'{"detail":"Not Found"}', ["nowhere"], False),
+            (b"<html>not found</html>", ["nowhere"], False),
+            # an unnarrowed export names no community to be missing
+            (b'{"detail":"\'Community not found: nowhere\'"}', None, False),
+        ],
+        ids=["unknown-community", "unrouted", "not-json", "unnarrowed"],
+    )
+    async def test_a_404_is_an_unknown_community_only_when_the_registry_says_so(
+        self, monkeypatch: pytest.MonkeyPatch, content, keys, unknown_community
+    ):
+        """The provisioning service answers `community_not_found` on this, and
+        `../onboarding` reads a `404` on disable as "nothing left to revoke" —
+        so a misconfigured URL must stay an outage."""
+
+        class UnexpectedStatus(Exception):
+            def __init__(self, status_code, content):
+                super().__init__(f"Unexpected status code: {status_code}")
+                self.status_code = status_code
+                self.content = content
+
+        class FakeAdminClient:
+            def __init__(self, base_url, **kwargs):
+                pass
+
+            async def export_communities(self, keys):
+                raise UnexpectedStatus(404, content)
+
+        _install_sdk(monkeypatch, FakeAdminClient)
+
+        with pytest.raises(RegistryError) as excinfo:
+            await fetch_rec_documents(
+                registry_url="http://registry.internal",
+                issuer="http://kc.internal/realms/celine",
+                client_id="celine-cli",
+                client_secret="s3cret",
+                community_keys=keys,
+            )
+
+        assert isinstance(excinfo.value, RegistryCommunityNotFound) is unknown_community
 
 
 def _install_sdk(monkeypatch: pytest.MonkeyPatch, admin_client) -> None:

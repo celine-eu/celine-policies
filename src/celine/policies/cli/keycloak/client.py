@@ -17,6 +17,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -1685,7 +1686,9 @@ class KeycloakAdminClient:
 
     async def get_user_by_username(self, username: str) -> "dict[str, Any] | None":
         """Get a Keycloak user by exact username. Returns None if not found."""
-        results = await self._get(f"/users?username={username}&exact=true")
+        # Encoded: an unencoded `+` reads as a space, so a plus-addressed username
+        # matches nobody and a freshly created account "cannot be retrieved".
+        results = await self._get(f"/users?username={quote(username, safe='')}&exact=true")
         if results:
             return results[0]
         return None
@@ -1711,7 +1714,7 @@ class KeycloakAdminClient:
         deliberately, because picking between them is not a decision an
         automated provisioning call should make.
         """
-        results = await self._get(f"/users?email={email}&exact=true")
+        results = await self._get(f"/users?email={quote(email, safe='')}&exact=true")
         if results:
             return results[0]
         return None

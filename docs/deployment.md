@@ -92,7 +92,8 @@ To let real mail reach a few addresses, set both `EMAIL_DEV_RECIPIENTS` (comma-s
 `MAILPIT_RELAY_HOST` (with `MAILPIT_RELAY_PORT`, `_USERNAME`, `_PASSWORD` as needed). Mailpit
 then relays only those addresses, through an anchored, escaped match built by
 `config/mailpit/start.sh`, and the provisioning service invites only those addresses.
-Everyone else gets a `WARNING` in the service log and `invitation: not_on_dev_list`.
+Everyone else gets a `WARNING` in the service log and `invitation: not_on_dev_list`. An
+account with no email address is `no_email` in every mode, not `not_on_dev_list`.
 
 Outside dev, set `CELINE_PROVISIONING_EMAIL_MODE=deliver` and
 `CELINE_PROVISIONING_INVITE_REDIRECT_URI` to the webapp root.

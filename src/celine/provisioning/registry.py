@@ -36,6 +36,7 @@ without a code change.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import yaml
@@ -51,6 +52,18 @@ class RegistryError(RuntimeError):
     another — and "unauthorized" alone sends an operator to the wrong place. So
     every message this raises names the issuer it minted at, the URL it called
     and the client id it used.
+    """
+
+
+class RegistryCommunityNotFound(RegistryError):
+    """The registry answered `404` for a community this call named.
+
+    `GET /admin/export?community=x` answers `404` for an unknown key. So does
+    any path the registry does not route, which is what a wrong
+    `registry_url` looks like — and that is an outage, not an answer. The two
+    are told apart by FastAPI's unrouted body, `{"detail": "Not Found"}`, which
+    the export never sends: it names the community. That is the one body this
+    reads, and only to refuse to call a misconfiguration "no such community".
     """
 
 
@@ -116,6 +129,11 @@ async def fetch_rec_documents(
     try:
         text = await client.export_communities(community_keys or None)
     except Exception as e:
+        if community_keys and _is_unknown_community(e):
+            raise RegistryCommunityNotFound(
+                f"{registry_url} has no community "
+                f"{', '.join(community_keys)}"
+            ) from e
         raise RegistryError(
             f"Could not export from {registry_url} as '{client_id}' "
             f"(token issuer {issuer}): {e}. A 401 here usually means the issuer "
@@ -138,3 +156,20 @@ async def fetch_rec_documents(
             "approved anybody; seed it from a file instead."
         )
     return documents
+
+
+def _is_unknown_community(error: Exception) -> bool:
+    """Whether a failed export is the registry saying the community does not exist.
+
+    The SDK raises `UnexpectedStatus` with `status_code` and `content`. A `404`
+    whose body is FastAPI's unrouted `{"detail": "Not Found"}` is a wrong URL,
+    not a missing community. See `RegistryCommunityNotFound`.
+    """
+    if getattr(error, "status_code", None) != 404:
+        return False
+    content = getattr(error, "content", b"") or b""
+    try:
+        body = json.loads(content)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(body, dict) and body.get("detail") not in (None, "Not Found")

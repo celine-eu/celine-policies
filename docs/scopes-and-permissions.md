@@ -114,6 +114,16 @@ the other.
 | `grid.alerts.write` | Create, update, and delete own alert rules |
 | `grid.admin` | Full access to the Grid API (cross-user) |
 
+### REC Manager Dashboard
+
+| Scope | Description |
+|-------|-------------|
+| `community.read` | Read aggregate REC manager data |
+| `community.devices.read` | Read technical device-level data without participant identity |
+| `community.nudging.read` | Read aggregate nudging performance |
+| `community.alerts.write` | Manage and acknowledge REC alerts |
+| `community.objectives.write` | Manage REC objectives |
+
 ### MQTT
 
 | Scope | Description |
@@ -127,8 +137,14 @@ The service that writes participant accounts into the realm, and the only thing 
 | Scope | Description |
 |-------|-------------|
 | `provisioning.admin` | Full access to the provisioning service |
-| `provisioning.participants.write` | Create or update one participant's account, reset its password, disable it |
+| `provisioning.participants.write` | Create or update one participant's account, email them an invitation or a password reset, disable it |
 | `provisioning.reconcile` | Sweep one community from the registry and reconcile the realm against it |
+
+**Only `svc-onboarding` holds a `provisioning.*` scope**, apart from the service itself
+(`provisioning.admin`, its own family). Onboarding is the single point of access to the
+provisioning service (requester, 2026-09-14): no other client calls it directly, and a
+`provisioning.*` grant to one is a change to argue for. `tests/test_provisioning_scope_holders.py`
+fails when a second client is granted one, over `clients.yaml` and the ds-host overlay.
 
 ---
 
@@ -210,6 +226,28 @@ default_scopes:
   - nudging.ingest
   - pipelines.runs.read
 ```
+
+### svc-community
+
+The BFF behind the REC manager dashboard. Declared with a prefix so `community.*` has an owner
+and oauth2-proxy mints `aud: svc-community` on a manager's browser token.
+
+```yaml
+scopes_prefix: community
+default_scopes:
+  - community.read
+  - community.devices.read
+  - community.nudging.read
+  - community.alerts.write
+  - community.objectives.write
+  - digital-twin.values.read
+  - dataset.query
+  - rec-registry.read
+  - nudging.analytics.read
+```
+
+It holds no `provisioning.*` scope: the provisioning service is reached through onboarding
+only. See [Provisioning](#provisioning).
 
 ### svc-onboarding
 

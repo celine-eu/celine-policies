@@ -30,9 +30,10 @@ exists when it is made.
 
 An account gets a credential only by the person setting it, through a link
 Keycloak emails them. The upsert invites when asked, and only an account that
-was created in that call or has no password; `POST .../invitation` re-sends, or
-resets an account that has one. See `celine.provisioning.invitation` for the
-recipient guard both apply.
+was created in that call or has no password; `POST .../invitation` sends the
+email its caller names — an invitation to an account without a password, or a
+reset to one that has one — and refuses the other. See
+`celine.provisioning.invitation` for the recipient guard both apply.
 
 ## Nothing here writes to the registry
 
@@ -48,6 +49,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import httpx
+
 from celine.policies.cli.keycloak.client import KeycloakAdminClient, KeycloakError
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.provisioning.bundle import (
@@ -61,40 +64,137 @@ from celine.provisioning.invitation import (
     INVITE_ACTIONS,
     RESET_ACTIONS,
     InvitationOutcome,
+    SendIntent,
+    has_address,
 )
 from celine.provisioning.models import OrganizationSpec
 from celine.provisioning.provisioner import Provisioner
-from celine.provisioning.registry import RegistryError, fetch_rec_documents, issuer_url
+from celine.provisioning.registry import (
+    RegistryCommunityNotFound,
+    RegistryError,
+    fetch_rec_documents,
+    issuer_url,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ProvisioningError(RuntimeError):
-    """Something the caller has to be told about, with the subject named."""
+    """Something the caller has to be told about, with the subject named.
 
-
-class MemberNotFound(ProvisioningError):
-    """No member, or no account for one, under the key this call named.
-
-    Distinct from a Keycloak failure because the answer is different: this is a
-    `404` the caller may well have expected, not an outage.
+    `code` is the stable, machine-readable half of the answer and the message is
+    the human half. Routes put both in the error body, so a consumer branches on
+    the code and never parses the sentence. A subclass that answers differently
+    sets its own code; this base is a dependency that failed (`502`).
     """
 
+    code: str = "provisioning_failed"
 
-class AccountDisabled(ProvisioningError):
+
+class RegistryUnavailable(ProvisioningError):
+    """The registry could not be read, or is not configured. A `502`."""
+
+    code = "registry_unavailable"
+
+
+class NotFound(ProvisioningError):
+    """Something the call named does not exist. A `404` the caller may well have
+    expected, not an outage. Always one of the subclasses below, so the code
+    says *which* thing is missing."""
+
+    code = "not_found"
+
+
+class CommunityNotFound(NotFound):
+    """The registry has no community under this key."""
+
+    code = "community_not_found"
+
+
+class MemberNotFound(NotFound):
+    """The registry's community has no active member under this key."""
+
+    code = "member_not_found"
+
+
+class AccountNotFound(NotFound):
+    """The registry has the member, and the realm has no account for it."""
+
+    code = "account_not_found"
+
+
+class Conflict(ProvisioningError):
+    """The account exists and its state rules out what was asked. A `409`,
+    always one of the subclasses below, so the code says which state."""
+
+    code = "conflict"
+
+
+class AccountDisabled(Conflict):
     """The account exists and is disabled, so nothing may be sent to it.
 
     Checked by this service before Keycloak is asked, because Keycloak's own
     answer is a `400` whose message is not a contract. A `409`.
     """
 
+    code = "account_disabled"
+
+
+class HasPassword(Conflict):
+    """An invitation was asked for an account that already has a password.
+
+    Refused, not turned into a reset: the email must be the one the person
+    pressed for (requester, 2026-09-14, A2). Before any send or cooldown. A `409`.
+    """
+
+    code = "has_password"
+
+
+class NoPassword(Conflict):
+    """A password reset was asked for an account that has no password.
+
+    Refused, never turned into an invitation (requester, 2026-09-14, A2). Before
+    any send or cooldown. A `409`.
+    """
+
+    code = "no_password"
+
+
+class NoEmail(Conflict):
+    """The account has no email address, so there is nobody to write to.
+
+    Whatever the email mode, and before the dev list and the cooldown: it is a
+    fact about the account, not a deployment's refusal. Keycloak would answer
+    `400 User email missing`. A `409` on the route, `invitation: no_email` on
+    the upsert.
+    """
+
+    code = "no_email"
+
 
 class InvitationCooldown(ProvisioningError):
-    """The same account was sent an invitation too recently. A `429`."""
+    """The same account was sent an email too recently. A `429` on the route,
+    `invitation: cooldown` on the upsert."""
+
+    code = "cooldown"
 
     def __init__(self, message: str, *, retry_after: int) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class SendFailed(ProvisioningError):
+    """Keycloak was asked to send the email and did not.
+
+    Keycloak answers `500 {"errorMessage": "Failed to send execute actions
+    email: …"}` when its SMTP send throws, and `400` for a request it refuses
+    (an unregistered redirect URI, an account with no address). A transport
+    error or a timeout lands here too. **None of them starts the cooldown**, so
+    a retry can send. A `502` on the route, `invitation: send_failed` on the
+    upsert.
+    """
+
+    code = "send_failed"
 
 
 @dataclass(frozen=True)
@@ -155,9 +255,25 @@ class ProvisioningService:
     makes a retry simply another call.
 
     **The one exception is the invitation cooldown**: when each account was last
-    sent an email, in memory and per replica. It guards against a double click,
-    not against abuse — the route is internal-only — and losing it on a restart
-    costs at most one extra email.
+    sent an email, in memory and per replica. It guards against a double click
+    and a repeated upsert, not against abuse — the route is internal-only — and
+    losing it on a restart costs at most one extra email.
+
+    **One send rule, whichever call asked** (requester, 2026-09-14: "no spam, do
+    not trick the user, if send failed, ok resend"):
+
+    - an email goes out only because a caller asked: the upsert with `invite`,
+      or `POST .../invitation`;
+    - every send, from either, is refused within the cooldown of the last
+      successful send to that account;
+    - a send Keycloak did not complete starts no cooldown;
+    - an account with a password is never invited, and one without is never
+      sent a reset: the route's caller names the email (`intent`) and a
+      mismatch is refused before any send or cooldown;
+    - an account with no email address is never sent anything (`no_email`).
+
+    The slot is claimed before Keycloak is called and released if nothing went
+    out, so two concurrent calls for one account cannot both send.
     """
 
     def __init__(
@@ -199,9 +315,10 @@ class ProvisioningService:
         **`invite` sends only to an account created in this call, or one with
         no password**, so a retry on an account whose owner has already set a
         password sends nothing. It never fails the upsert: a disabled account,
-        an address outside the dev list, or an account that already has a
-        password comes back as `invitation`, a reason code the caller can show
-        the operator who approved.
+        an account that already has a password, one with no email address, one
+        emailed within the cooldown, an address outside the dev list, or a send
+        Keycloak did not complete comes back as `invitation`, a reason code the
+        caller can show the operator who approved.
         """
         async with KeycloakAdminClient(self._keycloak_settings) as kc:
             await kc.authenticate()
@@ -260,10 +377,18 @@ class ProvisioningService:
     ) -> InvitationOutcome:
         """Decide, and send, the invitation an upsert asked for.
 
-        The checks run in the order that sends least: disabled, then an existing
-        password, then the dev list. The address checked is the one Keycloak will
-        send to — the account's — which is the body's for an account found by
-        address or just created.
+        The checks run in the order that sends least and says most: disabled,
+        then an existing password (never invited, whatever the cooldown), then
+        no address, then the dev list, then the cooldown, which `_send` checks
+        as it claims. The address checked is the one Keycloak will send to — the
+        account's own. For an account just created that is the body's; for one
+        that existed it is what the account carries, **never the body's as a
+        stand-in**: Keycloak sends to the account, so an account with no address
+        is `no_email` even when the body had one.
+
+        **Nothing here raises for the email's sake.** A cooldown is `cooldown`
+        and a failed send is `send_failed`: the account step must not fail on an
+        email, and the operator reads the code and can retry.
         """
         address = email
         if not created:
@@ -276,13 +401,25 @@ class ProvisioningService:
             if await provisioner.has_password(keycloak_id):
                 logger.info("Not inviting %s: the account already has a password", who)
                 return "has_password"
-            address = user.get("email") or email
+            address = user.get("email")
+
+        if not has_address(address):
+            logger.info("Not inviting %s: the account has no email address", who)
+            return "no_email"
 
         if not self._settings.email_policy.allows(address):
             self._settings.email_policy.refuse(who)
             return "not_on_dev_list"
 
-        await self._send(provisioner, who, keycloak_id, INVITE_ACTIONS, self._settings.invite_lifespan)
+        try:
+            await self._send(
+                provisioner, who, keycloak_id, INVITE_ACTIONS, self._settings.invite_lifespan
+            )
+        except InvitationCooldown as e:
+            logger.info("Not inviting %s: %s", who, e)
+            return "cooldown"
+        except SendFailed:
+            return "send_failed"
         return "sent"
 
     async def _send(
@@ -293,6 +430,22 @@ class ProvisioningService:
         actions: tuple[str, ...],
         lifespan: int,
     ) -> None:
+        """The one place an email is sent: check the cooldown, claim it, ask
+        Keycloak, and give the slot back if the email did not go out.
+
+        The check and the claim run with no `await` between them, so on one
+        event loop a concurrent call for the same account sees the slot taken.
+        Raises `InvitationCooldown` or `SendFailed`, never `KeycloakError`.
+        """
+        remaining = self._cooldown_remaining(keycloak_id)
+        if remaining:
+            raise InvitationCooldown(
+                f"{who} was emailed less than "
+                f"{self._settings.invite_cooldown}s ago; try again in {remaining}s",
+                retry_after=remaining,
+            )
+        claimed_at = self._clock()
+        self._last_sent[keycloak_id] = claimed_at
         try:
             await provisioner.send_actions_email(
                 keycloak_id,
@@ -301,27 +454,44 @@ class ProvisioningService:
                 client_id=self._settings.invite_client_id,
                 redirect_uri=self._settings.invite_redirect_uri,
             )
-        except KeycloakError as e:
-            raise ProvisioningError(
-                f"Keycloak refused to email {who}: {e}"
-            ) from e
-        self._last_sent[keycloak_id] = self._clock()
+        except (KeycloakError, httpx.HTTPError) as e:
+            if self._last_sent.get(keycloak_id) == claimed_at:
+                del self._last_sent[keycloak_id]
+            logger.warning(
+                "Keycloak did not email %s (%s); no cooldown started, a retry may send",
+                who,
+                getattr(e, "status_code", None) or type(e).__name__,
+            )
+            raise SendFailed(f"Keycloak did not email {who}: {e}") from e
         logger.info("Emailed %s: %s, valid %ss", who, ",".join(actions), lifespan)
 
     # -- the lifecycle calls ----------------------------------------------
 
-    async def send_invitation(self, *, community: str, key: str) -> InvitationResult:
-        """Re-send an invitation, or reset a password, for a member the registry holds.
+    async def send_invitation(
+        self, *, community: str, key: str, intent: SendIntent
+    ) -> InvitationResult:
+        """Send the email the caller named to a member the registry holds.
 
-        One route, two emails, decided by the account: without a password it is
-        an invitation (`UPDATE_PASSWORD` + `VERIFY_EMAIL`, the invitation
-        lifespan); with one it is a reset (`UPDATE_PASSWORD`, the reset
-        lifespan). **Earlier links are not revoked** — Keycloak cannot — so a
-        reset goes out with the short lifespan.
+        One route, two emails, **chosen by the caller and checked against the
+        account** (requester, 2026-09-14, A2: "do not trick the user"):
+        `invitation` is `UPDATE_PASSWORD` + `VERIFY_EMAIL` with the invitation
+        lifespan, for an account without a password; `password_reset` is
+        `UPDATE_PASSWORD` with the reset lifespan, for one that has one. The
+        account is read in the same call that sends, so the email can never
+        differ from the button a person pressed. **Earlier links are not
+        revoked** — Keycloak cannot — so a reset goes out with the short
+        lifespan.
 
-        Refuses a disabled account (`AccountDisabled`) and a second send within
-        the cooldown (`InvitationCooldown`). An address outside the dev list is
-        not a refusal: it answers `not_on_dev_list`, with nothing sent.
+        Refuses, in this order: a member the registry does not have
+        (`CommunityNotFound`, `MemberNotFound`), a member with no account
+        (`AccountNotFound`), a disabled account (`AccountDisabled`), an intent
+        the account does not fit (`HasPassword`, `NoPassword`), an account with
+        no email address (`NoEmail`), a send within the cooldown of the last one
+        to that account, from this route or an upsert (`InvitationCooldown`),
+        and a send Keycloak did not complete (`SendFailed`, no cooldown
+        started). None before the cooldown starts one. An address outside the
+        dev list is not a refusal: it answers `not_on_dev_list`, with nothing
+        sent.
         """
         username = await self._username_of(community, key)
         who = f"{community}/{key}"
@@ -332,7 +502,7 @@ class ProvisioningService:
 
             user = await provisioner.find_by_username(username)
             if not user:
-                raise MemberNotFound(
+                raise AccountNotFound(
                     f"{who} is registered as '{username}', and the "
                     f"realm has no such account. Provision it first."
                 )
@@ -343,12 +513,28 @@ class ProvisioningService:
                     f"{who} ('{username}') is disabled; nothing was sent"
                 )
 
-            self._check_cooldown(who, keycloak_id)
-
-            if await provisioner.has_password(keycloak_id):
-                actions, lifespan = RESET_ACTIONS, self._settings.reset_lifespan
-            else:
+            password = await provisioner.has_password(keycloak_id)
+            if intent == "invitation":
+                if password:
+                    raise HasPassword(
+                        f"{who} ('{username}') already has a password; no "
+                        f"invitation was sent. Send a password reset instead."
+                    )
                 actions, lifespan = INVITE_ACTIONS, self._settings.invite_lifespan
+            elif intent == "password_reset":
+                if not password:
+                    raise NoPassword(
+                        f"{who} ('{username}') has no password to reset; nothing "
+                        f"was sent. Send an invitation instead."
+                    )
+                actions, lifespan = RESET_ACTIONS, self._settings.reset_lifespan
+            else:  # the route validates it; a direct caller gets told
+                raise ValueError(f"unknown intent {intent!r}")
+
+            if not has_address(user.get("email")):
+                raise NoEmail(
+                    f"{who} ('{username}') has no email address; nothing was sent"
+                )
 
             outcome: InvitationOutcome
             if self._settings.email_policy.allows(user.get("email")):
@@ -366,18 +552,16 @@ class ProvisioningService:
                 lifespan=lifespan,
             )
 
-    def _check_cooldown(self, who: str, keycloak_id: str) -> None:
+    def _cooldown_remaining(self, keycloak_id: str) -> int:
+        """Whole seconds until this account may be emailed again; 0 if it may now.
+
+        Rounded up, so a `Retry-After` honoured to the second is never early.
+        """
         last = self._last_sent.get(keycloak_id)
         if last is None:
-            return
-        elapsed = self._clock() - last
-        remaining = self._settings.invite_cooldown - elapsed
-        if remaining > 0:
-            raise InvitationCooldown(
-                f"{who} was emailed {int(elapsed)}s ago; try again in "
-                f"{int(remaining) + 1}s",
-                retry_after=int(remaining) + 1,
-            )
+            return 0
+        remaining = self._settings.invite_cooldown - (self._clock() - last)
+        return int(remaining) + 1 if remaining > 0 else 0
 
     async def disable(self, *, community: str, key: str) -> DisableResult:
         """Revoke a member's access without destroying anything."""
@@ -389,7 +573,7 @@ class ProvisioningService:
 
             user = await provisioner.find_by_username(username)
             if not user:
-                raise MemberNotFound(
+                raise AccountNotFound(
                     f"{community}/{key} is registered as '{username}', and the "
                     f"realm has no such account. Nothing to disable."
                 )
@@ -514,7 +698,7 @@ class ProvisioningService:
         for member in load_rec_participants(document):
             if member["key"] == key:
                 return participant_username(member)
-        raise MemberNotFound(f"{community} has no member '{key}'")
+        raise MemberNotFound(f"{community} has no active member '{key}'")
 
     async def _export(self, community: str) -> dict:
         """The registry's bundle for one community.
@@ -525,12 +709,12 @@ class ProvisioningService:
         end.
         """
         if not self._settings.registry_url:
-            raise ProvisioningError(
+            raise RegistryUnavailable(
                 "No registry configured. Set CELINE_PROVISIONING_REGISTRY_URL; "
                 "reconcile and the lifecycle calls resolve members through it."
             )
         if not self._settings.registry_client_secret:
-            raise ProvisioningError(
+            raise RegistryUnavailable(
                 f"No secret for registry client "
                 f"'{self._settings.registry_client_id}'. Set "
                 f"CELINE_PROVISIONING_REGISTRY_CLIENT_SECRET."
@@ -547,13 +731,15 @@ class ProvisioningService:
                 community_keys=[community],
                 timeout=self._keycloak_settings.timeout,
             )
+        except RegistryCommunityNotFound as e:
+            raise CommunityNotFound(f"The registry has no community '{community}'") from e
         except RegistryError as e:
-            raise ProvisioningError(str(e)) from e
+            raise RegistryUnavailable(str(e)) from e
 
         if len(documents) != 1:
             # The export is narrowed to one key, so anything else means the
             # registry answered a question nobody asked.
-            raise ProvisioningError(
+            raise RegistryUnavailable(
                 f"registry returned {len(documents)} documents for '{community}', "
                 f"expected exactly one"
             )

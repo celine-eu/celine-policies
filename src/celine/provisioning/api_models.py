@@ -13,11 +13,12 @@ from __future__ import annotations
 from enum import Enum
 from pydantic import BaseModel, Field
 
-# The three value sets below are `str` enums rather than bare `Literal`s for one
+# The value sets below are `str` enums rather than bare `Literal`s for one
 # reason: a named enum becomes a named component in the OpenAPI document, so
-# the SDK generates `InvitationOutcome`, `InvitationSendOutcome` and `Locale`
-# instead of `InvitationSchema` and `InvitationSchema1`, whose numbering depends
-# on field order. On the wire they are the same strings.
+# the SDK generates `InvitationOutcome`, `InvitationSendOutcome`,
+# `InvitationIntent` and `Locale` instead of `InvitationSchema` and
+# `InvitationSchema1`, whose numbering depends on field order. On the wire they
+# are the same strings.
 
 
 class InvitationOutcome(str, Enum):
@@ -32,6 +33,47 @@ class InvitationOutcome(str, Enum):
     has_password = "has_password"
     not_on_dev_list = "not_on_dev_list"
     account_disabled = "account_disabled"
+    cooldown = "cooldown"
+    send_failed = "send_failed"
+    no_email = "no_email"
+
+
+class ErrorDetail(BaseModel):
+    """`detail` in every error body except `422`, which is FastAPI's own list.
+
+    `message` is the service's sentence, naming the member or the scope. It is
+    for a log or an operator, and it is not a contract.
+
+    **`code` is a string, not an enum, on purpose.** A generated client turns an
+    enum into a strict type that raises on a value it has never seen, so every
+    new code would break every consumer that has not regenerated — on the error
+    path, where a crash hides the refusal it was meant to report. The codes are
+    listed in the description and in `docs/api-reference.md`.
+    """
+
+    code: str = Field(
+        ...,
+        description=(
+            "Stable machine-readable reason: `missing_token`, `invalid_token`, "
+            "`insufficient_scope`, `community_not_found`, `member_not_found`, "
+            "`account_not_found`, `account_disabled`, `has_password`, "
+            "`no_password`, `no_email`, `cooldown`, "
+            "`reconcile_diverged`, `registry_unavailable`, `send_failed`, "
+            "`provisioning_failed`. New codes may be added: branch on the HTTP "
+            "status for one you do not know."
+        ),
+    )
+    message: str = Field(..., description="A human sentence. Not a contract.")
+
+
+class ErrorResponse(BaseModel):
+    """`{"detail": {"code": "...", "message": "..."}}`.
+
+    `detail` stays the top-level key, so a consumer that already reads
+    `detail` keeps finding it; it is an object rather than a string.
+    """
+
+    detail: ErrorDetail
 
 
 class InvitationSendOutcome(str, Enum):
@@ -39,6 +81,33 @@ class InvitationSendOutcome(str, Enum):
 
     sent = "sent"
     not_on_dev_list = "not_on_dev_list"
+
+
+class InvitationIntent(str, Enum):
+    """Which email the caller of `POST .../invitation` asks for.
+
+    Explicit, and required, so the email is always the button a person pressed
+    (requester, 2026-09-14, A2: "do not trick the user"). The service checks it
+    against the account in the same call that sends and refuses a mismatch.
+    """
+
+    invitation = "invitation"
+    password_reset = "password_reset"
+
+
+class InvitationRequest(BaseModel):
+    """The body of `POST /participants/{community}/{key}/invitation`."""
+
+    intent: InvitationIntent = Field(
+        ...,
+        description=(
+            "`invitation`: set a first password (`UPDATE_PASSWORD` + "
+            "`VERIFY_EMAIL`, 7 days); refused `409 has_password` when the account "
+            "has one. `password_reset`: replace it (`UPDATE_PASSWORD`, 1 hour); "
+            "refused `409 no_password` when the account has none. Never turned "
+            "into the other."
+        ),
+    )
 
 
 class Locale(str, Enum):
@@ -92,9 +161,10 @@ class ParticipantUpsert(BaseModel):
     invite: bool = Field(
         default=False,
         description=(
-            "Email the participant a link to set their password — only if the "
-            "account was created in this call or has no password. The outcome is "
-            "in `invitation`; the upsert never fails because of it."
+            "Email the participant an invitation to set their password — only if "
+            "the account was created in this call or has no password. Never a "
+            "reset. The outcome is in `invitation`; the upsert never fails because "
+            "of it."
         ),
     )
 
@@ -120,7 +190,11 @@ class ParticipantResponse(BaseModel):
         description=(
             "What happened to the invitation: `not_requested` (invite was false), "
             "`sent`, `has_password` (nothing to invite to), `not_on_dev_list` "
-            "(dev email mode, address not allowed), `account_disabled`."
+            "(dev email mode, address not allowed), `no_email` (the account has "
+            "no email address, whatever the mode), `account_disabled`, "
+            "`cooldown` (this account was emailed within the cooldown; nothing "
+            "sent), `send_failed` (Keycloak did not send it; no cooldown started, "
+            "so a retry may send). New codes may be added: show an unknown one raw."
         ),
     )
     invited: bool = Field(
@@ -133,8 +207,8 @@ class InvitationResponse(BaseModel):
 
     No credential travels here: the person sets their own through the link
     Keycloak sends. `actions` says which email it was — `UPDATE_PASSWORD` and
-    `VERIFY_EMAIL` for an account with no password (an invitation),
-    `UPDATE_PASSWORD` alone for one that has a password (a reset).
+    `VERIFY_EMAIL` for intent `invitation`, `UPDATE_PASSWORD` alone for intent
+    `password_reset`.
     """
 
     user_id: str

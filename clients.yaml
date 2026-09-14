@@ -196,7 +196,7 @@ scopes:
   - name: provisioning.admin
     description: Full access to the provisioning service
   - name: provisioning.participants.write
-    description: Create or update one participant's account, reset its password, disable it
+    description: Create or update one participant's account, email them an invitation or a password reset, disable it
   - name: provisioning.reconcile
     description: Sweep one community from the registry and reconcile the realm against it
 
