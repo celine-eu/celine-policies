@@ -48,15 +48,16 @@ class FakeKeycloak:
         self.resolved_paths: list[str] = []
 
         self.authenticate = AsyncMock()
-        self.ensure_organizations_enabled = AsyncMock(return_value=False)
-        self.ensure_realm_claim_scopes = AsyncMock(return_value=False)
-        self.get_client_by_client_id = AsyncMock(return_value=None)
-        self.ensure_audience_mapper = AsyncMock(return_value=False)
+        # The platform check reads this; bootstrap owns the flag.
+        self.get_realm_settings = AsyncMock(return_value={"organizationsEnabled": True})
+        # The clients-level check reads this; `keycloak sync` writes the scopes.
+        self.list_client_scopes = AsyncMock(
+            return_value=[{"name": n} for n in ("organization", "groups", "dataspace")]
+        )
         self.ensure_organization = AsyncMock(return_value=("org-1", False))
         self.get_organization_by_alias = AsyncMock(return_value={"id": "org-1"})
         self.ensure_org_role = AsyncMock()
         self.ensure_org_group = AsyncMock(return_value=("orggrp-1", False))
-        self.ensure_realm_groups = AsyncMock(return_value=False)
         self.ensure_user_in_organization = AsyncMock(return_value=False)
         self.ensure_user_in_org_group = AsyncMock()
         self.set_user_password = AsyncMock()
@@ -450,9 +451,8 @@ class TestTheRealmScaffoldRunsOncePerRunNotOncePerCommunity:
 
         await run(kc_settings, sync_settings, communities=self.COMMUNITIES)
 
-        assert kc.ensure_organizations_enabled.await_count == 1
-        assert kc.ensure_realm_claim_scopes.await_count == 1
-        assert kc.ensure_realm_groups.await_count == 1
+        assert kc.get_realm_settings.await_count == 1
+        assert kc.list_client_scopes.await_count == 1
 
     @pytest.mark.asyncio
     async def test_the_organization_is_ensured_once_per_community(

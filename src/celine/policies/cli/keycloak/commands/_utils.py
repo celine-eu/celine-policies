@@ -9,6 +9,7 @@ from pathlib import Path
 
 from celine.governance import validate_owners
 
+from celine.policies.cli.keycloak.client import REALM_CLAIM_SCOPES, KeycloakError
 from celine.policies.cli.keycloak.settings import (
     KeycloakSettings,
     realm_is_set_in_environment,
@@ -27,6 +28,28 @@ from celine.provisioning.bundle import (  # noqa: F401
     load_rec_participants,
     participant_username,
 )
+
+
+class ClientsNotSynced(KeycloakError):
+    """A command found the clients level missing something it depends on.
+
+    Raised instead of writing it: `keycloak sync` is the one writer of that level.
+    """
+
+
+async def require_realm_claim_scopes(kc) -> None:
+    """Refuse, naming `sync`, unless the realm claim scopes exist.
+
+    Read-only. Only presence is checked: their mappers and their assignment to the
+    oauth2-proxy client are `sync`'s to converge, not this command's to judge.
+    """
+    present = {s.get("name") for s in await kc.list_client_scopes() or []}
+    missing = [name for name in REALM_CLAIM_SCOPES if name not in present]
+    if missing:
+        raise ClientsNotSynced(
+            f"the realm has no {missing} client scope(s). Run `celine-policies keycloak "
+            f"sync` first: it is the only command that writes the realm claim scopes."
+        )
 
 
 def configure_logging(verbose: bool) -> None:

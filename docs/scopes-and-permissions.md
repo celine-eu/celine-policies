@@ -80,6 +80,13 @@ scope at all. These scopes exist for the other subject type — service accounts
 | `onboarding.enablement.revoke` | Reverse enablement — revoke credential, membership, login |
 | `onboarding.audit.read` | Read a community's onboarding audit trail |
 | `onboarding.export` | Export submissions or consented supply points |
+| `onboarding.members.invite` | Email a registry member an invitation or a password reset, on behalf of the manager whose token is forwarded |
+
+**`onboarding.members.invite` is delegated, and useless alone.** Onboarding allows it only to a
+service that also forwards a manager's verified access token (`X-Acting-User-Token`), and only
+when that manager holds `admins` or `managers` on the REC. No service sends on its own, not even
+one holding `onboarding.admin`. The scope is held by `svc-community` alone, as an optional scope;
+see [svc-community](#svc-community).
 
 `onboarding.submissions.purge` and `onboarding.enablement.revoke` are deliberately
 **not** covered by `onboarding.submissions.review`, mirroring
@@ -242,9 +249,20 @@ default_scopes:
   - community.objectives.write
   - digital-twin.values.read
   - dataset.query
-  - rec-registry.read
+  - rec-registry.read          # aggregate population, and member names for the members page
   - nudging.analytics.read
+optional_scopes:
+  - onboarding.members.invite  # "Send invitation" / "Reset password", through onboarding
 ```
+
+`rec-registry.read` also gives the members page its names. They are read per request and never
+persisted, and no email, user id, DID or supply point leaves the BFF process.
+
+`onboarding.members.invite` is **optional, not default**. The Digital Twin forwards this
+client's default-scope token to dataset-api, and a send capability must not travel there. The
+BFF requests the scope only for its call to onboarding, and forwards the manager's own token
+beside it. The audience mapper onto `svc-onboarding` is derived from the scope, and a realm
+has it only after `keycloak sync`.
 
 It holds no `provisioning.*` scope: the provisioning service is reached through onboarding
 only. See [Provisioning](#provisioning).

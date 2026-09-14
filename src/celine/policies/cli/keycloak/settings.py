@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import secrets as _secrets
@@ -133,6 +133,25 @@ class KeycloakSettings(BaseSettings):
         description="Admin service client secret",
     )
 
+    # Platform activation (bootstrap). Unset means the environment decides; see
+    # `brute_force_protected`.
+    brute_force_enabled: bool | None = Field(
+        default=None,
+        description="Realm brute-force protection: on unless ENV is non-production",
+    )
+
+    @property
+    def brute_force_protected(self) -> bool:
+        """`bruteForceProtected` for this run (requester, 2026-09-14).
+
+        On by default and off in dev: a deployment that says nothing is protected,
+        and a developer locking themselves out of a local realm is not a feature.
+        `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` overrides either way.
+        """
+        if self.brute_force_enabled is not None:
+            return self.brute_force_enabled
+        return self.is_production
+
     @property
     def is_production(self) -> bool:
         """Whether to apply production safety checks.
@@ -183,6 +202,7 @@ class KeycloakSettings(BaseSettings):
         """Create a new settings instance with CLI overrides applied."""
         return KeycloakSettings(
             env=self.env,
+            brute_force_enabled=self.brute_force_enabled,
             base_url=base_url or self.base_url,
             realm=realm or self.realm,
             timeout=self.timeout,
@@ -231,6 +251,48 @@ def realm_is_set_in_environment() -> bool:
     filling a gap or overruling a deliberate choice.
     """
     return "realm" in KeycloakSettings().model_fields_set
+
+
+class SmtpSettings(BaseSettings):
+    """The realm's `smtpServer`, as `keycloak bootstrap` applies it (plan Phase 2b).
+
+    Read from the environment only: the deployment feeds these from its secret, and
+    `platform.yaml` refuses `smtpServer`. Names mirror Keycloak's own keys:
+
+        CELINE_KEYCLOAK_SMTP_HOST               unset or empty: bootstrap leaves smtpServer alone
+        CELINE_KEYCLOAK_SMTP_PORT               default 587
+        CELINE_KEYCLOAK_SMTP_FROM               required with a host
+        CELINE_KEYCLOAK_SMTP_FROM_DISPLAY_NAME
+        CELINE_KEYCLOAK_SMTP_REPLY_TO
+        CELINE_KEYCLOAK_SMTP_SSL                default false
+        CELINE_KEYCLOAK_SMTP_STARTTLS           default false
+        CELINE_KEYCLOAK_SMTP_AUTH               default: true when a user is set
+        CELINE_KEYCLOAK_SMTP_USER
+        CELINE_KEYCLOAK_SMTP_PASSWORD           write-only; sent on every run
+
+    The password is a `SecretStr`, so it stays out of reprs and logs.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="CELINE_KEYCLOAK_SMTP_", extra="ignore")
+
+    host: str = ""
+    port: int = 587
+    from_: str = Field(default="", validation_alias=AliasChoices("CELINE_KEYCLOAK_SMTP_FROM", "from_"))
+    from_display_name: str = ""
+    reply_to: str = ""
+    ssl: bool = False
+    starttls: bool = False
+    auth: bool | None = None
+    user: str = ""
+    password: SecretStr = SecretStr("")
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.host.strip())
+
+    @property
+    def uses_auth(self) -> bool:
+        return self.auth if self.auth is not None else bool(self.user)
 
 
 class SyncUsersSettings(BaseSettings):  # <<< NEW

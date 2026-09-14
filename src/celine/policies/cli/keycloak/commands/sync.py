@@ -19,6 +19,7 @@ from celine.policies.cli.keycloak.client import (
     KeycloakError,
 )
 from celine.policies.cli.keycloak.models import KeycloakConfig
+from celine.policies.cli.keycloak.platform import require_platform
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.policies.cli.keycloak.sync import (
     SyncResult,
@@ -315,6 +316,11 @@ async def _async_sync(
     async with KeycloakAdminClient(settings) as client:
         # Authenticate
         await client.authenticate()
+
+        # The realm flag grants depend on is platform level, and `bootstrap`'s to
+        # set. Checked before this command's first write, in a dry run too.
+        if config.clients_with_admin_permissions():
+            await require_platform(client, admin_permissions=True)
 
         # Provision realm claim scopes (organization, groups, dataspace) — idempotent
         if not dry_run:

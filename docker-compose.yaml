@@ -9,6 +9,7 @@ services:
     restart: "no"
     volumes:
       - ./clients.yaml:/app/clients.yaml:ro
+      - ./platform.yaml:/app/platform.yaml:ro
     depends_on:
       keycloak:
         condition: service_healthy

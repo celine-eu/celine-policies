@@ -40,7 +40,12 @@ EXPECTED_SCOPES = {
     "onboarding.enablement.revoke",
     "onboarding.audit.read",
     "onboarding.export",
+    "onboarding.members.invite",
 }
+
+#: The delegated scope, and its one holder.
+INVITE = "onboarding.members.invite"
+COMMUNITY = "svc-community"
 
 
 class TestOnboardingScopes:
@@ -164,3 +169,78 @@ class TestOnboardingClients:
 
     def test_no_undefined_scope_references(self):
         assert _config().validate_scope_references() == []
+
+
+# ---------------------------------------------------------------------------
+# The delegated invitation scope
+# ---------------------------------------------------------------------------
+
+
+def _merged() -> KeycloakConfig:
+    return KeycloakConfig.from_yaml_files([CLIENTS_YAML, DS_HOST_YAML], complete=False)
+
+
+def _explicit_onboarding_scopes(client) -> set[str]:
+    return {
+        s
+        for s in set(client.default_scopes) | set(client.optional_scopes)
+        if s.startswith("onboarding.")
+    }
+
+
+class TestTheDelegatedInviteScope:
+    """`onboarding.members.invite`: the manager dashboard asks onboarding to email a member.
+
+    Onboarding allows it only with a manager's verified token forwarded beside the
+    service token, so the scope alone sends nothing. What is guarded here is who
+    can ask for it, and that asking for it does not travel further than onboarding.
+    """
+
+    def test_svc_community_holds_it_as_optional_not_default(self):
+        """The Digital Twin forwards svc-community's default-scope token to
+        dataset-api. A send capability must not ride along."""
+        community = next(c for c in _config().clients if c.client_id == COMMUNITY)
+        assert INVITE in community.optional_scopes
+        assert INVITE not in community.default_scopes
+
+    def test_svc_community_holds_no_other_onboarding_scope(self):
+        community = next(c for c in _merged().clients if c.client_id == COMMUNITY)
+        assert _explicit_onboarding_scopes(community) == {INVITE}
+
+    def test_svc_community_is_the_only_explicit_holder(self):
+        """Over the base file and the ds-host overlay. `onboarding.admin` also
+        satisfies it, and onboarding still refuses such a caller without a
+        manager's token."""
+        for config in (_config(), _merged()):
+            holders = {
+                c.client_id
+                for c in config.clients
+                if INVITE in set(c.default_scopes) | set(c.optional_scopes)
+            }
+            assert holders == {COMMUNITY}
+
+    def test_the_scope_earns_svc_community_an_audience_onto_onboarding(self):
+        config = _config()
+        community = next(c for c in config.clients if c.client_id == COMMUNITY)
+        audiences = community.desired_audiences(config.build_prefix_to_client_map())
+        assert "svc-onboarding" in audiences
+        assert "svc-provisioning" not in audiences
+
+    def test_a_sync_plans_an_optional_assignment_and_the_mapper(self):
+        from celine.policies.cli.keycloak.client import CurrentState
+        from celine.policies.cli.keycloak.sync import compute_sync_plan
+
+        plan = compute_sync_plan(_config(), CurrentState())
+
+        assignments = {
+            (a.client_id, a.scope_name, a.assignment_type)
+            for a in plan.scope_assignments_to_add
+            if a.client_id == COMMUNITY and a.scope_name.startswith("onboarding.")
+        }
+        assert assignments == {(COMMUNITY, INVITE, "optional")}
+        mappers = {
+            a.audience_client_id
+            for a in plan.audience_mappers_to_add
+            if a.client_id == COMMUNITY
+        }
+        assert "svc-onboarding" in mappers

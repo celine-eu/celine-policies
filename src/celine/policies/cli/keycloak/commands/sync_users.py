@@ -22,6 +22,7 @@ from celine.policies.cli.keycloak.client import (
     ROLE_HIERARCHY,
 )
 from celine.policies.cli.keycloak.models import KeycloakConfig
+from celine.policies.cli.keycloak.platform import require_platform
 from celine.policies.cli.keycloak.registry import (
     RegistryError,
     fetch_rec_documents,
@@ -36,6 +37,7 @@ from celine.policies.cli.keycloak.commands._utils import (
     load_rec_participants,
     participant_username,
     read_rec_documents,
+    require_realm_claim_scopes,
 )
 from celine.provisioning import OrganizationSpec, Provisioner
 from celine.provisioning.invitation import INVITE_ACTIONS, EmailPolicy
@@ -357,7 +359,7 @@ def sync_users(
         typer.Option(
             "--clients-config",
             "-c",
-            help="Path to clients YAML (oauth2_proxy_client field used for org scope assignment)",
+            help="Path to clients YAML (admin_permissions groups participants are added to)",
         ),
     ] = Path("./clients.yaml"),
     # Reading the live registry instead of a file
@@ -532,7 +534,6 @@ def sync_users(
         typer.secho(f"Error reading {source}: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
 
-    oauth2_proxy_client: str | None = None
     # Groups some client's service account is declared to administer. A
     # participant this command creates outside them is invisible to that
     # service: it attempts a create, gets 409, scans the group and does not find
@@ -542,7 +543,6 @@ def sync_users(
     if clients_config.exists():
         try:
             kc_config = KeycloakConfig.from_yaml(clients_config)
-            oauth2_proxy_client = kc_config.oauth2_proxy_client
             if admin_groups:
                 admin_group_owners = kc_config.admin_permission_group_paths()
         except Exception as e:
@@ -628,7 +628,6 @@ def sync_users(
                 kc_settings=kc_settings,
                 sync_settings=sync_settings,
                 communities=communities_to_sync,
-                oauth2_proxy_client=oauth2_proxy_client,
                 admin_group_paths=list(admin_group_owners),
                 reset_password=reset_password,
                 temporary=sync_settings.temporary,
@@ -692,7 +691,6 @@ async def _async_sync_users(
     kc_settings: "KeycloakSettings",
     sync_settings: "SyncUsersSettings",
     communities: list[CommunityPlan],
-    oauth2_proxy_client: str | None = None,
     admin_group_paths: list[str] | None = None,
     reset_password: bool = False,
     temporary: bool = True,
@@ -705,8 +703,8 @@ async def _async_sync_users(
     **once**, and the community-level work runs once per community. Before this
     was split there was only one community per run, so the two were interleaved
     and the distinction did not exist; reconciling every REC in one pass is what
-    makes it matter, since claim scopes, realm groups and the oauth2-proxy
-    audience mapper are properties of the realm and not of a REC.
+    makes it matter. The realm half writes nothing any more: it checks the
+    platform and clients levels this command depends on, and resolves groups.
 
     `admin_group_paths` are the groups `clients.yaml` declares a service account
     may administer. Every participant is added to them whether the account was
@@ -726,7 +724,6 @@ async def _async_sync_users(
             kc,
             kc_settings=kc_settings,
             sync_settings=sync_settings,
-            oauth2_proxy_client=oauth2_proxy_client,
             admin_group_paths=admin_group_paths,
         )
 
@@ -756,7 +753,6 @@ async def _ensure_realm_scaffold(
     *,
     kc_settings: "KeycloakSettings",
     sync_settings: "SyncUsersSettings",
-    oauth2_proxy_client: str | None,
     admin_group_paths: list[str] | None,
 ) -> dict[str, str]:
     """Everything that is true of the realm rather than of one community.
@@ -764,37 +760,13 @@ async def _ensure_realm_scaffold(
     Returns the realm group paths every participant is added to, resolved to
     ids. Resolution happens here — before any user is touched — so a run does
     not stop half way leaving some participants filed and some not.
+
+    Nothing here writes the realm. Organizations are platform level
+    (`bootstrap`) and the claim scopes clients level (`sync`): both are checked,
+    in a dry run too, and a realm without them is refused with the command to run.
     """
-    if not sync_settings.dry_run:
-        enabled = await kc.ensure_organizations_enabled()
-        if enabled:
-            typer.echo("  ! Organizations enabled on realm")
-
-        # Provision realm claim scopes (organization, groups) — same as keycloak sync
-        claim_changed = await kc.ensure_realm_claim_scopes(oauth2_proxy_client)
-        if claim_changed:
-            typer.echo("  ! realm claim scopes (organization, groups) provisioned")
-
-        if oauth2_proxy_client:
-            oauth2_client = await kc.get_client_by_client_id(oauth2_proxy_client)
-            if oauth2_client:
-                aud_added = await kc.ensure_audience_mapper(
-                    oauth2_client["id"], oauth2_proxy_client
-                )
-                if aud_added:
-                    typer.echo(
-                        f"  ! audience mapper added to client '{oauth2_proxy_client}'"
-                    )
-            else:
-                logger.warning(
-                    "Client '%s' not found — skipping mapper setup",
-                    oauth2_proxy_client,
-                )
-
-        # Ensure realm-level groups exist
-        realm_groups_changed = await kc.ensure_realm_groups()
-        if realm_groups_changed:
-            typer.echo("  ! realm groups (admins, managers, editors, viewers) provisioned")
+    await require_platform(kc, organizations=True)
+    await require_realm_claim_scopes(kc)
 
     # --- Explicit realm groups from --group (fail fast if missing) ----------
     extra_group_ids: dict[str, str] = {}

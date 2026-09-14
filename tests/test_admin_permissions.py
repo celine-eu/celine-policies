@@ -298,7 +298,7 @@ class TestInertWhenNothingDeclaresIt:
         )
         plan = compute_sync_plan(config, current)
 
-        assert plan.enable_admin_permissions is False
+        assert plan.admin_permissions_off is False
         assert plan.admin_permissions_to_add == []
         assert plan.admin_permissions_to_update == []
         assert plan.admin_permissions_to_remove == []
@@ -306,7 +306,7 @@ class TestInertWhenNothingDeclaresIt:
 
     def test_the_realm_flag_is_not_turned_on_for_a_declaration_of_no_groups(self):
         plan = compute_sync_plan(a_config(a_client(groups=[])), CurrentState())
-        assert plan.enable_admin_permissions is False
+        assert plan.admin_permissions_off is False
 
 
 class TestPlanningTheGrant:
@@ -322,16 +322,18 @@ class TestPlanningTheGrant:
         assert action.group_path == "/participants"
         assert action.scopes == ["manage-members", "view-members"]
 
-    def test_a_realm_without_the_feature_on_is_turned_on(self):
+    def test_a_realm_without_the_feature_on_is_flagged_not_turned_on(self):
+        """The realm flag is platform level: `bootstrap` sets it, `sync` refuses."""
         config = a_config(a_client(groups=[("/participants", ["view-members"])]))
         plan = compute_sync_plan(config, CurrentState(admin_permissions_enabled=False))
-        assert plan.enable_admin_permissions is True
+        assert plan.admin_permissions_off is True
+        assert "keycloak bootstrap" in plan.summary()
 
     def test_a_realm_already_enabled_is_left_alone(self):
         config = a_config(a_client(groups=[("/participants", ["view-members"])]))
         current = granted("svc-onboarding", "/participants", {"view-members"})
         plan = compute_sync_plan(config, current)
-        assert plan.enable_admin_permissions is False
+        assert plan.admin_permissions_off is False
 
     def test_an_identical_grant_plans_nothing(self):
         """Idempotence: a second run must plan no admin-permission action."""
@@ -743,7 +745,7 @@ class TestTheRealDeclaration:
 
         plan = compute_sync_plan(config, CurrentState())
 
-        assert plan.enable_admin_permissions is False
+        assert plan.admin_permissions_off is False
         assert plan.admin_permissions_to_add == []
         assert plan.admin_permissions_to_update == []
 

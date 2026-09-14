@@ -92,7 +92,9 @@ def test_svc_community_holds_no_provisioning_scope():
     community = _client(_merged(), "svc-community")
 
     assert _provisioning_scopes(community) == set()
-    assert community.optional_scopes == []
+    # Its one optional scope is onboarding's, which is how it reaches the
+    # provisioning service instead.
+    assert community.optional_scopes == ["onboarding.members.invite"]
 
 
 def test_nobody_else_gets_a_token_addressed_to_the_service():

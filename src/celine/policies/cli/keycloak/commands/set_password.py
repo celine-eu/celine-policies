@@ -18,6 +18,7 @@ from celine.policies.cli.keycloak.client import (
     KeycloakAuthError,
     KeycloakError,
 )
+from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.policies.cli.keycloak.commands._utils import (
     configure_logging,
     build_settings,
@@ -63,13 +64,26 @@ def set_password(
         typer.Option("--secrets-file", "-s", help="Path to secrets file for auth"),
     ] = None,
 ) -> None:
-    """Set the password for a Keycloak user.
+    """Set the password for a Keycloak user. Development realms only (ENV=dev).
+
+    Accounts outside dev get their password from the invitation email, and a
+    password somebody typed on a command line is in their shell history.
 
     Examples:
-        celine-policies keycloak set-password ah-00001 Demo@2025
-        celine-policies keycloak set-password ah-00001 Demo@2025 --permanent
+        ENV=dev celine-policies keycloak set-password ah-00001 Demo@2025
+        ENV=dev celine-policies keycloak set-password ah-00001 Demo@2025 --permanent
     """
     configure_logging(verbose)
+
+    if KeycloakSettings().is_production:
+        typer.secho(
+            "Error: set-password runs only on a development realm. Set ENV=dev (or "
+            "local, test, ci) if this is one; otherwise send the account an "
+            "invitation or a password reset.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
 
     settings = build_settings(
         base_url=base_url,

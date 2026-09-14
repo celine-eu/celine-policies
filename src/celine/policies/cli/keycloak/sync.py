@@ -166,7 +166,11 @@ class SyncPlan:
     # scope list rewrites it, both without --prune. A managed permission that no
     # longer matches what the file says is drift, not an orphan — leaving it
     # would be the same silent disagreement in the other direction.
-    enable_admin_permissions: bool = False
+    #
+    # `admin_permissions_off` is not an action: the realm flag belongs to
+    # `keycloak bootstrap` (platform.yaml). A declaration that needs it on a realm
+    # where it is off makes the sync refuse to grant, and says what to run.
+    admin_permissions_off: bool = False
     admin_permissions_to_add: list[AdminPermissionAction] = field(default_factory=list)
     admin_permissions_to_update: list[AdminPermissionAction] = field(
         default_factory=list
@@ -198,7 +202,6 @@ class SyncPlan:
             or self.scope_assignments_to_remove
             or self.audience_mappers_to_add
             or self.audience_mappers_to_remove
-            or self.enable_admin_permissions
             or self.admin_permissions_to_add
             or self.admin_permissions_to_update
             or self.admin_permissions_to_remove
@@ -270,10 +273,10 @@ class SyncPlan:
                     f"  - {action.client_id} -> aud:{action.audience_client_id}"
                 )
 
-        if self.enable_admin_permissions:
+        if self.admin_permissions_off:
             lines.append(
-                "Realm: enable fine-grained admin permissions "
-                "(existing realm-management roles are unaffected)"
+                "Realm: fine-grained admin permissions are off, and admin_permissions "
+                "are declared. Run `keycloak bootstrap` first; no grant is applied."
             )
 
         if self.admin_permissions_to_add:
@@ -362,7 +365,6 @@ class SyncResult:
     client_secrets: dict[str, str] = field(default_factory=dict)
 
     # Fine-grained admin permissions, as (client_id, group_path) pairs.
-    admin_permissions_enabled: bool = False
     admin_permissions_granted: list[tuple[str, str]] = field(default_factory=list)
     admin_permissions_changed: list[tuple[str, str]] = field(default_factory=list)
     admin_permissions_revoked: list[tuple[str, str]] = field(default_factory=list)
@@ -425,8 +427,6 @@ class SyncResult:
             for client_id, aud in self.audience_mappers_removed:
                 lines.append(f"  - {client_id} -> aud:{aud}")
 
-        if self.admin_permissions_enabled:
-            lines.append("Enabled fine-grained admin permissions on the realm")
         if self.admin_permissions_granted:
             lines.append(
                 f"Granted {len(self.admin_permissions_granted)} admin permissions"
@@ -720,7 +720,7 @@ def compute_sync_plan(
     declaring = config.clients_with_admin_permissions()
 
     if declaring and not current.admin_permissions_enabled:
-        plan.enable_admin_permissions = True
+        plan.admin_permissions_off = True
 
     desired_by_client: dict[str, dict[str, list[str]]] = {
         client.client_id: {
@@ -1408,6 +1408,14 @@ async def apply_sync_plan(
     return result
 
 
+#: Why a sync with admin_permissions declared grants nothing on this realm.
+ADMIN_PERMISSIONS_OFF = (
+    "admin_permissions are declared but fine-grained admin permissions are off on "
+    "the realm; run `celine-policies keycloak bootstrap` first (platform.yaml owns "
+    "adminPermissionsEnabled)"
+)
+
+
 async def _apply_admin_permissions(
     client: KeycloakAdminClient,
     plan: SyncPlan,
@@ -1422,22 +1430,24 @@ async def _apply_admin_permissions(
     declaration that does not use the feature — so a realm that has never heard
     of admin permissions is not even asked about them here.
 
-    Order matters within this step: the realm flag first (nothing else exists
-    until the `admin-permissions` client does), then groups, then the policy
-    that names the client, then the permissions themselves.
+    Order matters within this step: groups first, then the policy that names
+    the client, then the permissions themselves. The realm flag is not this
+    step's to set: `keycloak bootstrap` owns it, and a realm without it gets an
+    error naming that command and no grant at all.
     """
     actions = (
         plan.admin_permissions_to_add
         + plan.admin_permissions_to_update
         + plan.admin_permissions_to_remove
     )
-    if not plan.enable_admin_permissions and not actions:
+    if not plan.admin_permissions_off and not actions:
+        return
+
+    if plan.admin_permissions_off:
+        result.errors.append(ADMIN_PERMISSIONS_OFF)
         return
 
     if dry_run:
-        if plan.enable_admin_permissions:
-            logger.info("[DRY RUN] Would enable admin permissions on the realm")
-            result.admin_permissions_enabled = True
         for action in plan.admin_permissions_to_add:
             logger.info(
                 "[DRY RUN] Would grant %s -> %s (%s)",
@@ -1459,19 +1469,8 @@ async def _apply_admin_permissions(
         return
 
     ap_uuid = current.admin_permissions_client_uuid
-    if plan.enable_admin_permissions:
-        try:
-            ap_uuid, enabled = await client.ensure_admin_permissions_enabled()
-            result.admin_permissions_enabled = enabled
-        except Exception as e:
-            result.errors.append(f"Failed to enable admin permissions: {e}")
-            return
-
     if not ap_uuid:
-        result.errors.append(
-            "Admin permissions are declared but the realm has no admin-permissions "
-            "client — cannot grant them"
-        )
+        result.errors.append(ADMIN_PERMISSIONS_OFF)
         return
 
     # Revocations first: a permission being dropped may name a group that a

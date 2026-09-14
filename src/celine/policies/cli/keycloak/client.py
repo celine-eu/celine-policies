@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 # This lets us reliably identify and diff our mappers vs. manually created ones.
 AUDIENCE_MAPPER_PREFIX = "aud-"
 
+#: The realm claim scopes `ensure_realm_claim_scopes` provisions.
+REALM_CLAIM_SCOPES: tuple[str, ...] = ("organization", "groups", "dataspace")
+
 # Standard role hierarchy used at both realm and organisation level.
 # Order: most-privileged first.
 ROLE_HIERARCHY: list[str] = ["admins", "managers", "editors", "viewers"]
@@ -659,8 +662,10 @@ class KeycloakAdminClient:
     # explicitly assigned as Default on the oauth2_proxy client only.
     #
     # Single entry point: ensure_realm_claim_scopes(oauth2_proxy_client_id).
-    # Call it from any command that needs realm claim scopes to be correct —
-    # idempotent, safe to call multiple times from different commands.
+    # `keycloak sync` is its one caller (plan each-cli-command-owns-one-level,
+    # Phase 3). The organization and user commands check that the scopes exist
+    # (`REALM_CLAIM_SCOPES`) and refuse, instead of converging them a second and
+    # third time.
     # -------------------------------------------------------------------------
 
     async def _get_realm_default_client_scopes(self) -> list[dict[str, Any]]:
@@ -1306,32 +1311,6 @@ class KeycloakAdminClient:
             return None
         return (realm.get("adminPermissionsClient") or {}).get("id")
 
-    async def ensure_admin_permissions_enabled(self) -> tuple[str, bool]:
-        """Enable admin permissions on the realm if needed. Returns (uuid, changed).
-
-        Idempotent, and reversible: setting the flag back to false leaves the
-        `admin-permissions` client and every permission under it intact, and
-        re-enabling returns the same uuid.
-        """
-        existing = await self.get_admin_permissions_client_uuid()
-        if existing:
-            logger.debug("Admin permissions already enabled (%s)", existing)
-            return existing, False
-
-        realm = await self.get_realm_settings()
-        realm["adminPermissionsEnabled"] = True
-        await self.update_realm_settings(realm)
-
-        uuid = await self.get_admin_permissions_client_uuid()
-        if not uuid:
-            raise KeycloakError(
-                "Enabled adminPermissionsEnabled on the realm but Keycloak reports no "
-                "admin-permissions client. The server may be running without the "
-                "ADMIN_FINE_GRAINED_AUTHZ_V2 feature."
-            )
-        logger.info("Enabled fine-grained admin permissions on the realm (%s)", uuid)
-        return uuid, True
-
     async def list_admin_permissions(self, ap_uuid: str) -> list[dict[str, Any]]:
         """Every permission on the admin-permissions resource server."""
         return (
@@ -1883,18 +1862,6 @@ class KeycloakAdminClient:
         group_id = await self.create_group(name)
         return group_id, True
 
-    async def ensure_realm_groups(self) -> bool:
-        """Ensure the standard role-hierarchy groups exist at realm level.
-
-        Creates admins, managers, editors, viewers if absent.
-        Returns True if anything was created.
-        """
-        changed = False
-        for name in ROLE_HIERARCHY:
-            _, created = await self.ensure_group(f"/{name}")
-            changed = changed or created
-        return changed
-
     async def add_user_to_group(self, user_id: str, group_id: str) -> None:
         """Add a user to a group."""
         logger.debug("Adding user %s to group %s", user_id, group_id)
@@ -2011,7 +1978,10 @@ class KeycloakAdminClient:
                     raise
 
     # -------------------------------------------------------------------------
-    # Organizations
+    # Platform level: the realm representation, realm roles, server info
+    #
+    # Written by `keycloak bootstrap` alone (`platform.py`). Every other command
+    # reads these to check the platform is in place, and refuses if it is not.
     # -------------------------------------------------------------------------
 
     async def get_realm_settings(self) -> dict[str, Any]:
@@ -2019,22 +1989,55 @@ class KeycloakAdminClient:
         return await self._get("")
 
     async def update_realm_settings(self, settings: dict[str, Any]) -> None:
-        """Update the realm representation."""
+        """Update the realm representation.
+
+        Keycloak applies only the keys sent, so a partial representation changes
+        only those keys. A nested object (`smtpServer`, `attributes`) is replaced
+        whole, though: send one only as read back and merged.
+        """
         await self._put("", json=settings)
 
-    async def ensure_organizations_enabled(self) -> bool:
-        """Enable organizations on the realm if not already enabled.
+    async def get_server_info(self) -> dict[str, Any]:
+        """`GET /admin/serverinfo`: the server's version, features and themes.
 
-        Idempotent. Returns True if organizations were just enabled.
+        Not under the realm, so not through `_get`. Any realm-management role can
+        read it; the admin CLI client can.
         """
-        realm = await self.get_realm_settings()
-        if realm.get("organizationsEnabled"):
-            logger.info("Organizations already enabled on realm")
-            return False
-        realm["organizationsEnabled"] = True
-        await self.update_realm_settings(realm)
-        logger.info("Organizations enabled on realm")
-        return True
+        url = f"{self._settings.base_url.rstrip('/')}/admin/serverinfo"
+        response = await self._client.get(url, headers=await self._headers())
+        return self._handle_response(response)
+
+    async def get_realm_role(self, name: str) -> dict[str, Any] | None:
+        """A realm role by name, or None if the realm has none by that name."""
+        try:
+            return await self._get(f"/roles/{quote(name, safe='')}")
+        except KeycloakNotFoundError:
+            return None
+
+    async def create_realm_role(self, name: str) -> None:
+        """Create a realm role with no composites and no attributes."""
+        await self._post("/roles", json={"name": name})
+        logger.info("Created realm role: %s", name)
+
+    async def get_group_realm_role_names(self, group_id: str) -> set[str]:
+        """The realm roles mapped directly onto a group (not inherited, not composite)."""
+        roles = await self._get(f"/groups/{group_id}/role-mappings/realm") or []
+        return {r["name"] for r in roles if r.get("name")}
+
+    async def add_group_realm_role(self, group_id: str, role_name: str) -> None:
+        """Map a realm role onto a group. Additive: other mappings are kept."""
+        role = await self.get_realm_role(role_name)
+        if role is None:
+            raise KeycloakNotFoundError(f"Realm role not found: {role_name}")
+        await self._post(
+            f"/groups/{group_id}/role-mappings/realm",
+            json=[{"id": role["id"], "name": role["name"]}],
+        )
+        logger.info("Mapped realm role %s onto group %s", role_name, group_id)
+
+    # -------------------------------------------------------------------------
+    # Organizations
+    # -------------------------------------------------------------------------
 
     async def list_organizations(self, max_results: int = 1000) -> list[dict[str, Any]]:
         """List all organizations in the realm."""

@@ -191,6 +191,9 @@ check is defence in depth, for a caller already inside the network.
 **`svc-onboarding` is the only client granted a `provisioning.*` scope.** Onboarding is the
 single point of access to this service; see
 [scopes-and-permissions.md](scopes-and-permissions.md#provisioning).
+A community manager's "Send invitation" and "Reset password" on the dashboard reach
+`POST …/invitation` through onboarding's member-keyed routes. `svc-community` holds
+`onboarding.members.invite` for that, never a provisioning scope.
 
 ## PUT /participants/{community}/{key}
 

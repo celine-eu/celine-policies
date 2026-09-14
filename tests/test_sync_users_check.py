@@ -42,11 +42,10 @@ GREENLAND = CommunityPlan(
 # Every call that writes. A check that touches one of these is a sync.
 WRITES = (
     "ensure_organization",
-    "ensure_organizations_enabled",
     "ensure_org_group",
     "ensure_org_role",
     "ensure_realm_claim_scopes",
-    "ensure_realm_groups",
+    "update_realm_settings",
     "ensure_user",
     "ensure_user_in_org_group",
     "ensure_user_in_organization",

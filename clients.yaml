@@ -131,6 +131,13 @@ scopes:
     description: Read a community's onboarding audit trail
   - name: onboarding.export
     description: Export submissions or consented supply points
+  # Delegated, and useless alone: onboarding allows it only to a service that
+  # also forwards a verified manager token (X-Acting-User-Token), and only when
+  # that manager holds admins or managers on the REC. So onboarding.admin does
+  # not send either. Held by svc-community, the manager dashboard, which reaches
+  # the provisioning service only through onboarding.
+  - name: onboarding.members.invite
+    description: Email a registry member an invitation or a password reset, on behalf of the manager whose token is forwarded
 
   # Nudging
   - name: nudging.admin
@@ -409,10 +416,20 @@ clients:
       # Dependencies: the DT forwards this token to governed dataset queries.
       - digital-twin.values.read
       - dataset.query
-      # Aggregate administrative population; participant records never leave the BFF process.
+      # Aggregate population, and member names for the members page, read per
+      # request and never persisted. No email, user id, DID or supply point leaves
+      # the BFF process.
       - rec-registry.read
       # Aggregate-only operational metrics; nudging-tool retains participant records.
       - nudging.analytics.read
+    optional_scopes:
+      # Optional, not default: the Digital Twin forwards this client's
+      # default-scope token to dataset-api, and a send capability has no business
+      # travelling there. The BFF requests it only for the call to onboarding,
+      # which also requires the manager's own token. The audience onto
+      # svc-onboarding is derived from it. No provisioning.* scope, ever:
+      # onboarding is the single point of access to the provisioning service.
+      - onboarding.members.invite
 
   - client_id: svc-webapp
     name: Webapp BFF Service

@@ -1,0 +1,73 @@
+# Platform level of a CELINE realm — what `celine-policies keycloak bootstrap` owns.
+#
+# Deployment-agnostic: no hostname, credential, address or realm name. The realm is
+# CELINE_KEYCLOAK_REALM, as for every command. Baked into the celine-policies image
+# at /app/platform.yaml, beside clients.yaml.
+#
+# `bootstrap` writes only the keys named here and leaves every other realm key alone.
+# Removing a key stops `bootstrap` owning it; it does not reset the realm's value.
+#
+# Not accepted here, on purpose:
+#   smtpServer           a credential; bootstrap applies it from CELINE_KEYCLOAK_SMTP_*
+#   bruteForceProtected  CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED (on, and off when ENV is dev)
+#   verifyEmail          the invitation already verifies; turning it on would stop every
+#                        existing account with emailVerified: false at its next sign-in
+#   passwordPolicy       Keycloak's default
+#
+# A deployment may overlay `realm_settings.supportedLocales` only (`bootstrap --overlay`).
+
+realm_settings:
+  # Features other levels depend on. `sync-orgs` and `sync-users` refuse a realm
+  # without organizations; `sync` refuses to grant admin_permissions on a realm
+  # without fine-grained admin permissions.
+  organizationsEnabled: true
+  adminPermissionsEnabled: true
+
+  # Sign-in
+  editUsernameAllowed: false
+  registrationAllowed: false
+  resetPasswordAllowed: true
+  loginWithEmailAllowed: true
+  duplicateEmailsAllowed: false
+
+  # Languages. The provisioning service writes a user's `locale`, which Keycloak drops
+  # with a 201 unless internationalization is on. `rec` ships it, en and es only.
+  internationalizationEnabled: true
+  supportedLocales: [it, en, es]
+  defaultLocale: it
+
+  # Themes. `bootstrap` refuses a theme the server does not list: Keycloak itself
+  # accepts an unknown one and falls back to its own emails without a word.
+  loginTheme: rec
+  emailTheme: rec
+
+  # Tokens and sessions, in seconds (the values infra's realm template has always set)
+  accessTokenLifespan: 3600
+  accessTokenLifespanForImplicitFlow: 3600
+  ssoSessionIdleTimeout: 86400
+  ssoSessionMaxLifespan: 86400
+
+  # Emailed links, in seconds
+  actionTokenGeneratedByAdminLifespan: 604800   # 7 days, the invitation
+  actionTokenGeneratedByUserLifespan: 3600      # 1 hour, forgot-password
+
+  # Brute-force tuning. Whether protection is on at all is CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED.
+  permanentLockout: false
+  maxLoginFailures: 5
+  waitIncrementSeconds: 60
+  quickLoginCheckMilliSeconds: 1000
+  minimumQuickLoginWaitSeconds: 60
+  maxFailureWaitSeconds: 900
+  failureFactor: 50
+
+# The realm-wide role groups, each carrying the realm role of the same rank. Created
+# with the role mapped; an existing group gains a missing mapping and keeps the rest.
+role_groups:
+  - path: /admins
+    realm_role: admin
+  - path: /managers
+    realm_role: manager
+  - path: /editors
+    realm_role: editor
+  - path: /viewers
+    realm_role: viewer

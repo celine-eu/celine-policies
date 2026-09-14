@@ -18,12 +18,13 @@ from celine.policies.cli.keycloak.client import (
     KeycloakAuthError,
     KeycloakError,
 )
-from celine.policies.cli.keycloak.models import KeycloakConfig
+from celine.policies.cli.keycloak.platform import require_platform
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.policies.cli.keycloak.commands._utils import (
     configure_logging,
     build_settings,
     load_owners,
+    require_realm_claim_scopes,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,13 +63,6 @@ def sync_orgs(
         Optional[str],
         typer.Option("--admin-client-secret", help="Admin client secret  [env: CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET]"),
     ] = None,
-    clients_config: Annotated[
-        Path,
-        typer.Option(
-            "--clients-config", "-c",
-            help="Path to clients YAML (oauth2_proxy_client field used for org scope assignment)",
-        ),
-    ] = Path("./clients.yaml"),
     secrets_file: Annotated[
         Optional[Path],
         typer.Option("--secrets-file", "-s", help="Path to secrets file for auth"),
@@ -88,10 +82,11 @@ def sync_orgs(
     id collision), filters to entries where organization.create is true, and
     idempotently provisions the corresponding Keycloak organization with:
 
-      - organizations feature enabled on the realm
       - organization created (alias=id, name=name, attributes.type=[organization.role])
       - any extra key/value pairs from organization.attributes set on the KC org
-      - 'organization' scope set as default on the oauth2_proxy client
+
+    The realm must already have organizations (`keycloak bootstrap`) and its claim
+    scopes (`keycloak sync`); the command checks both and refuses otherwise.
 
     This command is idempotent — safe to run multiple times.
 
@@ -152,18 +147,6 @@ def sync_orgs(
         secrets_file=secrets_file,
     )
 
-    oauth2_proxy_client: str | None = None
-    if clients_config.exists():
-        try:
-            kc_config = KeycloakConfig.from_yaml(clients_config)
-            oauth2_proxy_client = kc_config.oauth2_proxy_client
-        except Exception as e:
-            typer.secho(
-                f"Warning: could not load clients config {clients_config}: {e}",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-
     typer.echo(f"Owners   : {', '.join(str(p) for p in resolved_yamls)}")
     typer.echo(f"Orgs     : {len(org_owners)} owner(s) with organization.create=true")
     typer.echo(f"Keycloak : {kc_settings.base_url}  realm={kc_settings.realm}")
@@ -175,7 +158,6 @@ def sync_orgs(
             _async_sync_orgs(
                 kc_settings=kc_settings,
                 org_owners=org_owners,
-                oauth2_proxy_client=oauth2_proxy_client,
                 dry_run=dry_run,
             )
         )
@@ -210,7 +192,6 @@ def _env_owners_yaml() -> str | None:
 async def _async_sync_orgs(
     kc_settings: "KeycloakSettings",
     org_owners: list[dict],
-    oauth2_proxy_client: str | None = None,
     dry_run: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
     """Idempotently provision KC organizations for owners that have a role.
@@ -223,6 +204,11 @@ async def _async_sync_orgs(
 
     async with KeycloakAdminClient(kc_settings) as kc:
         await kc.authenticate()
+
+        # Organizations are a platform feature, `bootstrap`'s to turn on, and the
+        # claim scopes are `sync`'s. Checked in a dry run too.
+        await require_platform(kc, organizations=True)
+        await require_realm_claim_scopes(kc)
 
         if dry_run:
             for owner in org_owners:
@@ -240,28 +226,6 @@ async def _async_sync_orgs(
                     )
                     created.append(alias)
             return created, skipped, errors
-
-        # --- Realm-level setup (once, idempotent) ----------------------------
-        enabled = await kc.ensure_organizations_enabled()
-        if enabled:
-            typer.echo("  ! Organizations enabled on realm")
-
-        # Provision realm claim scopes (organization, groups) — same as keycloak sync
-        claim_changed = await kc.ensure_realm_claim_scopes(oauth2_proxy_client)
-        if claim_changed:
-            typer.echo("  ! realm claim scopes (organization, groups) provisioned")
-
-        if oauth2_proxy_client:
-            proxy = await kc.get_client_by_client_id(oauth2_proxy_client)
-            if proxy:
-                aud_added = await kc.ensure_audience_mapper(proxy["id"], oauth2_proxy_client)
-                if aud_added:
-                    typer.echo(f"  ! audience mapper added to client '{oauth2_proxy_client}'")
-            else:
-                logger.warning(
-                    "Client '%s' not found — skipping mapper setup",
-                    oauth2_proxy_client,
-                )
 
         # --- Per-owner sync --------------------------------------------------
         for owner in org_owners:
