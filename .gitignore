@@ -16,3 +16,5 @@ sources.txt
 taskfile.local.yaml
 
 .agents/
+.ruff*
+.claude*
