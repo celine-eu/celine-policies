@@ -81,7 +81,6 @@ REALM_SETTING_TYPES: dict[str, str] = {
     "actionTokenGeneratedByAdminLifespan": _SECONDS,
     "actionTokenGeneratedByUserLifespan": _SECONDS,
     "permanentLockout": _BOOL,
-    "maxLoginFailures": _SECONDS,
     "waitIncrementSeconds": _SECONDS,
     "quickLoginCheckMilliSeconds": _SECONDS,
     "minimumQuickLoginWaitSeconds": _SECONDS,
@@ -406,6 +405,21 @@ def plan_smtp(desired: dict[str, str], current: dict[str, Any] | None) -> list[S
     ]
 
 
+def destructive(change: SettingChange) -> bool:
+    """A change that turns something off or takes something away (Phase 4, decision 2).
+
+    `bootstrap` never removes a key, so "remove or reset" is read as: a boolean going
+    from true to false, or a list losing an entry. A new value, a longer or shorter
+    lifespan and a different theme are updates. Outside dev such a plan needs
+    `--allow-destructive` on that run, as `sync`'s pruning needs its confirmation.
+    """
+    if change.current is True and change.desired is False:
+        return True
+    if isinstance(change.current, list) and isinstance(change.desired, list):
+        return bool(set(change.current) - set(change.desired))
+    return False
+
+
 @dataclass
 class PlatformResult:
     """What a `bootstrap` run changed, or with `dry_run`, would change."""
@@ -420,10 +434,18 @@ class PlatformResult:
     #: so it is sent on every run with SMTP authentication (requester, 2026-09-14).
     smtp_password_applied: bool = False
 
+    #: The realm did not exist and was (or would be) created first.
+    realm_created: bool = False
+
+    @property
+    def destructive(self) -> list[SettingChange]:
+        return [c for c in self.settings if destructive(c)]
+
     @property
     def changed(self) -> bool:
         return bool(
-            self.settings
+            self.realm_created
+            or self.settings
             or self.roles_created
             or self.groups_created
             or self.role_mappings_added

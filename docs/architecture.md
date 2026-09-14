@@ -48,18 +48,32 @@ rather than of any code here. See
 
 ### 3. Keycloak CLI
 
-A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. It reads `clients.yaml` — which defines all platform OAuth scopes and service clients — and idempotently provisions them in Keycloak.
+A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. Each command
+owns one level of the realm and checks the levels below it, refusing with the command to
+run instead of writing them:
+
+1. **platform** — `platform.yaml`, written by `bootstrap`;
+2. **clients** — `clients.yaml`, written by `sync`;
+3. **organizations and users** — written by `sync-orgs`, `sync-users` and the provisioning service.
 
 **Commands:**
-- `bootstrap` — create a `celine-admin-cli` service account with realm-management roles
-- `sync` — reconcile scopes, clients, audience mappers and service-account
-  administration rights in Keycloak to match `clients.yaml`
+- `bootstrap` — converge the platform level from `platform.yaml` (only the keys it declares;
+  a deployment overlay may narrow `supportedLocales` and nothing else), brute force from
+  `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `smtpServer` from `CELINE_KEYCLOAK_SMTP_*`; then
+  create or refresh the `celine-admin-cli` service account with realm-management roles.
+  It refuses a theme the server does not list. With the admin CLI client's own credentials
+  it converges the platform and skips the client
+- `sync` — reconcile scopes, clients, audience mappers, the realm claim scopes and
+  service-account administration rights in Keycloak to match `clients.yaml`. It refuses to
+  grant `admin_permissions` on a realm where `bootstrap` has not turned them on
 - `sync-users` — create Keycloak users from a `rec-registry` REC definition YAML, and
   file them in the groups `clients.yaml` declares a service account may administer.
   `--invite` creates them with no password and invites each account it created in that
   run, under the provisioning service's email settings
 - `sync-orgs` — create Keycloak organizations from an `owners.yaml`
-- `set-password` — set a user's password
+- `sync-orgs` and `sync-users` refuse a realm without Organizations (`bootstrap`) or without
+  the realm claim scopes (`sync`), in a dry run too
+- `set-password` — set a user's password; development realms only (`ENV=dev`)
 - `set-user-organization` — assign a user to organizations and org-level groups
 - `status` — show current scopes, clients, and assignments
 

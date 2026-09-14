@@ -530,9 +530,11 @@ when the file is loaded instead.
 ### What sync does with it
 
 On a realm that declares nothing, nothing — no request is made and no action is planned.
-Where a client does declare it, `sync` enables fine-grained admin permissions on the realm
-(which leaves existing `realm-management` role grants working exactly as before), ensures
-the group exists, and creates one policy and one permission per declared group.
+Where a client does declare it, `sync` checks that `keycloak bootstrap` has enabled
+fine-grained admin permissions on the realm (`adminPermissionsEnabled` in `platform.yaml`,
+which leaves existing `realm-management` role grants working exactly as before) and refuses
+otherwise, ensures the group exists, and creates one policy and one permission per declared
+group. See [ADR-0008](decisions/ADR-0008-each-cli-command-owns-one-level-of-the-realm.md).
 
 It converges in both directions without `--prune`: narrowing the scope list rewrites the
 permission, and removing a group from the declaration revokes it. Only permissions named

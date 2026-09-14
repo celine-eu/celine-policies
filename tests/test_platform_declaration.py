@@ -108,6 +108,30 @@ class TestTheShippedDeclaration:
 # ---------------------------------------------------------------------------
 
 
+class TestEveryAcceptedKeyIsAKeycloakKey:
+    """A key Keycloak does not have is a `400` on the whole realm `PUT`.
+
+    Caught on a real 26.7.3: `maxLoginFailures`, copied from infra's realm template, is
+    not a field of any realm representation (`failureFactor` is "max login failures"),
+    and `bootstrap` failed on its first real run. The fixture is the key set a 26.7.3
+    realm reads back.
+    """
+
+    KEYS = {
+        line.strip()
+        for line in (REPO_ROOT / "tests" / "fixtures" / "keycloak-26.7.3-realm-keys.txt").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+    def test_every_accepted_key_exists_on_the_server(self):
+        from celine.policies.cli.keycloak.platform import REALM_SETTING_TYPES
+
+        assert set(REALM_SETTING_TYPES) - self.KEYS == set()
+
+    def test_the_keys_bootstrap_writes_from_the_environment_exist(self):
+        assert {"bruteForceProtected", "smtpServer"} <= self.KEYS
+
+
 class TestWhatADeclarationMaySay:
     @pytest.mark.parametrize("key", sorted(REFUSED_REALM_SETTINGS))
     def test_a_refused_key_is_refused_with_its_reason(self, tmp_path, key):
@@ -418,8 +442,8 @@ class TestBootstrapWritesOnlyDeclaredKeys:
 
     @pytest.mark.asyncio
     async def test_brute_force_comes_from_the_run_not_the_file(self, tmp_path):
-        declaration = a_declaration(tmp_path, "maxLoginFailures: 5")
-        kc = FakeRealm({"maxLoginFailures": 5, "bruteForceProtected": False})
+        declaration = a_declaration(tmp_path, "failureFactor: 5")
+        kc = FakeRealm({"failureFactor": 5, "bruteForceProtected": False})
 
         result = await converge(kc, declaration, brute_force_protected=True)
 

@@ -1,10 +1,12 @@
 """keycloak bootstrap command.
 
 Usage:
-    celine-policies keycloak bootstrap [platform.yaml] [--overlay FILE ...] [--dry-run]
+    celine-policies keycloak bootstrap [platform.yaml] [--overlay FILE ...] [--dry-run | --check]
+        [--export FILE] [--allow-destructive]
 
 The platform level of the realm, and nothing else (plan each-cli-command-owns-one-level):
 
+0. **The realm itself**, created empty if it does not exist. That needs the master admin.
 1. **The platform declaration** (`platform.yaml`, see `keycloak/platform.py`): realm
    features, sign-in settings, languages, themes, lifespans, brute force and the role
    groups. Only the declared keys are written.
@@ -15,11 +17,16 @@ The platform level of the realm, and nothing else (plan each-cli-command-owns-on
 With the admin CLI client's own credentials instead (the environment, or the secrets
 file a first run wrote), step 1 runs and step 2 is skipped: the client holds
 `manage-realm`, which every platform setting needs (measured on 26.7.3).
+
+For a deployment job (decision 2): `--export` writes a partial export of the realm before
+any write, `--check` plans and exits 1 if anything would change, and outside dev a plan that
+turns a setting off or narrows a list is refused without `--allow-destructive`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Annotated, Optional
@@ -37,6 +44,7 @@ from celine.policies.cli.keycloak.platform import (
     PlatformDeclarationError,
     PlatformResult,
     converge_platform,
+    destructive,
     load_platform,
 )
 from celine.policies.cli.keycloak.secrets_file import merge_secrets_file
@@ -68,6 +76,26 @@ def bootstrap(
     dry_run: Annotated[
         bool,
         typer.Option("--dry-run", "-n", help="Show what would change without writing"),
+    ] = False,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check", help="Dry run that exits 1 if anything would change (a job's self-check)"
+        ),
+    ] = False,
+    export: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--export",
+            help="Write a partial export of the realm (no users; secrets masked) here before any write",
+        ),
+    ] = None,
+    allow_destructive: Annotated[
+        bool,
+        typer.Option(
+            "--allow-destructive",
+            help="Outside dev, apply a plan that turns a setting off or removes a list entry",
+        ),
     ] = False,
     # Connection options
     base_url: Annotated[
@@ -111,6 +139,7 @@ def bootstrap(
         celine-policies keycloak bootstrap --admin-user admin --admin-password admin
     """
     configure_logging(verbose)
+    dry_run = dry_run or check
 
     try:
         declaration = load_platform(platform_yaml, overlay or [])
@@ -161,6 +190,8 @@ def bootstrap(
                 client_id=client_id,
                 manage_admin_client=as_admin_user,
                 dry_run=dry_run,
+                export=export,
+                allow_destructive=allow_destructive or not settings.is_production,
             )
         )
     except KeycloakAuthError as e:
@@ -178,6 +209,15 @@ def bootstrap(
         raise typer.Exit(1)
 
     _report_platform(platform, dry_run=dry_run)
+    if export is not None and not platform.realm_created:
+        typer.echo(f"\nExport   : {export}")
+
+    if check:
+        if platform.changed:
+            typer.secho("\nCheck failed: the realm differs from the declaration.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        typer.secho("\nCheck passed: nothing to change.", fg=typer.colors.GREEN)
+        return
 
     if not as_admin_user:
         typer.echo(
@@ -218,6 +258,9 @@ def bootstrap(
 def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
     verb = "would change" if dry_run else "changed"
     typer.echo(f"\nPlatform level ({verb}):")
+    if result.realm_created:
+        state = "would be created; nothing else can be planned until it exists" if dry_run else "created"
+        typer.secho(f"  + realm {state}", fg=typer.colors.GREEN)
     if result.smtp_password_applied:
         # Never the value, in any environment: nothing compares it, so nothing needs it.
         state = "would be sent" if dry_run else "sent"
@@ -226,8 +269,10 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
         typer.echo("  ✓ no change")
         return
     for change in result.settings + result.smtp:
+        mark = "!" if destructive(change) else "~"
+        note = "  [destructive]" if mark == "!" else ""
         typer.secho(
-            f"  ~ {change.key}: {change.current!r} -> {change.desired!r}  ({change.source})",
+            f"  {mark} {change.key}: {change.current!r} -> {change.desired!r}  ({change.source}){note}",
             fg=typer.colors.YELLOW,
         )
     for role in result.roles_created:
@@ -270,8 +315,10 @@ async def _async_bootstrap(
     client_id: str,
     manage_admin_client: bool,
     dry_run: bool,
+    export: Path | None = None,
+    allow_destructive: bool = True,
 ) -> tuple[PlatformResult, tuple[str, bool]]:
-    """Converge the platform, then the admin CLI client.
+    """Create the realm if absent, converge the platform, then the admin CLI client.
 
     Returns the platform result and `(secret, created)` for the admin client —
     `("", created)` when it was skipped or this is a dry run.
@@ -279,13 +326,33 @@ async def _async_bootstrap(
     async with KeycloakAdminClient(settings) as client:
         await client.authenticate()
 
-        platform = await converge_platform(
-            client,
-            declaration,
-            brute_force_protected=settings.brute_force_protected,
-            smtp=SmtpSettings(),
-            dry_run=dry_run,
+        realm_created = False
+        if not await client.realm_exists():
+            if not manage_admin_client:
+                raise KeycloakError(
+                    f"realm '{settings.realm}' does not exist; creating it needs the master "
+                    f"admin (--admin-user and --admin-password)"
+                )
+            if dry_run:
+                return PlatformResult(realm_created=True), ("", True)
+            await client.create_realm()
+            realm_created = True
+        elif export is not None:
+            export.write_text(json.dumps(await client.partial_export(), indent=1, sort_keys=True))
+
+        converge = dict(
+            brute_force_protected=settings.brute_force_protected, smtp=SmtpSettings()
         )
+        platform = await converge_platform(client, declaration, dry_run=True, **converge)
+        if not dry_run:
+            if platform.destructive and not allow_destructive:
+                raise PlatformDeclarationError(
+                    "the plan turns off or narrows "
+                    f"{[c.key for c in platform.destructive]}; outside dev that needs "
+                    "--allow-destructive on this run"
+                )
+            platform = await converge_platform(client, declaration, dry_run=False, **converge)
+        platform.realm_created = realm_created
 
         if not manage_admin_client:
             return platform, ("", False)

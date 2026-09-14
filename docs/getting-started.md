@@ -27,15 +27,26 @@ docker compose up keycloak -d
 
 Or use an existing Keycloak instance and set `CELINE_KEYCLOAK_BASE_URL`.
 
-### Step 2: Bootstrap Admin Client
-
-Create a `celine-admin-cli` service account in Keycloak with realm-management roles:
+### Step 2: Bootstrap the Platform and the Admin Client
 
 ```bash
-celine-policies keycloak bootstrap --admin-user admin --admin-password admin
+ENV=dev celine-policies keycloak bootstrap --admin-user admin --admin-password admin
 ```
 
-This writes the client secret to `.client.secrets.yaml`. Subsequent commands auto-load credentials from this file.
+This does two things, in order:
+
+1. **Converges the realm's platform level** from [`platform.yaml`](../platform.yaml):
+   Organizations, fine-grained admin permissions, sign-in settings, languages, themes,
+   lifespans and the realm role groups. Only the keys the file names are written.
+   Brute-force protection comes from `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` (on by default,
+   off under `ENV=dev`), and `smtpServer` from `CELINE_KEYCLOAK_SMTP_*` when
+   `CELINE_KEYCLOAK_SMTP_HOST` is set. `--dry-run` shows what would change.
+2. **Creates a `celine-admin-cli` service account** with realm-management roles, and writes
+   its secret to `.client.secrets.yaml`. Subsequent commands auto-load credentials from this
+   file. The secret is printed only under a development `ENV`.
+
+The emails and login pages need the `rec` theme, so `bootstrap` refuses a Keycloak that
+does not list it: use this repository's `keycloak` image, not the stock one.
 
 The file is the store of the credentials the CLI authenticates with, not a log of the last run: `bootstrap` and `sync` both merge into it, so neither deletes what the other wrote. It holds one realm's credentials — pointing a command at a different realm replaces its contents, and says so.
 
@@ -63,6 +74,9 @@ celine-policies keycloak sync-users ../rec-registry/recs/rec-example.yaml \
 ```
 
 The `--mock` flag fills placeholder email/name fields for development.
+
+`sync-users` and `sync-orgs` write no realm setting: they refuse a realm that `bootstrap`
+and `sync` have not prepared, and say which to run.
 
 Participants are also added to any group `clients.yaml` declares under
 `admin_permissions`, so the service account granted over that group can see them — run

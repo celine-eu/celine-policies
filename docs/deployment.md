@@ -21,7 +21,7 @@ The `docker-compose.yaml` defines the full development stack:
 ### Startup Order
 
 1. **keycloak** starts first (health check on port 9000)
-2. **keycloak-sync** runs bootstrap + sync, then exits
+2. **keycloak-sync** runs bootstrap (the platform level, from the mounted `platform.yaml`) + sync, then exits
 3. **sync-users** imports example users, then exits
 4. **mqtt_auth** starts after keycloak-sync and sync-users complete
 5. **provisioning** starts after keycloak-sync completes — it authenticates as
@@ -52,36 +52,60 @@ put into an email. What each route sends is in the
 
 ### What a realm needs, and who owns it
 
-| Setting | Owner | Notes |
+Every setting below is **platform level**, and `keycloak bootstrap` is its only writer. It
+reaches existing realms on every run, which the realm imports never do (`--import-realm` and
+infra's `IGNORE_EXISTING` skip a realm that already exists).
+
+| Setting | Declared in | Notes |
 |---|---|---|
-| `internationalizationEnabled: true`, `supportedLocales: [it, en, es]`, `defaultLocale: it` | `keycloak bootstrap` (planned, not built yet) | **Must be on before the provisioning service writes `locale`**: without it Keycloak answers `201` and drops the value |
-| `emailTheme: rec`, `resetPasswordAllowed: true`, `actionTokenGeneratedByAdminLifespan: 604800`, `actionTokenGeneratedByUserLifespan: 3600` | `keycloak bootstrap` (planned, not built yet) | Until then, set by hand on each realm |
-| `smtpServer` | infra, and only infra, outside dev | A credential. The realm template reaches new realms only; an existing realm gets it once, by hand. The local dev import points it at `mailpit` (requester, 2026-09-14) |
+| `internationalizationEnabled: true`, `supportedLocales: [it, en, es]`, `defaultLocale: it` | [`platform.yaml`](../platform.yaml) | **Must be on before the provisioning service writes `locale`**: without it Keycloak answers `201` and drops the value. So `bootstrap` runs before the new provisioning image reaches a realm |
+| `emailTheme: rec`, `loginTheme: rec`, `resetPasswordAllowed: true`, `actionTokenGeneratedByAdminLifespan: 604800`, `actionTokenGeneratedByUserLifespan: 3600` | `platform.yaml` | `bootstrap` refuses a theme the server does not list: Keycloak itself accepts any name and silently sends its own emails |
+| token and session lifespans, `organizationsEnabled`, `adminPermissionsEnabled`, the role groups, brute-force tuning | `platform.yaml` | `sync-orgs` and `sync-users` refuse a realm without Organizations; `sync` refuses to grant `admin_permissions` without fine-grained admin permissions |
+| `bruteForceProtected` | `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` | Unset: on, and off when `ENV` is `dev`, `development`, `local`, `test` or `ci` |
+| `smtpServer` | `CELINE_KEYCLOAK_SMTP_*`, fed from the deployment's secret | Below. Unset `CELINE_KEYCLOAK_SMTP_HOST`: left alone |
+| `supportedLocales`, narrower | a deployment overlay, `bootstrap --overlay <file>` | The only key an overlay may change. It must keep `defaultLocale` (`it`) and name only `it`, `en`, `es` |
 
-`bootstrap` does not own these yet: that waits on `bootstrap` gaining its platform
-settings. **Until it does, an operator sets them on each realm**, for example with `kcadm`:
+`verifyEmail` is deliberately **not** declared, and `platform.yaml` refuses it: the invitation
+already carries `VERIFY_EMAIL`, and turning it on would stop every existing account with
+`emailVerified: false` at its next sign-in. `passwordPolicy` stays at Keycloak's default.
 
-```bash
-kcadm.sh update realms/celine \
-  -s internationalizationEnabled=true -s 'supportedLocales=["it","en","es"]' -s defaultLocale=it \
-  -s emailTheme=rec -s resetPasswordAllowed=true \
-  -s actionTokenGeneratedByAdminLifespan=604800 -s actionTokenGeneratedByUserLifespan=3600
+A deployment overlay has the same shape as `platform.yaml`:
+
+```yaml
+realm_settings:
+  supportedLocales: [it, en]
 ```
 
-`verifyEmail` is deliberately **not** set: the invitation already carries `VERIFY_EMAIL`,
-and turning it on would stop every existing account with `emailVerified: false` at its next
-sign-in. `passwordPolicy` stays at Keycloak's default.
+`bootstrap` prints the file each changed key came from.
+
+#### SMTP
+
+| Variable | Default | |
+|---|---|---|
+| `CELINE_KEYCLOAK_SMTP_HOST` | — | Unset or empty: `smtpServer` is not touched |
+| `CELINE_KEYCLOAK_SMTP_PORT` | `587` | |
+| `CELINE_KEYCLOAK_SMTP_FROM` | — | Required with a host |
+| `CELINE_KEYCLOAK_SMTP_FROM_DISPLAY_NAME`, `CELINE_KEYCLOAK_SMTP_REPLY_TO` | — | |
+| `CELINE_KEYCLOAK_SMTP_SSL`, `CELINE_KEYCLOAK_SMTP_STARTTLS` | `false` | |
+| `CELINE_KEYCLOAK_SMTP_AUTH` | true when a user is set | |
+| `CELINE_KEYCLOAK_SMTP_USER`, `CELINE_KEYCLOAK_SMTP_PASSWORD` | — | Both required with authentication. Pass the password from a secret |
+
+Keycloak never returns the stored SMTP password, so `bootstrap` cannot compare it. Every other
+field is diffed. The password is **sent on every run** and reported as
+`smtpServer.password: write-only`, which is not a change: a second run still reports
+`no change`. `bootstrap` never prints the password, in any environment.
 
 ### Locally
 
 `mailpit` keeps every message in its UI at <http://localhost:8025> and delivers none.
 The dev import (`config/keycloak/import/realm-celine.json`) points `smtpServer` at
-`mailpit:1025`, which reaches **a realm created from it only** — `--import-realm` skips a
-realm that already exists. On an existing local realm, set it once:
+`mailpit:1025`, which reaches **a realm created from it only**. On an existing local realm,
+let `bootstrap` set it (the host is as Keycloak's container sees it):
 
 ```bash
-kcadm.sh update realms/celine -s 'smtpServer.host=mailpit' -s 'smtpServer.port=1025' \
-  -s 'smtpServer.from=noreply@celine.localhost' -s 'smtpServer.fromDisplayName=CELINE'
+CELINE_KEYCLOAK_SMTP_HOST=mailpit CELINE_KEYCLOAK_SMTP_PORT=1025 \
+CELINE_KEYCLOAK_SMTP_FROM=noreply@celine.localhost CELINE_KEYCLOAK_SMTP_FROM_DISPLAY_NAME=CELINE \
+  task keycloak:bootstrap
 ```
 
 Other workspace services can send through it too: SMTP is published on the host's 1025, so

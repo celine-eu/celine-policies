@@ -8,10 +8,19 @@ This repository provides three services:
 2. **`provisioning`** — A FastAPI service that is the **only writer of participant accounts** in the celine realm: it ensures an account, its REC organization and its org group, and it sweeps a community from the registry. It holds realm-wide Keycloak administration and therefore has **no public route** — see [ADR-0007](docs/decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
 3. **`celine-policies` CLI** — A typer-based CLI that performs idempotent synchronization of OAuth scopes, service clients, users, and organizations into Keycloak.
 
-The line between the CLI and the provisioning service is **who drives the state**, not how
-often it changes: clients, scopes, audience mappers and realm groups are driven by
-`clients.yaml` and belong to `keycloak sync`; REC organizations, org groups, participants
-and memberships are driven by the registry and belong to the service.
+Each CLI command owns **one level** of the realm, and the line is **who drives the state**,
+not how often it changes:
+
+| Level | Written by | Declared in |
+|---|---|---|
+| **platform**: realm features (Organizations, fine-grained admin permissions), sign-in settings, languages, themes, token lifespans, brute force, `smtpServer`, the realm role groups | `keycloak bootstrap` | [`platform.yaml`](platform.yaml), `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `CELINE_KEYCLOAK_SMTP_*` |
+| **clients**: clients, scopes, scope bindings, audience mappers, realm claim scopes, service-account grants | `keycloak sync` | `clients.yaml` |
+| **organizations and users**: REC organizations, org groups, participants, memberships | the provisioning service, `keycloak sync-orgs`, `keycloak sync-users` | the registry, owners and REC YAML |
+
+A command never writes a level it does not own. It checks the levels it depends on and
+refuses, naming the command to run. So the order is `bootstrap`, then `sync`, then the
+organization and user commands, and re-running all three is how to answer "is this realm
+right?".
 
 It also ships a custom Keycloak Docker image with the `rec` login and email themes (see [`keycloak/README.md`](keycloak/README.md)).
 
@@ -90,11 +99,11 @@ celine-policies/
 ## CLI Commands
 
 ```bash
-celine-policies keycloak bootstrap       # Create admin-cli service account in Keycloak
+celine-policies keycloak bootstrap       # Converge platform.yaml; create the admin-cli service account
 celine-policies keycloak sync            # Sync clients.yaml scopes/clients to Keycloak
 celine-policies keycloak sync-users      # Import users from REC registry YAML
 celine-policies keycloak sync-orgs       # Import organizations from owners YAML
-celine-policies keycloak set-password    # Set a user's password
+celine-policies keycloak set-password    # Set a user's password (development realms only)
 celine-policies keycloak set-user-organization  # Assign user to org + groups
 celine-policies keycloak status          # Show current Keycloak state
 ```

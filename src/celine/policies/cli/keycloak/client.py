@@ -1997,6 +1997,35 @@ class KeycloakAdminClient:
         """
         await self._put("", json=settings)
 
+    async def realm_exists(self) -> bool:
+        """Whether the target realm exists. A 403 is not an answer, so it raises."""
+        try:
+            await self._get("")
+            return True
+        except KeycloakNotFoundError:
+            return False
+
+    async def create_realm(self) -> None:
+        """Create the target realm, empty and enabled.
+
+        Needs the master admin: measured on 26.7.3, a realm's own service account
+        holding every realm-management role gets a 403.
+        """
+        url = f"{self._settings.base_url.rstrip('/')}/admin/realms"
+        response = await self._client.post(
+            url, headers=await self._headers(), json={"realm": self._settings.realm, "enabled": True}
+        )
+        self._handle_response(response, expected_status=[201])
+        logger.info("Created realm: %s", self._settings.realm)
+
+    async def partial_export(self) -> dict[str, Any]:
+        """`POST …/partial-export` with clients, groups and roles, and no users.
+
+        Keycloak masks every client secret and the SMTP password in it (measured on
+        26.7.3). Service-account users do come with the clients.
+        """
+        return await self._post("/partial-export?exportClients=true&exportGroupsAndRoles=true")
+
     async def get_server_info(self) -> dict[str, Any]:
         """`GET /admin/serverinfo`: the server's version, features and themes.
 

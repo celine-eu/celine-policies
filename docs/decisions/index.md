@@ -45,3 +45,4 @@ edited to say something else.
 | [ADR-0005](ADR-0005-sync-users-files-participants-in-the-administered-group.md) | `sync-users` files participants in the group the declaration administers — *superseded by ADR-0007* |
 | [ADR-0006](ADR-0006-the-registry-is-the-source-of-members.md) | The REC registry is the source of members, and a YAML file is a seed |
 | [ADR-0007](ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md) | Realm-wide administration is declarable, for a holder with no public route |
+| [ADR-0008](ADR-0008-each-cli-command-owns-one-level-of-the-realm.md) | Each CLI command owns one level of the realm, and checks the levels below it; `bootstrap` owns the platform level (supersedes ADR-0003's enabling of admin permissions by `sync`) |

@@ -1,0 +1,64 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Test
+        run: uv run pytest
+
+  # Decision 1 of plan each-cli-command-owns-one-level: the realm import is dropped only
+  # once a realm built by `bootstrap` alone equals one built from the import, at platform
+  # level. This job is that proof. See tests/integration/test_realm_parity.py.
+  realm-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build the Keycloak image (with the rec themes)
+        run: docker build -t celine-keycloak:parity keycloak
+
+      - name: Start an imported and an empty Keycloak
+        run: |
+          common="-e KC_DB=dev-file -e KC_HTTP_ENABLED=true -e KC_HOSTNAME_STRICT=false \
+            -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin"
+          docker run -d --name kc-imported -p 8081:8080 $common \
+            -v "$PWD/config/keycloak/import:/opt/keycloak/data/import:ro" \
+            celine-keycloak:parity start-dev --import-realm
+          docker run -d --name kc-empty -p 8082:8080 $common celine-keycloak:parity start-dev
+          for port in 8081 8082; do
+            for i in $(seq 1 90); do
+              curl -sf "http://127.0.0.1:$port/realms/master/.well-known/openid-configuration" >/dev/null && break
+              sleep 2
+            done
+          done
+          curl -sf http://127.0.0.1:8081/realms/celine/.well-known/openid-configuration >/dev/null
+          docker logs kc-imported 2>&1 | grep "Import finished successfully"
+
+      - name: Parity
+        env:
+          CELINE_PARITY_IMPORTED_URL: http://127.0.0.1:8081
+          CELINE_PARITY_EMPTY_URL: http://127.0.0.1:8082
+        run: uv run pytest tests/integration -v
+
+      - name: Keycloak logs on failure
+        if: failure()
+        run: |
+          docker logs kc-imported 2>&1 | tail -100
+          docker logs kc-empty 2>&1 | tail -100

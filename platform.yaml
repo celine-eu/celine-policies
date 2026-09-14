@@ -52,13 +52,14 @@ realm_settings:
   actionTokenGeneratedByUserLifespan: 3600      # 1 hour, forgot-password
 
   # Brute-force tuning. Whether protection is on at all is CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED.
+  # `failureFactor` is Keycloak's "max login failures". Infra's template also writes a
+  # `maxLoginFailures`, which no Keycloak realm has (26.7.3 answers a PUT naming it with 400).
   permanentLockout: false
-  maxLoginFailures: 5
+  failureFactor: 5
   waitIncrementSeconds: 60
   quickLoginCheckMilliSeconds: 1000
   minimumQuickLoginWaitSeconds: 60
   maxFailureWaitSeconds: 900
-  failureFactor: 50
 
 # The realm-wide role groups, each carrying the realm role of the same rank. Created
 # with the role mapped; an existing group gains a missing mapping and keeps the rest.
