@@ -714,3 +714,73 @@ class TestEmptyPlan:
             assert not getattr(kc, method).await_args_list, f"{method} was called"
         assert result.success is True
         assert result.summary() == "No changes applied"
+
+
+# ---------------------------------------------------------------------------
+# What --prune must never delete
+# ---------------------------------------------------------------------------
+
+
+class TestPruneProtectsWhatTheConfigDependsOn:
+    """A client this configuration *uses* without declaring is not deletable.
+
+    `oauth2_proxy` is the case: `oauth2_proxy_client` drives the realm claim
+    scopes and the audience mapper every browser session needs, and `celine-cli`
+    names it under `extra_audiences`, while `clients:` leaves it alone because
+    the proxy's own client is the proxy's to configure. So it is reported as an
+    orphan — `TestOrphanClients` pins that, and the report is the review surface
+    — and `--prune` would have deleted the platform's entire browser login path,
+    because Caddy forward_auths to oauth2-proxy on every authenticated route.
+
+    `test_the_oauth2_proxy_client_is_an_orphan_without_a_prefix_guard` says
+    `managed_prefix` guards this in practice. It does not: `keycloak sync`
+    exposes no flag for it, so every CLI run computes orphans with
+    `managed_prefix=None`. Measured on the demo3 deployment, 2026-09-12.
+    """
+
+    def _plan(self) -> SyncPlan:
+        return SyncPlan(orphan_clients=["oauth2_proxy", "svc-orphan"])
+
+    def _state(self) -> CurrentState:
+        return CurrentState(
+            clients={
+                "oauth2_proxy": {"id": "uuid-proxy", "clientId": "oauth2_proxy"},
+                "svc-orphan": {"id": "uuid-orphan", "clientId": "svc-orphan"},
+            }
+        )
+
+    async def test_the_oauth2_proxy_client_is_named_and_kept(self, kc: MagicMock):
+        result = await apply_sync_plan(
+            kc,
+            self._plan(),
+            KeycloakConfig(oauth2_proxy_client="oauth2_proxy"),
+            self._state(),
+            prune=True,
+        )
+
+        assert result.clients_deleted == ["svc-orphan"]
+        assert kc.delete_client.await_args_list == [(("uuid-orphan",), {})]
+
+    async def test_an_extra_audience_is_protected_too(self, kc: MagicMock):
+        """The same reasoning, reached by the other route a config can name a
+        client it does not declare."""
+        config = KeycloakConfig(
+            clients=[
+                ClientConfig(client_id="svc-cli", extra_audiences=["oauth2_proxy"])
+            ]
+        )
+
+        result = await apply_sync_plan(
+            kc, self._plan(), config, self._state(), prune=True
+        )
+
+        assert "oauth2_proxy" not in result.clients_deleted
+
+    async def test_an_ordinary_orphan_is_still_deleted(self, kc: MagicMock):
+        """The guard is narrow on purpose: it protects what the config uses, not
+        everything that happens to exist."""
+        result = await apply_sync_plan(
+            kc, self._plan(), KeycloakConfig(), self._state(), prune=True
+        )
+
+        assert result.clients_deleted == ["oauth2_proxy", "svc-orphan"]

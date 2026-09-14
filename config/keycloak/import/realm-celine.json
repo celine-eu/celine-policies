@@ -7,6 +7,12 @@
   "adminTheme": "keycloak.v2",
   "emailTheme": "keycloak",
   "displayName": "CELINE",
+  "smtpServer": {
+    "host": "mailpit",
+    "port": "1025",
+    "from": "noreply@celine.localhost",
+    "fromDisplayName": "CELINE"
+  },
   "editUsernameAllowed": false,
   "organizationsEnabled": true,
   "roles": {

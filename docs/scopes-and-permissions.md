@@ -320,10 +320,10 @@ Groups can come from two places in the JWT:
 
 | Source | Claim | Assigned via |
 |---|---|---|
-| **Realm-level** | `groups: ["/admins"]` | Keycloak admin UI or `--group /admins` flag |
-| **Org-level** | `organization.<alias>.groups: ["/viewers"]` | `sync-users` (automatic for REC participants) |
+| **Realm-level** | `groups: ["/admins"]` | Keycloak admin UI, or `sync-users --group /admins` given explicitly |
+| **Org-level** | `organization.<alias>.groups: ["/viewers"]` | `sync-users` and the provisioning service (automatic for REC participants) |
 
-Realm-level groups are reserved for **platform management** (admins, managers). Regular REC participants receive org-level groups only.
+Realm-level groups are reserved for **platform management** (admins, managers). Regular REC participants receive org-level groups only: the provisioning service assigns no realm group, and `sync-users` assigns one only when `--group` names it. The `taskfile.yaml` dev tasks no longer pass `--group /viewers` (2026-09-14); an account already in realm `/viewers` keeps that membership until an operator removes it.
 
 ### Group Hierarchy
 
@@ -544,8 +544,9 @@ client declared a grant over it, and none does.
 `sync` never deletes a group itself, and that has not changed — deleting one deletes
 everybody's membership of it quietly, which is not something a declaration-driven tool
 should do as a side effect of an edit. Deleting the group removed 45 inert memberships on
-the local dev realm and nothing else: the accounts, their `/viewers` membership and their
-REC organization membership — the one that carries the `organization` claim — are
+the local dev realm and nothing else: the accounts, their realm `/viewers` membership (which
+the dev tasks' `--group /viewers` gave them, and no longer do) and their REC organization
+membership — the one that carries the `organization` claim — are
 untouched.
 
 The group must already exist — `sync` creates it when it grants the permission, and

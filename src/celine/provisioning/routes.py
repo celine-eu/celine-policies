@@ -20,9 +20,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from celine.provisioning.api_models import (
     DisableResponse,
     DivergenceModel,
+    InvitationResponse,
     ParticipantResponse,
     ParticipantUpsert,
-    PasswordResetResponse,
     ReconcileResponse,
 )
 from celine.provisioning.config import (
@@ -32,6 +32,8 @@ from celine.provisioning.config import (
     ProvisioningSettings,
 )
 from celine.provisioning.service import (
+    AccountDisabled,
+    InvitationCooldown,
     MemberNotFound,
     ProvisioningError,
     ProvisioningService,
@@ -111,6 +113,11 @@ async def upsert_participant(
     Always `200`. A create and a no-op are the same request with the same
     meaning, and `created` in the body says which happened; a `201` on one and a
     `200` on the other would make a retry look like a different outcome.
+
+    **`invite` does not change that.** A disabled account, an address outside
+    the dev list or an account that already has a password is still a `200`,
+    with the reason in `invitation`, so an approval is never blocked by its
+    email.
     """
     _require_scope(authorization, settings, SCOPE_PARTICIPANTS_WRITE)
 
@@ -121,6 +128,8 @@ async def upsert_participant(
             email=body.email,
             first_name=body.first_name,
             last_name=body.last_name,
+            locale=body.locale.value if body.locale else None,
+            invite=body.invite,
         )
     except ProvisioningError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
@@ -129,36 +138,52 @@ async def upsert_participant(
         user_id=result.keycloak_id,
         username=result.username,
         created=result.created,
+        invitation=result.invitation,
+        invited=result.invited,
     )
 
 
 @router.post(
-    "/participants/{community}/{key}/password-reset",
-    response_model=PasswordResetResponse,
-    summary="Issue a one-time credential for a member",
+    "/participants/{community}/{key}/invitation",
+    response_model=InvitationResponse,
+    summary="Email a member a link to set, or reset, their password",
 )
-async def reset_password(
+async def send_invitation(
     community: str,
     key: str,
     authorization: Annotated[str | None, Header()] = None,
     settings: ProvisioningSettings = Depends(get_settings),
     service: ProvisioningService = Depends(get_service),
-) -> PasswordResetResponse:
-    """The credential is temporary: the participant must change it at next
-    login, so what comes back is a handover and never their password."""
+) -> InvitationResponse:
+    """Keycloak emails the link; no credential is generated or returned.
+
+    An account with no password gets an invitation, one with a password gets a
+    reset with a short lifespan. `404` for a member the registry or the realm
+    does not have, `409` for a disabled account, `429` within the cooldown.
+    """
     _require_scope(authorization, settings, SCOPE_PARTICIPANTS_WRITE)
 
     try:
-        result = await service.reset_password(community=community, key=key)
+        result = await service.send_invitation(community=community, key=key)
     except MemberNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+    except AccountDisabled as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+    except InvitationCooldown as e:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            str(e),
+            headers={"Retry-After": str(e.retry_after)},
+        ) from e
     except ProvisioningError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
-    return PasswordResetResponse(
+    return InvitationResponse(
         user_id=result.keycloak_id,
         username=result.username,
-        temporary_password=result.password,
+        invitation=result.invitation,
+        actions=list(result.actions),
+        lifespan=result.lifespan,
     )
 
 

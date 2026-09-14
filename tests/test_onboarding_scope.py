@@ -87,19 +87,38 @@ class TestOnboardingClients:
         assert onb.scopes_prefix == "onboarding"
         assert "onboarding.admin" in onb.default_scopes
 
-    def test_svc_onboarding_calls_exactly_one_other_service(self):
+    def test_svc_onboarding_calls_exactly_two_other_services(self):
         """It used to reference only its own scopes and derive no mapper at all.
 
-        It now holds `provisioning.participants.write`, granted ahead of the
-        cutover that makes it call `svc-provisioning` for a participant's login
-        instead of reaching Keycloak itself — so exactly one audience is derived,
-        and a second appearing here means somebody widened what the public
-        onboarding front door can call.
+        `svc-provisioning` for a participant's login, instead of reaching
+        Keycloak itself (ADR-0007). `svc-rec-registry` because this service
+        registers the member on approval, writes their dataspace DID onto that
+        row, and reads back what each consenting DID holds for the POD export —
+        three call sites that have existed in `../onboarding` all along and were
+        **never granted**: measured on demo3 2026-09-12, every one of them
+        answered `401`, because holding no `rec-registry.*` scope derives no
+        audience onto `svc-rec-registry` and the registry refuses the token
+        before it reads a scope. `ensure_member_did` never raises by design, so
+        the symptom was a member who consents and exports nothing.
+
+        A **third** audience appearing here means somebody widened what the
+        public onboarding front door can call, and that is the thing to argue
+        for. Note what is deliberately absent from the two it has:
+        `rec-registry.import` and `.members.purge`, either of which would let
+        the front door destroy a community.
         """
         config = _config()
         onb = next(c for c in config.clients if c.client_id == "svc-onboarding")
         assert onb.desired_audiences(config.build_prefix_to_client_map()) == {
-            "svc-provisioning"
+            "svc-provisioning",
+            "svc-rec-registry",
+        }
+        registry_scopes = {
+            s for s in onb.default_scopes if s.startswith("rec-registry.")
+        }
+        assert registry_scopes == {
+            "rec-registry.members.write",
+            "rec-registry.lookup",
         }
 
     def test_user_tokens_will_carry_the_console_audience(self):

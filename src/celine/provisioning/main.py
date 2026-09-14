@@ -43,7 +43,10 @@ def create_app() -> FastAPI:
             "The only writer of participant accounts in the celine realm. "
             "Internal: no public route, and authorization by provisioning.* scopes."
         ),
-        version="1.0.0",
+        # 1.1.0: `…/password-reset` replaced by `…/invitation`, and the upsert
+        # gained `locale`, `invite` and `invitation`. Bumped so the SDK's spec
+        # snapshot is a new version rather than an overwrite in place.
+        version="1.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
     )
@@ -79,10 +82,23 @@ def create_app() -> FastAPI:
         }
 
     logger.info(
-        "Provisioning service ready — realm=%s registry=%s",
+        "Provisioning service ready — realm=%s registry=%s email_mode=%s",
         keycloak_settings.realm,
         settings.registry_url or "not configured",
+        settings.email_mode,
     )
+    if settings.email_mode == "dev":
+        logger.warning(
+            "Email mode is 'dev': invitations go only to %d address(es) on "
+            "EMAIL_DEV_RECIPIENTS. Set CELINE_PROVISIONING_EMAIL_MODE=deliver "
+            "to email participants.",
+            len(settings.email_policy.dev_recipients),
+        )
+    if not settings.invite_redirect_uri:
+        logger.warning(
+            "CELINE_PROVISIONING_INVITE_REDIRECT_URI is unset: invitation links "
+            "end on Keycloak's page with no link back to the application."
+        )
     return app
 
 

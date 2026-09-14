@@ -61,6 +61,8 @@ class FakeKeycloak:
         self.ensure_user_in_org_group = AsyncMock()
         self.set_user_password = AsyncMock()
         self.get_user_by_username = AsyncMock(return_value=None)
+        self.execute_actions_email = AsyncMock()
+        self.ensure_user_kwargs: dict[str, dict] = {}
 
     async def __aenter__(self):
         return self
@@ -73,6 +75,7 @@ class FakeKeycloak:
         return self.groups.get(path)
 
     async def ensure_user(self, username: str, **kwargs):
+        self.ensure_user_kwargs[username] = kwargs
         if username in self.existing_users:
             return f"uuid-{username}", False
         self.created_users.append(username)
@@ -197,18 +200,18 @@ class TestParticipantsLandInTheAdministeredGroup:
         kc = fake(
             groups={
                 "/participants": {"id": "gid-participants"},
-                "/viewers": {"id": "gid-viewers"},
+                "/pilot": {"id": "gid-pilot"},
             }
         )
-        settings = SyncUsersSettings(groups=["/viewers"], temp_password="pw")
+        settings = SyncUsersSettings(groups=["/pilot"], temp_password="pw")
 
         await run(kc_settings, settings, admin_group_paths=["/participants"])
 
         assert set(kc.group_adds) == {
             ("uuid-gl-0", "gid-participants"),
             ("uuid-gl-1", "gid-participants"),
-            ("uuid-gl-0", "gid-viewers"),
-            ("uuid-gl-1", "gid-viewers"),
+            ("uuid-gl-0", "gid-pilot"),
+            ("uuid-gl-1", "gid-pilot"),
         }
 
 
@@ -615,3 +618,100 @@ class TestAdoptingAnOnboardedAccountDoesNotModifyIt:
             "org-1", "uuid-alice@example.com"
         )
         assert kc.group_adds == [("uuid-alice@example.com", "gid-participants")]
+
+
+class TestInviteOnlyWhatThisRunCreated:
+    """`--invite`: the plan's guard for `sync-users`
+    (`a-participant-is-invited-and-sets-their-own-password`, Phase 4).
+
+    A reconcile that invited every member without a password on every run would
+    spam anyone who has not yet acted on their email, so only an account created
+    in this run is invited — and it is created with no password at all.
+    """
+
+    PARTICIPANTS = [{"key": "gl-0", "user_id": "new@example.org"}, {"key": "gl-1", "user_id": "old@example.org"}]
+
+    @staticmethod
+    def invitations(mode="deliver", recipients=""):
+        from celine.policies.cli.keycloak.commands.sync_users import InvitationSettings
+        from celine.provisioning.invitation import EmailPolicy, parse_recipients
+
+        return InvitationSettings(
+            policy=EmailPolicy(mode=mode, dev_recipients=parse_recipients(recipients)),
+            lifespan=604800,
+            client_id="oauth2_proxy",
+            redirect_uri="http://webapp.celine.localhost/",
+        )
+
+    @pytest.mark.asyncio
+    async def test_only_the_account_created_in_this_run_is_invited_and_it_has_no_password(
+        self, fake, kc_settings
+    ):
+        kc = fake(existing_users={"old@example.org"})
+        settings = SyncUsersSettings(groups=[], dry_run=False)
+
+        created, skipped, errors = await run(
+            kc_settings,
+            settings,
+            participants=self.PARTICIPANTS,
+            mock=True,
+            invitations=self.invitations(),
+        )
+
+        assert errors == []
+        assert created == ["new@example.org"]
+        kc.execute_actions_email.assert_awaited_once_with(
+            "uuid-new@example.org",
+            ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
+            lifespan=604800,
+            client_id="oauth2_proxy",
+            redirect_uri="http://webapp.celine.localhost/",
+        )
+        assert kc.ensure_user_kwargs["new@example.org"]["temporary_password"] is None
+        kc.set_user_password.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_in_dev_mode_an_address_off_the_list_is_not_emailed(
+        self, fake, kc_settings, caplog
+    ):
+        kc = fake()
+        settings = SyncUsersSettings(groups=[], dry_run=False)
+
+        with caplog.at_level("WARNING"):
+            await run(
+                kc_settings,
+                settings,
+                participants=self.PARTICIPANTS,
+                mock=True,
+                invitations=self.invitations(mode="dev", recipients="old@example.org"),
+            )
+
+        assert [c.args[0] for c in kc.execute_actions_email.await_args_list] == [
+            "uuid-old@example.org"
+        ]
+        assert "greenland/gl-0" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_an_account_with_no_address_is_not_invited(self, fake, kc_settings):
+        """The registry holds no email; outside `--mock` there is nobody to write to."""
+        kc = fake()
+        settings = SyncUsersSettings(groups=[], dry_run=False)
+
+        created, _, errors = await run(
+            kc_settings,
+            settings,
+            participants=self.PARTICIPANTS,
+            invitations=self.invitations(),
+        )
+
+        assert errors == []
+        assert len(created) == 2
+        kc.execute_actions_email.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_without_invite_nothing_is_emailed(self, fake, kc_settings, sync_settings):
+        kc = fake()
+
+        await run(kc_settings, sync_settings, participants=self.PARTICIPANTS, mock=True)
+
+        kc.execute_actions_email.assert_not_awaited()

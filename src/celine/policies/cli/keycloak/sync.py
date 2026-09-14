@@ -556,6 +556,7 @@ def compute_sync_plan(
     # A bootstrap run given `--client-id` something else is **not** protected by
     # this. That is a real hole and a deliberate one to leave: guessing which
     # client is "the admin one" from a flag nobody recorded would be worse.
+    #
     for client_id in current_client_ids:
         if client_id not in desired_client_ids:
             if managed_prefix is None or client_id.startswith(managed_prefix):
@@ -1337,7 +1338,42 @@ async def apply_sync_plan(
     # -------------------------------------------------------------------------
 
     if prune:
+        # **Reported as an orphan, and still never deleted.** A client this
+        # configuration *depends on* without declaring is exactly what
+        # `oauth2_proxy` is: `oauth2_proxy_client` drives the realm claim scopes
+        # and the audience mapper every browser session needs, and `celine-cli`
+        # names it under `extra_audiences`, while `clients:` leaves it alone
+        # because the proxy's own client is the proxy's to configure.
+        #
+        # `TestOrphanClients` pins that it appears in the report, and that stays
+        # true — the report is the review surface and hiding it would be worse.
+        # What is guarded is the **deletion**, because the report's own remedy
+        # would have taken the platform's entire browser login path with it:
+        # Caddy forward_auths to oauth2-proxy on every authenticated route.
+        #
+        # That test's docstring says `managed_prefix` guards this in practice.
+        # It does not: `keycloak sync` exposes no flag for it, so every CLI run
+        # computes orphans with `managed_prefix=None`. Measured on demo3,
+        # 2026-09-12 — `oauth2_proxy` stood in the orphan list of a three-file
+        # posture-B sync with nothing to guard it.
+        protected = {config.oauth2_proxy_client} | {
+            audience
+            for client_config in config.clients
+            for audience in (client_config.extra_audiences or [])
+        }
+        protected.discard(None)
+
         for client_id in plan.orphan_clients:
+            if client_id in protected:
+                logger.warning(
+                    "Refusing to prune client %r: this configuration depends on "
+                    "it (oauth2_proxy_client or an extra_audience) without "
+                    "declaring it. Remove that reference first if it is really "
+                    "meant to go.",
+                    client_id,
+                )
+                continue
+
             client_uuid = client_uuids.get(client_id)
             if not client_uuid:
                 continue

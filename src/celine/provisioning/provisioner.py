@@ -32,6 +32,7 @@ import logging
 from collections.abc import Iterable, Mapping
 
 from celine.policies.cli.keycloak.client import KeycloakAdminClient, ROLE_HIERARCHY
+from celine.provisioning.invitation import has_password
 from celine.provisioning.models import (
     CommunityOutcome,
     OrganizationOutcome,
@@ -133,6 +134,7 @@ class Provisioner:
         password: str | None = None,
         temporary: bool = True,
         reset_password: bool = False,
+        locale: str | None = None,
     ) -> ParticipantOutcome:
         """Ensure one account exists and is filed where this REC expects it.
 
@@ -145,6 +147,10 @@ class Provisioner:
         before any user is touched. Resolution does not happen here on purpose:
         a missing group must stop a run before it has provisioned half of it,
         and this method only ever sees one participant.
+
+        `locale` is written on creation, and on an existing account **only when
+        it has none**: an account that already carries one may carry the
+        person's own choice, and an approval is not a reason to overrule it.
         """
         kc = self._kc
 
@@ -156,7 +162,11 @@ class Provisioner:
             email_verified=email_verified,
             temporary_password=password,
             temporary=temporary,
+            locale=locale,
         )
+
+        if locale and not created:
+            await self.ensure_locale(keycloak_id, locale)
 
         org_joined = await kc.ensure_user_in_organization(org_id, keycloak_id)
 
@@ -187,6 +197,10 @@ class Provisioner:
 
     # -- finding an account somebody else may have named -------------------
 
+    async def find_by_id(self, keycloak_id: str) -> "dict | None":
+        """The account with this Keycloak uuid, or None."""
+        return await self._kc.get_user_by_id(keycloak_id)
+
     async def find_by_username(self, username: str) -> "dict | None":
         """The account with this exact username, or None."""
         return await self._kc.get_user_by_username(username)
@@ -202,16 +216,39 @@ class Provisioner:
 
     # -- lifecycle ---------------------------------------------------------
 
-    async def reset_password(
-        self, keycloak_id: str, password: str, *, temporary: bool = True
-    ) -> None:
-        """Set a new credential on an account that already exists.
+    async def ensure_locale(self, keycloak_id: str, locale: str) -> bool:
+        """Give an existing account a locale if it has none. Returns whether it wrote."""
+        user = await self._kc.get_user_by_id(keycloak_id)
+        if user is None or (user.get("attributes") or {}).get("locale"):
+            return False
+        return await self._kc.set_user_locale(keycloak_id, locale)
 
-        `temporary=True` forces a change at next login, which is what a reset
-        somebody asked for should do: the value travelling back to whoever asked
-        is a one-time handover, not the participant's password.
+    async def has_password(self, keycloak_id: str) -> bool:
+        """Whether the account holds a password credential."""
+        return has_password(await self._kc.get_user_credentials(keycloak_id))
+
+    async def send_actions_email(
+        self,
+        keycloak_id: str,
+        actions: tuple[str, ...],
+        *,
+        lifespan: int,
+        client_id: str | None = None,
+        redirect_uri: str | None = None,
+    ) -> None:
+        """Have Keycloak email the account a link performing `actions`.
+
+        No password is generated, carried or returned: the person sets their
+        own through the link. The caller has already decided the account is
+        enabled and the address may be emailed — see `celine.provisioning.invitation`.
         """
-        await self._kc.set_user_password(keycloak_id, password, temporary=temporary)
+        await self._kc.execute_actions_email(
+            keycloak_id,
+            list(actions),
+            lifespan=lifespan,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+        )
 
     async def set_enabled(self, keycloak_id: str, enabled: bool) -> bool:
         """Disable or re-enable an account. Returns whether it changed.

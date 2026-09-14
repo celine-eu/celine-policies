@@ -38,6 +38,7 @@ from celine.policies.cli.keycloak.commands._utils import (
     read_rec_documents,
 )
 from celine.provisioning import OrganizationSpec, Provisioner
+from celine.provisioning.invitation import INVITE_ACTIONS, EmailPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -286,8 +287,9 @@ def sync_users(
             "--group",
             "-g",
             help=(
-                "Group path to assign (repeatable). "
-                "Default: /viewers  [env: CELINE_SYNC_USERS_GROUPS]"
+                "Realm group path to also assign every participant (repeatable), "
+                "e.g. /admins. Default: none — participants get their org-level "
+                "group only.  [env: CELINE_SYNC_USERS_GROUPS]"
             ),
         ),
     ] = None,
@@ -410,6 +412,22 @@ def sync_users(
             ),
         ),
     ] = None,
+    invite: Annotated[
+        bool,
+        typer.Option(
+            "--invite",
+            help=(
+                "Create new accounts with no password and have Keycloak email each "
+                "one an invitation to set their own. Only accounts created in this "
+                "run are invited, never existing ones. Follows the provisioning "
+                "service's settings: CELINE_PROVISIONING_EMAIL_MODE (default dev: "
+                "only EMAIL_DEV_RECIPIENTS are emailed), "
+                "CELINE_PROVISIONING_INVITE_REDIRECT_URI and "
+                "CELINE_PROVISIONING_INVITE_LIFESPAN. Not with --password or "
+                "--reset-password."
+            ),
+        ),
+    ] = False,
     check: Annotated[
         bool,
         typer.Option(
@@ -425,7 +443,8 @@ def sync_users(
 
     Reads the REC YAML, checks each participant's user_id against Keycloak,
     and creates any missing users with a temporary password (forced reset on
-    first login) and the specified group memberships.
+    first login), in their REC organization and its `viewers` org group. No
+    realm group is assigned unless `--group` names one.
 
     Group resolution happens before any user is created — the command fails
     immediately if a group path does not exist, rather than leaving partially
@@ -447,16 +466,16 @@ def sync_users(
         celine-policies keycloak sync-users greenland.yaml \\
             --admin-user admin --admin-password admin
 
-        # multiple groups, fixed password for a demo handout
+        # an explicit realm group, fixed password for a demo handout
         celine-policies keycloak sync-users greenland.yaml \\
-            --group /viewers --group /community-gl \\
+            --group /community-gl \\
             --temp-password "Demo@2025"
 
         # fully env-driven (CI/CD, docker-compose)
         CELINE_KEYCLOAK_BASE_URL=https://kc.example.com \\
         CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET=xxx \\
         CELINE_SYNC_USERS_REC_YAML=greenland.yaml \\
-        CELINE_SYNC_USERS_GROUPS="/viewers /community-gl" \\
+        CELINE_SYNC_USERS_GROUPS="/community-gl" \\
         CELINE_SYNC_USERS_TEMP_PASSWORD="Demo@2025" \\
         celine-policies keycloak sync-users
     """
@@ -475,6 +494,17 @@ def sync_users(
     )
 
     configure_logging(sync_settings.verbose)
+
+    if invite and (sync_settings.temp_password or reset_password):
+        # An invitation exists so that nobody is handed a password. Creating one
+        # anyway and then inviting the person to replace it would be both.
+        typer.secho(
+            "Error: --invite creates accounts without a password; it cannot be "
+            "combined with --password/--temp-password or --reset-password.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
 
     kc_settings = build_settings(
         base_url=base_url,
@@ -546,10 +576,17 @@ def sync_users(
                 for path, owners in admin_group_owners.items()
             )
         )
+    invitations = _invitation_settings() if invite else None
     if not check:
-        typer.echo(
-            f"Password : {'fixed' if sync_settings.temp_password else 'random per user'}"
-        )
+        if invitations:
+            typer.echo(
+                f"Password : none — new accounts are invited "
+                f"(email mode {invitations.policy.mode})"
+            )
+        else:
+            typer.echo(
+                f"Password : {'fixed' if sync_settings.temp_password else 'random per user'}"
+            )
     if sync_settings.dry_run and not check:
         typer.secho("\n[DRY RUN] No changes will be applied.\n", fg=typer.colors.YELLOW)
     if check:
@@ -596,6 +633,7 @@ def sync_users(
                 reset_password=reset_password,
                 temporary=sync_settings.temporary,
                 mock=mock,
+                invitations=invitations,
             )
         )
     except KeycloakAuthError as e:
@@ -622,6 +660,34 @@ def sync_users(
         raise typer.Exit(1)
 
 
+@dataclass(frozen=True)
+class InvitationSettings:
+    """How `--invite` sends: the provisioning service's settings, read once.
+
+    One source for both writers, so `sync-users` and the service cannot disagree
+    about who may be emailed or how long a link lasts.
+    """
+
+    policy: EmailPolicy
+    lifespan: int
+    client_id: str
+    redirect_uri: str | None
+
+
+def _invitation_settings() -> InvitationSettings:
+    # Imported here: the settings module pulls the SDK's OIDC settings, which no
+    # other sync-users path needs.
+    from celine.provisioning.config import ProvisioningSettings
+
+    settings = ProvisioningSettings()
+    return InvitationSettings(
+        policy=settings.email_policy,
+        lifespan=settings.invite_lifespan,
+        client_id=settings.invite_client_id,
+        redirect_uri=settings.invite_redirect_uri,
+    )
+
+
 async def _async_sync_users(
     kc_settings: "KeycloakSettings",
     sync_settings: "SyncUsersSettings",
@@ -631,6 +697,7 @@ async def _async_sync_users(
     reset_password: bool = False,
     temporary: bool = True,
     mock: bool = False,
+    invitations: InvitationSettings | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """Reconcile Keycloak against every community this run was given.
 
@@ -675,6 +742,7 @@ async def _async_sync_users(
                 reset_password=reset_password,
                 temporary=temporary,
                 mock=mock,
+                invitations=invitations,
             )
             created.extend(c)
             skipped.extend(s)
@@ -770,8 +838,14 @@ async def _sync_community(
     reset_password: bool = False,
     temporary: bool = True,
     mock: bool = False,
+    invitations: InvitationSettings | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """Ensure one community's organization, its groups and its members.
+
+    With `invitations`, an account **created in this run** gets no password and
+    is sent an invitation; an account that already existed is never invited,
+    because a reconcile that invited everyone without a password on every run
+    would spam whoever has not acted on their email yet.
 
     Returns (created, skipped, errors) for this community alone.
     """
@@ -864,7 +938,7 @@ async def _sync_community(
         key = p["key"]
         username = participant_username(p)
 
-        pwd = sync_settings.generate_password()
+        pwd = None if invitations else sync_settings.generate_password()
 
         if sync_settings.dry_run:
             existing = await kc.get_user_by_username(username)
@@ -879,7 +953,8 @@ async def _sync_community(
             else:
                 typer.secho(
                     f"  ~ {key} username='{username}'"
-                    f" org={community['id']}{group_hint}{admin_hint}",
+                    f" org={community['id']}{group_hint}{admin_hint}"
+                    + (" [would invite]" if invitations else ""),
                     fg=typer.colors.YELLOW,
                 )
                 created.append(username)
@@ -924,8 +999,19 @@ async def _sync_community(
                 skipped.append(username)
                 continue
 
+            if invitations:
+                outcome = await _invite_created(
+                    provisioner,
+                    invitations,
+                    f"{community['id']}/{key}",
+                    result.keycloak_id,
+                    email,
+                )
+                credential = f"invitation={outcome}"
+            else:
+                credential = f"pwd='{pwd}'"
             typer.secho(
-                f"  + {key} username='{username}' uuid={result.keycloak_id} pwd='{pwd}'"
+                f"  + {key} username='{username}' uuid={result.keycloak_id} {credential}"
                 f" org={community['id']}{admin_hint}",
                 fg=typer.colors.GREEN,
             )
@@ -937,6 +1023,35 @@ async def _sync_community(
             errors.append(msg)
 
     return created, skipped, errors
+
+
+async def _invite_created(
+    provisioner: Provisioner,
+    invitations: InvitationSettings,
+    who: str,
+    keycloak_id: str,
+    email: str | None,
+) -> str:
+    """Invite an account this run just created. Returns the outcome to print.
+
+    The same decision the provisioning service makes for a created account:
+    the dev list first, then the send. `no_address` is this command's own case —
+    the registry holds no email, so outside `--mock` there is nobody to write to.
+    """
+    if not email:
+        logger.warning("Not inviting %s: the account has no email address", who)
+        return "no_address"
+    if not invitations.policy.allows(email):
+        invitations.policy.refuse(who)
+        return "not_on_dev_list"
+    await provisioner.send_actions_email(
+        keycloak_id,
+        INVITE_ACTIONS,
+        lifespan=invitations.lifespan,
+        client_id=invitations.client_id,
+        redirect_uri=invitations.redirect_uri,
+    )
+    return "sent"
 
 
 @dataclass(frozen=True)

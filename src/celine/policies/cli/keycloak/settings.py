@@ -241,8 +241,9 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
 
     Environment variables:
         CELINE_SYNC_USERS_REC_YAML          Path to REC registry YAML
-        CELINE_SYNC_USERS_GROUPS            Space-separated group paths
-                                            default: /viewers
+        CELINE_SYNC_USERS_GROUPS            Space-separated realm group paths
+                                            to also assign, e.g. /admins.
+                                            default: none (org-level only)
         CELINE_SYNC_USERS_TEMP_PASSWORD     Fixed temp password for all users.
                                             Unset → random password per user.
         CELINE_SYNC_USERS_DRY_RUN           "true" / "1" to enable dry-run
@@ -288,7 +289,7 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
     )
     groups: list[str] = Field(
         default=[],
-        description="Group paths to assign to every created user (derived from community type if empty)",
+        description="Realm group paths to also assign every participant. Empty → none; the org-level group is assigned regardless.",
     )
     temp_password: str | None = Field(
         default=None,

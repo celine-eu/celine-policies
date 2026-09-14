@@ -181,7 +181,7 @@ the scope is `403`. `provisioning.admin` satisfies any of the scopes below.
 | Endpoint | Scope |
 |---|---|
 | `PUT /participants/{community}/{key}` | `provisioning.participants.write` |
-| `POST /participants/{community}/{key}/password-reset` | `provisioning.participants.write` |
+| `POST /participants/{community}/{key}/invitation` | `provisioning.participants.write` |
 | `POST /participants/{community}/{key}/disable` | `provisioning.participants.write` |
 | `POST /reconcile/{community}` | `provisioning.reconcile` |
 
@@ -195,8 +195,21 @@ Ensure the account exists, is in the REC organization, and is in its org group.
 **Request:**
 
 ```json
-{"email": "a.person@example.org", "first_name": "A", "last_name": "Person"}
+{
+  "email": "a.person@example.org",
+  "first_name": "A",
+  "last_name": "Person",
+  "locale": "it",
+  "invite": true
+}
 ```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `email` | yes | Finds the account, or names a new one |
+| `first_name`, `last_name` | no | Written on a new account. **Pass both**: an account without them meets Keycloak's "update your profile" form after setting its password (measured on 26.7.3) |
+| `locale` | no | `it`, `en` or `es`; anything else is `422`. The language of Keycloak's emails. Written on a new account, and on an existing one only if it has none |
+| `invite` | no, default `false` | Have Keycloak email a link to set a password, **only** if the account was created in this call or has no password |
 
 The address **transits and is stored nowhere** — not in this service, which keeps no
 state, and not in the registry, which has no email column. It is on the Keycloak account,
@@ -205,7 +218,13 @@ which is where an address somebody logs in with belongs.
 **Response (200):**
 
 ```json
-{"user_id": "3f1c…", "username": "a.person@example.org", "created": true}
+{
+  "user_id": "3f1c…",
+  "username": "a.person@example.org",
+  "created": true,
+  "invitation": "sent",
+  "invited": true
+}
 ```
 
 `user_id` is the **Keycloak uuid**, which `../onboarding` needs for its dataspace step.
@@ -217,23 +236,70 @@ collision: the registry's `user_id` column holds a *username*.
 Always `200`. A create and a no-op are the same request with the same meaning; `created`
 says which happened.
 
+**`invite` never fails the upsert.** What happened is in `invitation`, a reason code to show
+the operator who approved, and `invited` is true only for `sent`:
+
+| `invitation` | Meaning |
+|---|---|
+| `not_requested` | `invite` was false |
+| `sent` | Keycloak was asked to email an invitation: `UPDATE_PASSWORD` + `VERIFY_EMAIL`, valid `CELINE_PROVISIONING_INVITE_LIFESPAN` (7 days) |
+| `has_password` | The account already has a password; nothing was sent. A retry after the person set their password lands here |
+| `not_on_dev_list` | `CELINE_PROVISIONING_EMAIL_MODE=dev` and the address is not on `EMAIL_DEV_RECIPIENTS`; a `WARNING` names the member |
+| `account_disabled` | The account is disabled; nothing was sent, and it is not re-enabled |
+
+A repeat of the upsert **before** the person has set a password sends another invitation,
+because the account still has none. Every link sent stays usable until it expires, even
+after another one has been used (measured on 26.7.3).
+
+**Order of deployment:** `locale` is kept only on a realm with
+`internationalizationEnabled`. On a realm without it Keycloak answers `201` and drops the
+value, so internationalization has to be enabled on a realm before this service writes
+`locale` to it.
+
+Completing an invitation creates **no session**: the person sees Keycloak's "account
+updated" page with a link back to `CELINE_PROVISIONING_INVITE_REDIRECT_URI`, and then signs
+in once with the password they chose.
+
 **The registry is not written from here.** The caller writes the member row, with the
 username this call returned — which keeps the registry single-writer and the step order
 fail-closed: the login exists before the row that keys on it.
 
-## POST /participants/{community}/{key}/password-reset
+## POST /participants/{community}/{key}/invitation
 
-Issue a one-time credential. The member is resolved through the registry, whose
-`Member.user_id` is the username.
+Email a member a link to set, or reset, their password. The member is resolved through the
+registry, whose `Member.user_id` is the username. **No password is generated or returned**:
+Keycloak sends the link and the person chooses their own.
+
+The account decides which email it is:
+
+| Account | `actions` | `lifespan` |
+|---|---|---|
+| no password (an invitation, re-sent) | `UPDATE_PASSWORD`, `VERIFY_EMAIL` | `CELINE_PROVISIONING_INVITE_LIFESPAN`, default 604800 (7 days) |
+| has a password (an operator reset) | `UPDATE_PASSWORD` | `CELINE_PROVISIONING_RESET_LIFESPAN`, default 3600 (1 hour) |
+
+A reset is short because Keycloak does not revoke earlier links: a reset email must not be a
+week-long credential.
 
 **Response (200):**
 
 ```json
-{"user_id": "3f1c…", "username": "gl-00001", "temporary_password": "…"}
+{
+  "user_id": "3f1c…",
+  "username": "gl-00001",
+  "invitation": "sent",
+  "actions": ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
+  "lifespan": 604800
+}
 ```
 
-Temporary by construction: the participant must change it at next login, so what comes
-back is a handover and never their password.
+`invitation` is `sent`, or `not_on_dev_list` when dev email mode refused the address (nothing
+was sent).
+
+| Code | Meaning |
+|---|---|
+| 404 | No such member, or no account for one |
+| 409 | The account is disabled. Checked by this service before Keycloak is asked |
+| 429 | The same account was emailed within `CELINE_PROVISIONING_INVITE_COOLDOWN` (default 300 s), by this route or by an upsert. `Retry-After` says when. In memory and per replica: a double-click guard, not a rate limit |
 
 ## POST /participants/{community}/{key}/disable
 
@@ -277,6 +343,25 @@ nothing here is a scheduler.
 | 401 | No bearer token, or it does not verify — renew the credential |
 | 403 | Verified, but the caller does not hold the scope — ask for a grant |
 | 404 | No such member, or no account for one |
-| 422 | The body is missing the address |
+| 409 | An invitation for a disabled account |
+| 422 | The body is missing the address, or `locale` is not `it`, `en` or `es` |
+| 429 | An invitation within the cooldown |
 | 500 | A reconcile ended with divergences |
-| 502 | Keycloak or the registry failed — a dependency, not this service refusing |
+| 502 | Keycloak or the registry failed — a dependency, not this service refusing. Includes Keycloak refusing to send an email, e.g. `Invalid redirect uri.` for a `CELINE_PROVISIONING_INVITE_REDIRECT_URI` not registered on `oauth2_proxy` |
+
+## Configuration
+
+`CELINE_PROVISIONING_*`, besides the registry and OIDC settings:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CELINE_PROVISIONING_INVITE_REDIRECT_URI` | unset | Where "back to the application" points after an invitation or reset: the webapp root. Must be registered on the client below. Unset, the final page has no link back |
+| `CELINE_PROVISIONING_INVITE_CLIENT_ID` | `oauth2_proxy` | The client the redirect is registered on |
+| `CELINE_PROVISIONING_INVITE_LIFESPAN` | `604800` | Seconds an invitation link lasts |
+| `CELINE_PROVISIONING_RESET_LIFESPAN` | `3600` | Seconds an operator reset link lasts |
+| `CELINE_PROVISIONING_INVITE_COOLDOWN` | `300` | Seconds `…/invitation` refuses a second send to one account |
+| `CELINE_PROVISIONING_EMAIL_MODE` | `dev` | `deliver` emails anyone; `dev` emails only `EMAIL_DEV_RECIPIENTS` and logs a `WARNING` for everyone else |
+| `EMAIL_DEV_RECIPIENTS` | empty | Comma-separated addresses that may be emailed in `dev` mode. Also read as `CELINE_PROVISIONING_EMAIL_DEV_RECIPIENTS`. The local Mailpit relays the same list |
+
+`dev` is the default on purpose: its failure is an invitation that did not go out and says
+so. Every non-dev deployment sets `deliver`.

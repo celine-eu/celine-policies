@@ -21,8 +21,15 @@ participant account** into the celine realm. `keycloak sync-users` calls the sam
 `../onboarding` calls the service and holds no Keycloak grant of its own.
 
 **Endpoints:** `PUT /participants/{community}/{key}` (ensure the account, its REC
-organization and its org group), `POST /participants/{community}/{key}/password-reset`,
-`POST /participants/{community}/{key}/disable`, `POST /reconcile/{community}`, `/health`.
+organization and its org group, and optionally invite the person),
+`POST /participants/{community}/{key}/invitation` (re-send an invitation, or reset a
+password, by email), `POST /participants/{community}/{key}/disable`,
+`POST /reconcile/{community}`, `/health`.
+
+**No password is ever generated, returned or emailed.** Keycloak sends every email, through
+`execute-actions-email`, and the person sets their own password from the link. The service
+decides only whether to ask for one and for how long it lasts — see
+`celine.provisioning.invitation` and the [API reference](api-reference.md#provisioning-service).
 
 It is stateless — a retry is another `PUT`, and idempotency comes from the keys — and it
 authorises by `provisioning.*` scopes like every other service.
@@ -46,7 +53,9 @@ A typer CLI (`src/celine/policies/cli/`) that manages Keycloak configuration. It
 - `sync` — reconcile scopes, clients, audience mappers and service-account
   administration rights in Keycloak to match `clients.yaml`
 - `sync-users` — create Keycloak users from a `rec-registry` REC definition YAML, and
-  file them in the groups `clients.yaml` declares a service account may administer
+  file them in the groups `clients.yaml` declares a service account may administer.
+  `--invite` creates them with no password and invites each account it created in that
+  run, under the provisioning service's email settings
 - `sync-orgs` — create Keycloak organizations from an `owners.yaml`
 - `set-password` — set a user's password
 - `set-user-organization` — assign a user to organizations and org-level groups

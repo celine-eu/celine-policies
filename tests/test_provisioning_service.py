@@ -23,7 +23,10 @@ import pytest
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.provisioning import service as service_module
 from celine.provisioning.config import ProvisioningSettings
+from celine.policies.cli.keycloak.client import KeycloakError
 from celine.provisioning.service import (
+    AccountDisabled,
+    InvitationCooldown,
     MemberNotFound,
     ProvisioningError,
     ProvisioningService,
@@ -53,6 +56,8 @@ class FakeKeycloak:
         users_by_username: dict[str, dict] | None = None,
         organization_members: set[tuple[str, str]] | None = None,
         organization_blackhole: bool = False,
+        passwords_on: set[str] | None = None,
+        send_error: Exception | None = None,
     ):
         self.users_by_email = users_by_email or {}
         self.users_by_username = users_by_username or {}
@@ -62,9 +67,15 @@ class FakeKeycloak:
         #: to catch.
         self.blackhole = organization_blackhole
 
+        #: uuids of the accounts that hold a password credential
+        self.passwords_on = passwords_on or set()
+        self.send_error = send_error
+
         self.calls: list[tuple] = []
         self.passwords: list[tuple[str, str, bool]] = []
         self.enabled_changes: list[tuple[str, bool]] = []
+        self.emails: list[dict] = []
+        self.locales: list[tuple[str, str]] = []
 
     async def __aenter__(self):
         return self
@@ -104,6 +115,10 @@ class FakeKeycloak:
         if username in self.users_by_username:
             return self.users_by_username[username]["id"], False
         user = {"id": f"uuid-{username}", "username": username, "enabled": True}
+        if kwargs.get("email"):
+            user["email"] = kwargs["email"]
+        if kwargs.get("locale"):
+            user["attributes"] = {"locale": [kwargs["locale"]]}
         self.users_by_username[username] = user
         if kwargs.get("email"):
             self.users_by_email[kwargs["email"]] = user
@@ -126,6 +141,29 @@ class FakeKeycloak:
 
     async def set_user_password(self, user_id, password, temporary=True):
         self.passwords.append((user_id, password, temporary))
+
+    async def get_user_credentials(self, user_id):
+        self.calls.append(("get_user_credentials", user_id))
+        return [{"type": "password"}] if user_id in self.passwords_on else []
+
+    async def set_user_locale(self, user_id, locale):
+        self.locales.append((user_id, locale))
+        return True
+
+    async def execute_actions_email(
+        self, user_id, actions, *, lifespan, client_id=None, redirect_uri=None
+    ):
+        if self.send_error:
+            raise self.send_error
+        self.emails.append(
+            {
+                "user_id": user_id,
+                "actions": list(actions),
+                "lifespan": lifespan,
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+            }
+        )
 
     async def set_user_enabled(self, user_id, enabled):
         user = await self.get_user_by_id(user_id)
@@ -171,19 +209,36 @@ def registry(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-def a_service(*, registry_url: str | None = "http://registry") -> ProvisioningService:
+def a_service(
+    *,
+    registry_url: str | None = "http://registry",
+    clock=None,
+    **settings,
+) -> ProvisioningService:
+    settings.setdefault("email_mode", "deliver")
+    settings.setdefault("invite_redirect_uri", "http://webapp.celine.localhost/")
     return ProvisioningService(
         ProvisioningSettings(
             registry_url=registry_url,
             registry_client_id="svc-provisioning",
             registry_client_secret="secret",
+            **settings,
         ),
         KeycloakSettings(
             base_url="http://kc.internal",
             realm="celine",
             admin_client_secret="secret",
         ),
+        **({"clock": clock} if clock else {}),
     )
+
+
+class Clock:
+    def __init__(self, now: float = 1000.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
 
 
 # --- the upsert resolves by address --------------------------------------
@@ -278,39 +333,307 @@ async def test_the_organization_is_ensured_rather_than_required(keycloak):
     assert ("ensure_organization", "brand-new") in kc.calls
 
 
+async def test_the_upsert_writes_the_locale_on_creation(keycloak):
+    kc = keycloak()
+
+    await a_service().ensure_participant(
+        community="greenland", key="k", email="p@example.org", locale="es"
+    )
+
+    [call] = [c for c in kc.calls if c[0] == "ensure_user"]
+    assert call[2]["locale"] == "es"
+
+
+async def test_an_existing_account_gets_a_locale_only_if_it_has_none(keycloak):
+    """An account that already carries a locale may carry the person's own
+    choice, and an approval is not a reason to overrule it."""
+    bare = {"id": "u-bare", "username": "bare@example.org", "enabled": True}
+    chosen = {
+        "id": "u-chosen",
+        "username": "chosen@example.org",
+        "enabled": True,
+        "attributes": {"locale": ["en"]},
+    }
+    kc = keycloak(
+        users_by_email={"bare@example.org": bare, "chosen@example.org": chosen},
+        users_by_username={"bare@example.org": bare, "chosen@example.org": chosen},
+    )
+    service = a_service()
+
+    await service.ensure_participant(
+        community="greenland", key="a", email="bare@example.org", locale="it"
+    )
+    await service.ensure_participant(
+        community="greenland", key="b", email="chosen@example.org", locale="it"
+    )
+
+    assert kc.locales == [("u-bare", "it")]
+
+
+# --- the upsert's invitation ---------------------------------------------
+
+
+async def test_without_invite_nothing_is_sent_and_nothing_is_checked(keycloak):
+    kc = keycloak()
+
+    result = await a_service().ensure_participant(
+        community="greenland", key="k", email="p@example.org"
+    )
+
+    assert result.invitation == "not_requested"
+    assert result.invited is False
+    assert kc.emails == []
+
+
+async def test_an_account_created_by_the_upsert_is_invited(keycloak):
+    kc = keycloak()
+
+    result = await a_service().ensure_participant(
+        community="greenland", key="k", email="p@example.org", invite=True
+    )
+
+    assert result.created
+    assert result.invitation == "sent"
+    assert result.invited is True
+    assert kc.emails[0]["actions"] == ["UPDATE_PASSWORD", "VERIFY_EMAIL"]
+    assert kc.emails[0]["lifespan"] == 604800
+    # a new account cannot hold a credential, so it is not asked
+    assert ("get_user_credentials", "uuid-p@example.org") not in kc.calls
+
+
+async def test_an_existing_account_without_a_password_is_invited(keycloak):
+    user = {"id": "u1", "username": "p@example.org", "enabled": True, "email": "p@example.org"}
+    kc = keycloak(users_by_email={"p@example.org": user}, users_by_username={"p@example.org": user})
+
+    result = await a_service().ensure_participant(
+        community="greenland", key="k", email="p@example.org", invite=True
+    )
+
+    assert not result.created
+    assert result.invitation == "sent"
+    assert len(kc.emails) == 1
+
+
+async def test_a_retry_on_an_account_that_has_a_password_sends_nothing(keycloak):
+    """The retry of onboarding's step after the person has set their password."""
+    user = {"id": "u1", "username": "p@example.org", "enabled": True, "email": "p@example.org"}
+    kc = keycloak(
+        users_by_email={"p@example.org": user},
+        users_by_username={"p@example.org": user},
+        passwords_on={"u1"},
+    )
+
+    result = await a_service().ensure_participant(
+        community="greenland", key="k", email="p@example.org", invite=True
+    )
+
+    assert result.invitation == "has_password"
+    assert result.invited is False
+    assert kc.emails == []
+
+
+async def test_a_disabled_account_answers_with_the_reason_and_is_not_emailed(keycloak):
+    """O3 (requester, 2026-09-14): the upsert does not fail, and it does not
+    re-enable the account either."""
+    user = {"id": "u1", "username": "p@example.org", "enabled": False, "email": "p@example.org"}
+    kc = keycloak(users_by_email={"p@example.org": user}, users_by_username={"p@example.org": user})
+
+    result = await a_service().ensure_participant(
+        community="greenland", key="k", email="p@example.org", invite=True
+    )
+
+    assert result.invitation == "account_disabled"
+    assert kc.emails == []
+    assert kc.enabled_changes == []
+
+
+async def test_in_dev_mode_an_address_off_the_list_makes_no_keycloak_send(
+    keycloak, caplog
+):
+    kc = keycloak()
+
+    with caplog.at_level("WARNING"):
+        result = await a_service(email_mode="dev").ensure_participant(
+            community="greenland", key="k", email="p@example.org", invite=True
+        )
+
+    assert result.invitation == "not_on_dev_list"
+    assert result.invited is False
+    assert kc.emails == []
+    assert "greenland/k" in caplog.text
+
+
+async def test_in_dev_mode_an_address_on_the_list_is_invited(keycloak):
+    kc = keycloak()
+
+    result = await a_service(
+        email_mode="dev", email_dev_recipients=" Someone@Example.org, p@example.org "
+    ).ensure_participant(
+        community="greenland", key="k", email="P@example.org", invite=True
+    )
+
+    assert result.invitation == "sent"
+    assert len(kc.emails) == 1
+
+
+async def test_the_email_mode_defaults_to_dev(keycloak):
+    """Its failure is an invitation that did not go out and says so; the other
+    default's is emailing real people from a debugging session."""
+    assert ProvisioningSettings().email_mode == "dev"
+
+
 # --- the lifecycle calls resolve through the registry --------------------
 
 
-async def test_a_password_reset_finds_the_member_by_its_registry_row(keycloak, registry):
+def _member(uuid="u1", username="gl-00001", *, enabled=True, email="one@example.org"):
+    return {username: {"id": uuid, "username": username, "enabled": enabled, "email": email}}
+
+
+async def test_an_invitation_finds_the_member_by_its_registry_row(keycloak, registry):
     kc = keycloak(
-        users_by_username={
-            "a.person@example.org": {
-                "id": "uuid-legacy",
-                "username": "a.person@example.org",
-                "enabled": True,
-            }
-        }
+        users_by_username=_member("uuid-legacy", "a.person@example.org", email="a.person@example.org")
     )
     registry()
 
-    result = await a_service().reset_password(
+    result = await a_service().send_invitation(
         community="greenland", key="20260912-a3f9c2"
     )
 
     assert result.username == "a.person@example.org"
-    assert kc.passwords == [("uuid-legacy", result.password, True)]
+    assert result.invitation == "sent"
+    assert [e["user_id"] for e in kc.emails] == ["uuid-legacy"]
 
 
-async def test_the_credential_handed_back_is_temporary(keycloak, registry):
-    """What travels back is a handover, never the participant's password."""
-    keycloak(
-        users_by_username={"gl-00001": {"id": "u1", "username": "gl-00001", "enabled": True}}
-    )
+async def test_an_account_without_a_password_is_invited_for_seven_days(keycloak, registry):
+    kc = keycloak(users_by_username=_member())
     registry()
 
-    result = await a_service().reset_password(community="greenland", key="gl-00001")
+    result = await a_service().send_invitation(community="greenland", key="gl-00001")
 
-    assert len(result.password) >= 12
+    assert result.actions == ("UPDATE_PASSWORD", "VERIFY_EMAIL")
+    assert result.lifespan == 604800
+    assert kc.emails == [
+        {
+            "user_id": "u1",
+            "actions": ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
+            "lifespan": 604800,
+            "client_id": "oauth2_proxy",
+            "redirect_uri": "http://webapp.celine.localhost/",
+        }
+    ]
+
+
+async def test_an_account_with_a_password_gets_a_one_hour_reset(keycloak, registry):
+    """O2 (requester, 2026-09-14). Earlier links are not revoked by Keycloak,
+    so a reset email must not be a 7-day credential."""
+    kc = keycloak(users_by_username=_member(), passwords_on={"u1"})
+    registry()
+
+    result = await a_service().send_invitation(community="greenland", key="gl-00001")
+
+    assert result.actions == ("UPDATE_PASSWORD",)
+    assert result.lifespan == 3600
+    assert kc.emails[0]["actions"] == ["UPDATE_PASSWORD"]
+    assert kc.emails[0]["lifespan"] == 3600
+
+
+async def test_no_password_is_generated_or_set_by_an_invitation(keycloak, registry):
+    kc = keycloak(users_by_username=_member())
+    registry()
+
+    result = await a_service().send_invitation(community="greenland", key="gl-00001")
+
+    assert kc.passwords == []
+    assert not hasattr(result, "password")
+
+
+async def test_an_invitation_to_a_disabled_account_is_refused_before_keycloak_is_asked(
+    keycloak, registry
+):
+    kc = keycloak(users_by_username=_member(enabled=False))
+    registry()
+
+    with pytest.raises(AccountDisabled):
+        await a_service().send_invitation(community="greenland", key="gl-00001")
+
+    assert kc.emails == []
+
+
+async def test_a_second_invitation_within_the_cooldown_is_refused(keycloak, registry):
+    kc = keycloak(users_by_username=_member())
+    registry()
+    clock = Clock()
+    service = a_service(clock=clock)
+
+    await service.send_invitation(community="greenland", key="gl-00001")
+    clock.now += 60
+    with pytest.raises(InvitationCooldown) as excinfo:
+        await service.send_invitation(community="greenland", key="gl-00001")
+
+    assert excinfo.value.retry_after == 241
+    assert len(kc.emails) == 1
+
+    clock.now += 241
+    await service.send_invitation(community="greenland", key="gl-00001")
+    assert len(kc.emails) == 2
+
+
+async def test_an_upsert_invitation_starts_the_cooldown_too(keycloak, registry):
+    kc = keycloak()
+    registry(
+        documents=[
+            {
+                **GREENLAND,
+                "members": {
+                    "k": {"user_id": "p@example.org", "name": "P", "status": "active"}
+                },
+            }
+        ]
+    )
+    service = a_service(clock=Clock())
+
+    await service.ensure_participant(
+        community="greenland", key="k", email="p@example.org", invite=True
+    )
+    with pytest.raises(InvitationCooldown):
+        await service.send_invitation(community="greenland", key="k")
+
+    assert len(kc.emails) == 1
+
+
+async def test_in_dev_mode_an_address_off_the_list_is_not_emailed_and_is_logged(
+    keycloak, registry, caplog
+):
+    kc = keycloak(users_by_username=_member(email="someone@example.org"))
+    registry()
+
+    with caplog.at_level("WARNING"):
+        result = await a_service(
+            email_mode="dev", email_dev_recipients="allowed@example.org"
+        ).send_invitation(community="greenland", key="gl-00001")
+
+    assert result.invitation == "not_on_dev_list"
+    assert kc.emails == []
+    assert "greenland/gl-00001" in caplog.text
+    assert "someone@example.org" not in caplog.text
+
+
+async def test_a_keycloak_refusal_to_send_is_a_provisioning_error(keycloak, registry):
+    """An unregistered redirect URI is Keycloak's 400; it is a dependency
+    failing, and it must not start the cooldown."""
+    kc = keycloak(
+        users_by_username=_member(),
+        send_error=KeycloakError("Unexpected response 400: Invalid redirect uri."),
+    )
+    registry()
+    service = a_service(clock=Clock())
+
+    with pytest.raises(ProvisioningError):
+        await service.send_invitation(community="greenland", key="gl-00001")
+
+    kc.send_error = None
+    await service.send_invitation(community="greenland", key="gl-00001")
+    assert len(kc.emails) == 1
 
 
 async def test_disabling_revokes_without_deleting(keycloak, registry):
@@ -343,7 +666,7 @@ async def test_a_key_the_registry_does_not_hold_is_not_found(keycloak, registry)
     registry()
 
     with pytest.raises(MemberNotFound) as excinfo:
-        await a_service().reset_password(community="greenland", key="nobody")
+        await a_service().send_invitation(community="greenland", key="nobody")
 
     assert "nobody" in str(excinfo.value)
 
@@ -364,7 +687,7 @@ async def test_no_registry_configured_refuses_with_the_variable_named(keycloak):
     keycloak()
 
     with pytest.raises(ProvisioningError) as excinfo:
-        await a_service(registry_url=None).reset_password(
+        await a_service(registry_url=None).send_invitation(
             community="greenland", key="gl-00001"
         )
 

@@ -479,7 +479,7 @@ class TestSyncUsersSettings:
         assert settings.temporary is False
 
     def test_an_empty_group_list_is_an_override(self):
-        base = SyncUsersSettings(groups=["/viewers"])
+        base = SyncUsersSettings(groups=["/pilot"])
         assert base.with_overrides(groups=[]).groups == []
 
     def test_a_configured_password_is_returned_verbatim(self):

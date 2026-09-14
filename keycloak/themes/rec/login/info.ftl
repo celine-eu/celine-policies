@@ -2,7 +2,9 @@
 <@layout.registrationLayout displayMessage=false; section>
     <#if section = "header">
         <#if messageHeader??>
-            ${messageHeader}
+            <#-- A message *key* (e.g. `accountUpdatedTitle`), not text: printed raw
+                 it showed the key itself on the page every invitation ends on. -->
+            ${kcSanitize(msg("${messageHeader}"))?no_esc}
         <#else>
             ${message.summary}
         </#if>

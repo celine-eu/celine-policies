@@ -94,6 +94,7 @@ This starts:
 | `mosquitto` | 1883 (MQTT), 1884 (WebSocket) | MQTT broker |
 | `redis` | — | Cache backend for mosquitto-go-auth |
 | `oauth2-proxy` | 4180 | OAuth2 reverse proxy |
+| `mailpit` | 1025 (SMTP), 8025 (UI) | Keeps Keycloak's outgoing mail; delivers none unless a relay is configured |
 
 Verify the MQTT auth service is running:
 

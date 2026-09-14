@@ -7,7 +7,7 @@ A custom Keycloak login theme that matches the REC webapp design system.
 - 🎨 Matches REC webapp styling (colors, typography, spacing)
 - 🌙 Automatic dark mode support (via `prefers-color-scheme`)
 - 📱 Mobile-first responsive design
-- 🌍 Internationalization (English + Italian)
+- 🌍 Internationalization (Italian, English, Spanish)
 - ♿ Accessibility improvements
 - 🔐 Custom pages: login, register, password reset, OTP, error
 
@@ -64,6 +64,11 @@ COPY keycloak-theme/rec /opt/keycloak/themes/rec
 
 ```
 rec/
+├── email/
+│   ├── theme.properties      # parent=base, locales=it,en,es
+│   ├── html/                 # template.ftl (layout), executeActions, password-reset, email-verification
+│   ├── text/                 # the same three, plain text
+│   └── messages/             # messages_{it,en,es}.properties
 └── login/
     ├── theme.properties      # Theme configuration
     ├── template.ftl          # Base HTML template
@@ -76,6 +81,7 @@ rec/
     ├── info.ftl
     ├── messages/
     │   ├── messages_en.properties
+    │   ├── messages_es.properties
     │   └── messages_it.properties
     └── resources/
         ├── css/

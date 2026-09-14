@@ -209,7 +209,20 @@ def test_exactly_one_client_in_clients_yaml_holds_realm_administration():
     holders = config.clients_with_realm_management_roles()
 
     assert [c.client_id for c in holders] == ["svc-provisioning"]
-    assert holders[0].realm_management_roles == ["manage-users", "manage-realm"]
+    # `manage-organizations` was added 2026-09-12, and the count is unchanged.
+    # 26.7 split the Organizations API into its own realm-management roles, and
+    # `manage-realm` still reaches it — but only for a token carrying no
+    # realm-management roles claim, which this client's token happens not to
+    # because it declares scopes and so never received the `roles` client scope.
+    # That is an accident of its configuration rather than a decision, so the
+    # access is declared instead of inherited. It widens nothing ADR-0007 did not
+    # already argue for: the Organizations API is *why* `manage-realm` is here.
+    # The readings are in that ADR's amendment.
+    assert holders[0].realm_management_roles == [
+        "manage-users",
+        "manage-realm",
+        "manage-organizations",
+    ]
 
 
 def test_the_provisioning_service_does_not_hold_the_realm_admin_composite():

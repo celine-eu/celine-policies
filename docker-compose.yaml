@@ -115,7 +115,7 @@ services:
       - CELINE_PROVISIONING_REGISTRY_CLIENT_SECRET=svc-provisioning
       # **The registry, and it is not optional for as much as it looks.**
       #
-      # `POST /reconcile/{community}` needs it — and so do `password-reset` and
+      # `POST /reconcile/{community}` needs it — and so do `invitation` and
       # `disable`, which resolve `(community, key)` through the export. So a
       # stack that "only onboards" still needs it the first time a REC operator
       # disables somebody: measured on the demo3 deployment 2026-09-12, where
@@ -130,6 +130,15 @@ services:
       # commented suggestion here and resolves from nowhere: that service is in
       # its own compose project and nothing joins this network from another one.
       - CELINE_PROVISIONING_REGISTRY_URL=${CELINE_PROVISIONING_REGISTRY_URL:-http://172.17.0.1:8004}
+      # **Invitations.** Keycloak sends them; these decide the link and who may
+      # receive one. `dev` emails only EMAIL_DEV_RECIPIENTS and logs a WARNING
+      # for everyone else — the same list `mailpit` below relays. Keycloak's own
+      # SMTP has to point at `mailpit:1025` for any of it to arrive there: a realm
+      # created from the dev import does; an existing one needs it set once, see
+      # docs/deployment.md. The redirect must be registered on `oauth2_proxy`.
+      - CELINE_PROVISIONING_EMAIL_MODE=${CELINE_PROVISIONING_EMAIL_MODE:-dev}
+      - EMAIL_DEV_RECIPIENTS=${EMAIL_DEV_RECIPIENTS:-}
+      - CELINE_PROVISIONING_INVITE_REDIRECT_URI=${CELINE_PROVISIONING_INVITE_REDIRECT_URI:-http://webapp.celine.localhost/}
     # **Published, and the security argument moved rather than went away.**
     #
     # `expose` alone made this unreachable by anything outside *this compose
@@ -178,6 +187,36 @@ services:
       - "host.docker.internal:host-gateway"
       - "keycloak.celine.localhost:host-gateway"
       - "api.celine.localhost:host-gateway"
+
+  # Keycloak's outgoing mail in dev. Every message is kept in the UI on :8025 and
+  # none is delivered — unless EMAIL_DEV_RECIPIENTS and MAILPIT_RELAY_HOST are
+  # both set, and then only those addresses are relayed. `config/mailpit/start.sh`
+  # builds the anchored, escaped match; the provisioning service applies the
+  # same list before it asks Keycloak to send anything.
+  #
+  # Keycloak reaches it as `mailpit:1025` on this network — the dev import's
+  # `smtpServer` says so, for a realm created from it. SMTP is also published on
+  # the host's 1025 so other workspace services (`../onboarding`'s `SMTP_HOST`)
+  # can use it through the host gateway, `172.17.0.1:1025`. Published on every
+  # interface for that reason: a 127.0.0.1 binding is not reachable from a
+  # container. It accepts any credentials and relays nothing by default.
+  mailpit:
+    image: axllent/mailpit:v1.31.1
+    restart: unless-stopped
+    entrypoint: [ "/bin/sh", "/start.sh" ]
+    environment:
+      - EMAIL_DEV_RECIPIENTS=${EMAIL_DEV_RECIPIENTS:-}
+      - MAILPIT_RELAY_HOST=${MAILPIT_RELAY_HOST:-}
+      - MAILPIT_RELAY_PORT=${MAILPIT_RELAY_PORT:-587}
+      - MAILPIT_RELAY_USERNAME=${MAILPIT_RELAY_USERNAME:-}
+      - MAILPIT_RELAY_PASSWORD=${MAILPIT_RELAY_PASSWORD:-}
+    volumes:
+      - ./config/mailpit/start.sh:/start.sh:ro
+    networks:
+      - celine_security_net
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # UI and API
 
   mosquitto:
     image: ghcr.io/lhns/mosquitto-go-auth:3.3.0-mosquitto_2.0.22

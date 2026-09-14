@@ -13,7 +13,7 @@ often it changes: clients, scopes, audience mappers and realm groups are driven 
 `clients.yaml` and belong to `keycloak sync`; REC organizations, org groups, participants
 and memberships are driven by the registry and belong to the service.
 
-It also ships a custom Keycloak Docker image with the `rec` login theme (see [`keycloak/README.md`](keycloak/README.md)).
+It also ships a custom Keycloak Docker image with the `rec` login and email themes (see [`keycloak/README.md`](keycloak/README.md)).
 
 ## Quick Start
 
@@ -58,7 +58,8 @@ celine-policies/
 │   │   ├── bundle.py       # Reading a REC bundle (file or registry: same parser)
 │   │   ├── registry.py     # GET /admin/export on the live rec-registry
 │   │   ├── service.py      # What each route does, with no FastAPI in it
-│   │   ├── routes.py       # PUT /participants, password-reset, disable, reconcile
+│   │   ├── routes.py       # PUT /participants, invitation, disable, reconcile
+│   │   ├── invitation.py   # Who may be emailed, which actions, shared with sync-users
 │   │   ├── api_models.py   # Wire models; the one place keycloak_id becomes user_id
 │   │   ├── config.py       # ProvisioningSettings
 │   │   └── main.py         # App factory (create_app)
@@ -74,7 +75,7 @@ celine-policies/
 │   ├── mqtt/acl.rego       # MQTT topic ACL rules
 │   └── scopes.rego         # Shared scope/group helpers
 ├── clients.yaml            # Platform scopes and service client definitions
-├── keycloak/               # Custom Keycloak image + rec login theme
+├── keycloak/               # Custom Keycloak image + rec login and email themes
 ├── config/
 │   ├── keycloak/import/    # Realm import JSON
 │   ├── mosquitto/          # mosquitto.conf

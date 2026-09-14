@@ -232,6 +232,15 @@ class KeycloakAdminClient:
     # 'organization', 'groups', and 'dataspace' are managed via
     # ensure_*_client_scope() helpers rather than through clients.yaml —
     # exclude from orphan detection.
+    #
+    # **The SAML ones belong here for a reason beyond tidiness.** They are
+    # Keycloak's own, this platform declares none of them and uses no SAML, so
+    # they stood as *permanent* orphans — and `--prune` would delete objects the
+    # server created. Worse than the deletion is what a permanently non-empty
+    # orphan list does to the report: it is the review surface for "what is in
+    # this realm that nobody declares", and three entries that are always there
+    # teach a reader to skip it. `AuthnContextClassRef` arrived with 26.7.3, so
+    # the list also grows on its own with each upgrade.
     BUILTIN_SCOPES = {
         "openid",
         "profile",
@@ -248,6 +257,10 @@ class KeycloakAdminClient:
         "groups",
         "dataspace",
         "service_account",
+        # SAML, all Keycloak's own. `AuthnContextClassRef` is 26.7+.
+        "role_list",
+        "saml_organization",
+        "AuthnContextClassRef",
     }
 
     def __init__(self, settings: KeycloakSettings):
@@ -1736,6 +1749,7 @@ class KeycloakAdminClient:
         enabled: bool = True,
         temporary: bool = True,
         email_verified: bool = False,
+        locale: str | None = None,
     ) -> tuple[str, bool]:
         """Ensure a user exists, creating it if necessary.
 
@@ -1760,6 +1774,7 @@ class KeycloakAdminClient:
             enabled=enabled,
             temporary=temporary,
             email_verified=email_verified,
+            locale=locale,
         )
 
         # Fetch back to get the Keycloak-assigned UUID
@@ -1781,6 +1796,7 @@ class KeycloakAdminClient:
         enabled: bool = True,
         temporary: bool = True,
         email_verified: bool = False,
+        locale: str | None = None,
     ) -> None:
         """Create a Keycloak user, letting Keycloak assign the UUID.
 
@@ -1791,6 +1807,11 @@ class KeycloakAdminClient:
         When ``temporary=True`` (default) the user is forced to change it on
         first login (requiredActions: UPDATE_PASSWORD). When ``temporary=False``
         the password is set without forcing a reset.
+
+        ``locale`` is written as the ``locale`` attribute, which is what Keycloak
+        picks an email's language from. **It survives only on a realm with
+        ``internationalizationEnabled``**: elsewhere the create still answers
+        ``201`` and the value is silently dropped (measured on 26.7.3).
         """
         payload: dict[str, Any] = {
             "username": username,
@@ -1803,6 +1824,8 @@ class KeycloakAdminClient:
             payload["firstName"] = first_name
         if last_name:
             payload["lastName"] = last_name
+        if locale:
+            payload["attributes"] = {"locale": [locale]}
         if temporary_password:
             if temporary:
                 payload["requiredActions"] = ["UPDATE_PASSWORD"]
@@ -1893,6 +1916,64 @@ class KeycloakAdminClient:
         logger.debug("Setting password for user %s", user_id)
         await self._put(f"/users/{user_id}/reset-password", json=payload)
         logger.info("Password set for user %s", user_id)
+
+    async def get_user_credentials(self, user_id: str) -> list[dict[str, Any]]:
+        """The credentials an account holds (type and metadata, never a secret)."""
+        return await self._get(f"/users/{user_id}/credentials") or []
+
+    async def set_user_locale(self, user_id: str, locale: str) -> bool:
+        """Write the ``locale`` attribute on an existing account.
+
+        Returns whether it changed. Reads first and puts the whole
+        representation back, as `set_user_enabled` does, so no other attribute
+        is lost. Like the create, the value survives only on a realm with
+        ``internationalizationEnabled``.
+        """
+        user = await self.get_user_by_id(user_id)
+        if user is None:
+            raise KeycloakNotFoundError(f"User not found: {user_id}")
+        attributes = dict(user.get("attributes") or {})
+        if attributes.get("locale") == [locale]:
+            return False
+        attributes["locale"] = [locale]
+        payload = dict(user)
+        payload["attributes"] = attributes
+        await self._put(f"/users/{user_id}", json=payload, expected_status=[204])
+        logger.info("Set user %s locale=%s", user_id, locale)
+        return True
+
+    async def execute_actions_email(
+        self,
+        user_id: str,
+        actions: list[str],
+        *,
+        lifespan: int,
+        client_id: str | None = None,
+        redirect_uri: str | None = None,
+    ) -> None:
+        """Have Keycloak email the account a link that performs `actions`.
+
+        `PUT /users/{id}/execute-actions-email`. The actions live in the token,
+        not on the account, and every link sent stays usable for its whole
+        `lifespan` even after another one has been used (measured on 26.7.3).
+
+        Keycloak answers `400` for a disabled account (`"User is disabled"`) and
+        for a `redirect_uri` not registered on `client_id`; both surface as
+        `KeycloakError`. A caller must check `enabled` itself rather than parse
+        that message.
+        """
+        params: dict[str, Any] = {"lifespan": lifespan}
+        if redirect_uri:
+            params["redirect_uri"] = redirect_uri
+            if client_id:
+                params["client_id"] = client_id
+        url = f"{self._settings.admin_url}/users/{user_id}/execute-actions-email"
+        headers = await self._headers()
+        response = await self._client.put(
+            url, headers=headers, params=params, json=list(actions)
+        )
+        self._handle_response(response, expected_status=[200, 204])
+        logger.info("Sent %s to user %s (lifespan %ss)", ",".join(actions), user_id, lifespan)
 
     async def add_user_to_group_with_retry(
         self,

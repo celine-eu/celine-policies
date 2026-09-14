@@ -139,6 +139,27 @@ class TestSyncUsersOptions:
         declaration does not own."""
         assert "--no-admin-groups" in help_text
 
+    def test_group_assignment_names_no_realm_group_as_a_default(self, help_text: str):
+        """Participants are org-scoped; realm `/viewers` is not assigned by
+        default (requester, 2026-09-14)."""
+        assert "/viewers" not in help_text
+
+    def test_invitations_are_offered(self, help_text: str):
+        assert "--invite" in help_text
+
+    def test_invite_refuses_a_password_it_would_hand_out(self, tmp_path):
+        """An invitation exists so that nobody is handed a password."""
+        rec = tmp_path / "rec.yaml"
+        rec.write_text("community: {id: gl, name: GL}\nmembers: {}\n")
+
+        result = runner.invoke(
+            app,
+            ["keycloak", "sync-users", str(rec), "--invite", "--password", "demo"],
+        )
+
+        assert result.exit_code == 1
+        assert "--invite" in result.output
+
     def test_the_live_registry_can_be_selected(self, help_text: str):
         """Reconciling a file leaves out everybody onboarded since it was taken."""
         assert "--from-registry" in help_text

@@ -8,7 +8,7 @@ The `docker-compose.yaml` defines the full development stack:
 
 | Service | Image | Port | Description |
 |---------|-------|------|-------------|
-| `keycloak` | Custom (from `keycloak/Dockerfile`) | 8080 | Identity provider with `rec` login theme |
+| `keycloak` | Custom (from `keycloak/Dockerfile`) | 8080 | Identity provider with `rec` login and email themes |
 | `keycloak-sync` | Same as `mqtt_auth` | — | Runs `bootstrap` + `sync` on startup, then exits |
 | `sync-users` | Same as `mqtt_auth` | — | Imports example REC users, then exits |
 | `mqtt_auth` | From `./Dockerfile` | 8009 | MQTT auth HTTP backend |
@@ -16,6 +16,7 @@ The `docker-compose.yaml` defines the full development stack:
 | `mosquitto` | `ghcr.io/lhns/mosquitto-go-auth:3.3.0-mosquitto_2.0.22` | 1883, 1884 | MQTT broker (TCP + WebSocket) |
 | `redis` | `redis:7.2-alpine` | — | Cache backend |
 | `oauth2-proxy` | `quay.io/oauth2-proxy/oauth2-proxy:v7.11.0` | 4180 | OAuth2 reverse proxy |
+| `mailpit` | `axllent/mailpit:v1.31.1` | 1025 (SMTP), 8025 (UI) | Keycloak's outgoing mail in dev: kept, not delivered |
 
 ### Startup Order
 
@@ -40,6 +41,61 @@ an internet-facing credential.** It would still check scopes on the token, becau
 authorises by `provisioning.*` like every other service — but that is defence in depth, not
 the control, and it is not what the grant was justified by. The corresponding guard lives
 in `../celine-dev`'s Caddyfile, where somebody adding a route will read it.
+
+## Email: invitations and password recovery
+
+**Keycloak sends every email**; the provisioning service only asks it to, through
+`execute-actions-email`. The templates are the `rec` email theme
+(`keycloak/themes/rec/email/`, `it`, `en` and `es`), and no password is ever generated or
+put into an email. What each route sends is in the
+[API reference](api-reference.md#provisioning-service).
+
+### What a realm needs, and who owns it
+
+| Setting | Owner | Notes |
+|---|---|---|
+| `internationalizationEnabled: true`, `supportedLocales: [it, en, es]`, `defaultLocale: it` | `keycloak bootstrap` (planned, not built yet) | **Must be on before the provisioning service writes `locale`**: without it Keycloak answers `201` and drops the value |
+| `emailTheme: rec`, `resetPasswordAllowed: true`, `actionTokenGeneratedByAdminLifespan: 604800`, `actionTokenGeneratedByUserLifespan: 3600` | `keycloak bootstrap` (planned, not built yet) | Until then, set by hand on each realm |
+| `smtpServer` | infra, and only infra, outside dev | A credential. The realm template reaches new realms only; an existing realm gets it once, by hand. The local dev import points it at `mailpit` (requester, 2026-09-14) |
+
+`bootstrap` does not own these yet: that waits on `bootstrap` gaining its platform
+settings. **Until it does, an operator sets them on each realm**, for example with `kcadm`:
+
+```bash
+kcadm.sh update realms/celine \
+  -s internationalizationEnabled=true -s 'supportedLocales=["it","en","es"]' -s defaultLocale=it \
+  -s emailTheme=rec -s resetPasswordAllowed=true \
+  -s actionTokenGeneratedByAdminLifespan=604800 -s actionTokenGeneratedByUserLifespan=3600
+```
+
+`verifyEmail` is deliberately **not** set: the invitation already carries `VERIFY_EMAIL`,
+and turning it on would stop every existing account with `emailVerified: false` at its next
+sign-in. `passwordPolicy` stays at Keycloak's default.
+
+### Locally
+
+`mailpit` keeps every message in its UI at <http://localhost:8025> and delivers none.
+The dev import (`config/keycloak/import/realm-celine.json`) points `smtpServer` at
+`mailpit:1025`, which reaches **a realm created from it only** — `--import-realm` skips a
+realm that already exists. On an existing local realm, set it once:
+
+```bash
+kcadm.sh update realms/celine -s 'smtpServer.host=mailpit' -s 'smtpServer.port=1025' \
+  -s 'smtpServer.from=noreply@celine.localhost' -s 'smtpServer.fromDisplayName=CELINE'
+```
+
+Other workspace services can send through it too: SMTP is published on the host's 1025, so
+a container uses `172.17.0.1:1025` (the same host-gateway convention as the registry URL) and
+a process on the host uses `localhost:1025`.
+
+To let real mail reach a few addresses, set both `EMAIL_DEV_RECIPIENTS` (comma-separated) and
+`MAILPIT_RELAY_HOST` (with `MAILPIT_RELAY_PORT`, `_USERNAME`, `_PASSWORD` as needed). Mailpit
+then relays only those addresses, through an anchored, escaped match built by
+`config/mailpit/start.sh`, and the provisioning service invites only those addresses.
+Everyone else gets a `WARNING` in the service log and `invitation: not_on_dev_list`.
+
+Outside dev, set `CELINE_PROVISIONING_EMAIL_MODE=deliver` and
+`CELINE_PROVISIONING_INVITE_REDIRECT_URI` to the webapp root.
 
 ## Dockerfile
 
@@ -175,9 +231,9 @@ Configuration at `config/oauth2-proxy/oauth2-proxy.cfg`. Runs on port 4180.
 The `keycloak/` directory builds a custom Keycloak image:
 
 - Base: `quay.io/keycloak/keycloak:26.7.3`
-- Adds the `rec` login theme (see [`keycloak/README.md`](../keycloak/README.md))
+- Adds the `rec` login and email themes (see [`keycloak/README.md`](../keycloak/README.md))
 - Pre-builds Keycloak at image build time for faster startup
-- Version tracked in `keycloak/version.txt` (`26.7.3-1.0.3`)
+- Version tracked in `keycloak/version.txt` (`26.7.3-1.1.0`)
 
 A GitHub Actions workflow (`.github/workflows/build-keycloak.yaml`) detects changes to `keycloak/version.txt` and publishes an updated image.
 

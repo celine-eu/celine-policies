@@ -22,12 +22,14 @@ from celine.provisioning import routes as routes_module
 from celine.provisioning.config import ProvisioningSettings
 from celine.provisioning.routes import get_service, get_settings, router
 from celine.provisioning.service import (
+    AccountDisabled,
     DisableResult,
     Divergence,
+    InvitationCooldown,
+    InvitationResult,
     MemberNotFound,
     ProvisioningError,
     ReconcileResult,
-    ResetResult,
     UpsertResult,
 )
 
@@ -44,21 +46,35 @@ class FakeUser:
 
 
 class FakeService:
-    def __init__(self, *, raises: Exception | None = None):
+    def __init__(self, *, raises: Exception | None = None, invitation: str = "not_requested"):
         self.raises = raises
+        self.invitation = invitation
         self.calls: list[tuple] = []
 
-    async def ensure_participant(self, *, community, key, email, first_name, last_name):
-        self.calls.append(("ensure_participant", community, key, email))
+    async def ensure_participant(
+        self, *, community, key, email, first_name, last_name, locale, invite
+    ):
+        self.calls.append(("ensure_participant", community, key, email, locale, invite))
         if self.raises:
             raise self.raises
-        return UpsertResult(username="gl-00001", keycloak_id="uuid-1", created=True)
+        return UpsertResult(
+            username="gl-00001",
+            keycloak_id="uuid-1",
+            created=True,
+            invitation=self.invitation if invite else "not_requested",
+        )
 
-    async def reset_password(self, *, community, key):
-        self.calls.append(("reset_password", community, key))
+    async def send_invitation(self, *, community, key):
+        self.calls.append(("send_invitation", community, key))
         if self.raises:
             raise self.raises
-        return ResetResult(username="gl-00001", keycloak_id="uuid-1", password="Pw123456789012")
+        return InvitationResult(
+            username="gl-00001",
+            keycloak_id="uuid-1",
+            invitation="sent",
+            actions=("UPDATE_PASSWORD", "VERIFY_EMAIL"),
+            lifespan=604800,
+        )
 
     async def disable(self, *, community, key):
         self.calls.append(("disable", community, key))
@@ -170,7 +186,7 @@ def test_the_reconcile_scope_does_not_authorise_an_upsert(app_with):
     "method,path",
     [
         ("put", "/participants/greenland/gl-00001"),
-        ("post", "/participants/greenland/gl-00001/password-reset"),
+        ("post", "/participants/greenland/gl-00001/invitation"),
         ("post", "/participants/greenland/gl-00001/disable"),
         ("post", "/reconcile/greenland"),
     ],
@@ -205,6 +221,8 @@ def test_the_upsert_returns_the_uuid_under_the_name_onboarding_stores(app_with):
         "user_id": "uuid-1",
         "username": "gl-00001",
         "created": True,
+        "invitation": "not_requested",
+        "invited": False,
     }
 
 
@@ -217,6 +235,70 @@ def test_a_body_with_no_email_is_refused_before_anything_is_written(app_with):
 
     assert response.status_code == 422
     assert service.calls == []
+
+
+def test_the_upsert_passes_locale_and_invite_through(app_with):
+    client, service = app_with(scopes=WRITE, service=FakeService(invitation="sent"))
+
+    response = client.put(
+        "/participants/greenland/gl-00001",
+        json={**BODY, "locale": "es", "invite": True},
+        headers={"Authorization": "Bearer x"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["invitation"] == "sent"
+    assert response.json()["invited"] is True
+    assert service.calls == [
+        ("ensure_participant", "greenland", "gl-00001", BODY["email"], "es", True)
+    ]
+
+
+def test_locale_and_invite_default_to_nothing_and_false(app_with):
+    client, service = app_with(scopes=WRITE)
+
+    client.put(
+        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+    )
+
+    assert service.calls[0][4:] == (None, False)
+
+
+@pytest.mark.parametrize("locale", ["fr", "IT", "", "es-ES"])
+def test_a_locale_the_themes_do_not_carry_is_refused_with_422(app_with, locale):
+    """Keycloak stores any value and silently falls back to the realm default
+    for one it has no bundle for (measured, Phase 1), so the check is here."""
+    client, service = app_with(scopes=WRITE)
+
+    response = client.put(
+        "/participants/greenland/gl-00001",
+        json={**BODY, "locale": locale},
+        headers={"Authorization": "Bearer x"},
+    )
+
+    assert response.status_code == 422
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "invitation", ["has_password", "not_on_dev_list", "account_disabled"]
+)
+def test_an_invitation_that_was_not_sent_is_still_a_200_with_the_reason(
+    app_with, invitation
+):
+    """O3 (requester, 2026-09-14): an approval is never blocked by its email,
+    and the operator is told why nothing went out."""
+    client, _ = app_with(scopes=WRITE, service=FakeService(invitation=invitation))
+
+    response = client.put(
+        "/participants/greenland/gl-00001",
+        json={**BODY, "invite": True},
+        headers={"Authorization": "Bearer x"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["invitation"] == invitation
+    assert response.json()["invited"] is False
 
 
 def test_the_upsert_is_always_200_so_a_retry_looks_like_the_same_call(app_with):
@@ -232,15 +314,63 @@ def test_the_upsert_is_always_200_so_a_retry_looks_like_the_same_call(app_with):
 # --- the lifecycle calls --------------------------------------------------
 
 
-def test_a_password_reset_hands_back_the_one_time_credential(app_with):
-    client, _ = app_with(scopes=WRITE)
+def test_an_invitation_reports_what_was_emailed_and_carries_no_credential(app_with):
+    client, service = app_with(scopes=WRITE)
 
     response = client.post(
-        "/participants/greenland/gl-00001/password-reset",
+        "/participants/greenland/gl-00001/invitation",
         headers={"Authorization": "Bearer x"},
     )
 
-    assert response.json()["temporary_password"] == "Pw123456789012"
+    assert response.status_code == 200
+    assert response.json() == {
+        "user_id": "uuid-1",
+        "username": "gl-00001",
+        "invitation": "sent",
+        "actions": ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
+        "lifespan": 604800,
+    }
+    assert "password" not in response.text.replace("UPDATE_PASSWORD", "")
+    assert service.calls == [("send_invitation", "greenland", "gl-00001")]
+
+
+def test_an_invitation_to_a_member_nobody_has_is_404(app_with):
+    client, _ = app_with(
+        scopes=WRITE, service=FakeService(raises=MemberNotFound("greenland has no member 'x'"))
+    )
+
+    response = client.post(
+        "/participants/greenland/x/invitation", headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 404
+
+
+def test_an_invitation_to_a_disabled_account_is_409(app_with):
+    client, _ = app_with(
+        scopes=WRITE, service=FakeService(raises=AccountDisabled("greenland/x is disabled"))
+    )
+
+    response = client.post(
+        "/participants/greenland/x/invitation", headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 409
+    assert "disabled" in response.json()["detail"]
+
+
+def test_an_invitation_within_the_cooldown_is_429_with_retry_after(app_with):
+    client, _ = app_with(
+        scopes=WRITE,
+        service=FakeService(raises=InvitationCooldown("too soon", retry_after=42)),
+    )
+
+    response = client.post(
+        "/participants/greenland/x/invitation", headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "42"
 
 
 def test_a_member_nobody_has_is_404_and_not_a_server_error(app_with):
@@ -263,7 +393,7 @@ def test_a_registry_or_keycloak_failure_is_502(app_with):
     )
 
     response = client.post(
-        "/participants/greenland/gl-00001/password-reset",
+        "/participants/greenland/gl-00001/invitation",
         headers={"Authorization": "Bearer x"},
     )
 
@@ -336,7 +466,7 @@ def test_the_service_exposes_four_routes_and_a_health_check():
 
     assert paths == {
         ("/participants/{community}/{key}", ("PUT",)),
-        ("/participants/{community}/{key}/password-reset", ("POST",)),
+        ("/participants/{community}/{key}/invitation", ("POST",)),
         ("/participants/{community}/{key}/disable", ("POST",)),
         ("/reconcile/{community}", ("POST",)),
         ("/health", ("GET",)),
