@@ -13,7 +13,7 @@ not how often it changes:
 
 | Level | Written by | Declared in |
 |---|---|---|
-| **platform**: realm features (Organizations, fine-grained admin permissions), sign-in settings, languages, themes, token lifespans, brute force, `smtpServer`, the realm role groups | `keycloak bootstrap` | [`platform.yaml`](platform.yaml), `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `CELINE_KEYCLOAK_SMTP_*` |
+| **platform**: realm features (Organizations, fine-grained admin permissions), sign-in settings, languages, themes, token lifespans, brute force, `smtpServer`, the realm role groups | `keycloak bootstrap` | [`platform.yaml`](platform.yaml), `CELINE_KEYCLOAK_PLATFORM_*` overrides, `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `CELINE_KEYCLOAK_SMTP_*` |
 | **clients**: clients, scopes, scope bindings, audience mappers, realm claim scopes, service-account grants | `keycloak sync` | `clients.yaml` |
 | **organizations and users**: REC organizations, org groups, participants, memberships | the provisioning service, `keycloak sync-orgs`, `keycloak sync-users` | the registry, owners and REC YAML |
 

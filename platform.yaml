@@ -15,6 +15,9 @@
 #   passwordPolicy       Keycloak's default
 #
 # A deployment may overlay `realm_settings.supportedLocales` only (`bootstrap --overlay`).
+# A deployment may override most values from the environment, CELINE_KEYCLOAK_PLATFORM_<KEY>
+# (`loginTheme` -> CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME); `null` stops bootstrap managing the
+# key. Which keys: ENV_OVERRIDABLE_SETTINGS in src/celine/policies/cli/keycloak/platform.py.
 
 realm_settings:
   # Features other levels depend on. `sync-orgs` and `sync-users` refuse a realm
@@ -37,7 +40,8 @@ realm_settings:
   defaultLocale: it
 
   # Themes. `bootstrap` refuses a theme the server does not list: Keycloak itself
-  # accepts an unknown one and falls back to its own emails without a word.
+  # accepts an unknown one and falls back to its own emails without a word. A Keycloak
+  # without `rec` sets CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME / _EMAIL_THEME to `null`.
   loginTheme: rec
   emailTheme: rec
 

@@ -9,7 +9,8 @@ The platform level of the realm, and nothing else (plan each-cli-command-owns-on
 0. **The realm itself**, created empty if it does not exist. That needs the master admin.
 1. **The platform declaration** (`platform.yaml`, see `keycloak/platform.py`): realm
    features, sign-in settings, languages, themes, lifespans, brute force and the role
-   groups. Only the declared keys are written.
+   groups. Only the declared keys are written. A deployment overrides a listed key with
+   `CELINE_KEYCLOAK_PLATFORM_<KEY>`, or stops declaring it with the value `null`.
 2. **The admin CLI client** — the service account every other command authenticates as.
    Created or refreshed only with master admin credentials, because a service account
    cannot create the client it is.
@@ -28,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -143,7 +145,7 @@ def bootstrap(
     dry_run = dry_run or check
 
     try:
-        declaration = load_platform(platform_yaml, overlay or [])
+        declaration = load_platform(platform_yaml, overlay or [], os.environ)
     except PlatformDeclarationError as e:
         typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)

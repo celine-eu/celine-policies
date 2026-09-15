@@ -26,6 +26,7 @@ from celine.policies.cli.keycloak.platform import (
     PlatformNotReady,
     check_themes,
     converge_platform,
+    env_override_name,
     load_platform,
     plan_realm_settings,
     require_platform,
@@ -673,3 +674,108 @@ class TestSmtpComesFromTheEnvironment:
         assert PASSWORD not in out
         assert "smtpServer.password: write-only" in out
         assert "smtpServer.host" in out
+
+
+# ---------------------------------------------------------------------------
+# Overrides from the environment (spindoxlabs/ds#36)
+# ---------------------------------------------------------------------------
+
+
+class TestTheEnvironmentOverridesListedKeys:
+    """A deployment whose Keycloak differs from the image: stock themes, other lifespans."""
+
+    def test_every_listed_key_is_a_key_bootstrap_owns_and_none_is_refused(self):
+        from celine.policies.cli.keycloak.platform import ENV_OVERRIDABLE_SETTINGS, REALM_SETTING_TYPES
+
+        assert set(ENV_OVERRIDABLE_SETTINGS) <= set(REALM_SETTING_TYPES)
+        assert not set(ENV_OVERRIDABLE_SETTINGS) & set(REFUSED_REALM_SETTINGS)
+
+    @pytest.mark.parametrize(
+        "key", ["organizationsEnabled", "adminPermissionsEnabled", "internationalizationEnabled"]
+    )
+    def test_what_other_levels_depend_on_is_refused(self, key):
+        with pytest.raises(PlatformDeclarationError, match="not an overridable"):
+            load_platform(PLATFORM_YAML, environ={env_override_name(key): "false"})
+
+    @pytest.mark.parametrize(
+        ("key", "name"),
+        [
+            ("loginTheme", "CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME"),
+            ("accessTokenLifespanForImplicitFlow", "CELINE_KEYCLOAK_PLATFORM_ACCESS_TOKEN_LIFESPAN_FOR_IMPLICIT_FLOW"),
+        ],
+    )
+    def test_the_variable_is_the_key_in_upper_snake_case(self, key, name):
+        assert env_override_name(key) == name
+
+    def test_unset_or_empty_keeps_the_declared_value(self):
+        declaration = load_platform(PLATFORM_YAML, environ={"CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME": ""})
+        assert declaration.realm_settings["loginTheme"] == "rec"
+        assert declaration.sources["loginTheme"] == str(PLATFORM_YAML)
+
+    def test_null_drops_the_key_so_bootstrap_leaves_it_alone(self):
+        declaration = load_platform(
+            PLATFORM_YAML,
+            environ={"CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME": "null", "CELINE_KEYCLOAK_PLATFORM_EMAIL_THEME": "null"},
+        )
+        assert "loginTheme" not in declaration.realm_settings
+        assert "emailTheme" not in declaration.sources
+
+    @pytest.mark.parametrize(
+        ("name", "raw", "key", "value"),
+        [
+            ("CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME", "keycloak.v2", "loginTheme", "keycloak.v2"),
+            ("CELINE_KEYCLOAK_PLATFORM_REGISTRATION_ALLOWED", "True", "registrationAllowed", True),
+            ("CELINE_KEYCLOAK_PLATFORM_ACCESS_TOKEN_LIFESPAN", "300", "accessTokenLifespan", 300),
+            ("CELINE_KEYCLOAK_PLATFORM_SUPPORTED_LOCALES", "it, en", "supportedLocales", ["it", "en"]),
+        ],
+    )
+    def test_a_value_replaces_the_declared_one_and_names_its_source(self, name, raw, key, value):
+        declaration = load_platform(PLATFORM_YAML, environ={name: raw})
+        assert declaration.realm_settings[key] == value
+        assert declaration.sources[key] == name
+
+    def test_it_wins_over_an_overlay(self, tmp_path):
+        overlay = write(tmp_path, "overlay.yaml", "realm_settings:\n  supportedLocales: [it, en]\n")
+        declaration = load_platform(
+            PLATFORM_YAML, [overlay], environ={"CELINE_KEYCLOAK_PLATFORM_SUPPORTED_LOCALES": "it,es"}
+        )
+        assert declaration.realm_settings["supportedLocales"] == ["it", "es"]
+
+    @pytest.mark.parametrize(
+        ("name", "raw"),
+        [
+            ("CELINE_KEYCLOAK_PLATFORM_REGISTRATION_ALLOWED", "yes"),
+            ("CELINE_KEYCLOAK_PLATFORM_FAILURE_FACTOR", "-1"),
+            ("CELINE_KEYCLOAK_PLATFORM_FAILURE_FACTOR", "five"),
+            ("CELINE_KEYCLOAK_PLATFORM_SUPPORTED_LOCALES", "it,,en"),
+        ],
+    )
+    def test_a_value_that_does_not_parse_is_refused_naming_the_variable(self, name, raw):
+        with pytest.raises(PlatformDeclarationError, match=name):
+            load_platform(PLATFORM_YAML, environ={name: raw})
+
+    def test_the_merged_result_is_still_checked(self):
+        with pytest.raises(PlatformDeclarationError, match="defaultLocale"):
+            load_platform(PLATFORM_YAML, environ={"CELINE_KEYCLOAK_PLATFORM_SUPPORTED_LOCALES": "en"})
+
+    @pytest.mark.asyncio
+    async def test_a_stock_keycloak_bootstraps_with_the_themes_nulled(self):
+        """The ds dev stack: stock Keycloak, no `rec`, and nothing written for the themes."""
+        declaration = load_platform(
+            PLATFORM_YAML,
+            environ={"CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME": "null", "CELINE_KEYCLOAK_PLATFORM_EMAIL_THEME": "null"},
+        )
+        kc = FakeRealm(themes={"login": ["keycloak", "keycloak.v2"], "email": ["keycloak"]})
+
+        await converge(kc, declaration)
+
+        assert not any({"loginTheme", "emailTheme"} & set(put) for put in kc.puts)
+
+    @pytest.mark.asyncio
+    async def test_an_overridden_theme_is_still_checked_against_the_server(self):
+        declaration = load_platform(PLATFORM_YAML, environ={"CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME": "custom"})
+        kc = FakeRealm()
+
+        with pytest.raises(PlatformDeclarationError, match="custom"):
+            await converge(kc, declaration)
+        assert kc.writes == []

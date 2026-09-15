@@ -26,6 +26,14 @@ Refused before anything is read from Keycloak, each for a reason:
 
 And a deployment overlay may change `supportedLocales` and nothing else.
 
+## What the environment can say
+
+A deployment differs from the image in ways a baked file cannot know: a stock Keycloak
+ships no `rec` theme (spindoxlabs/ds#36). Each key in `ENV_OVERRIDABLE_SETTINGS` takes
+`CELINE_KEYCLOAK_PLATFORM_<KEY>`, applied after the overlays and checked like the file.
+The value `null` drops the key from the declaration: `bootstrap` then leaves the realm's
+value alone, which on a new realm is Keycloak's default.
+
 ## Nested objects are replaced whole
 
 Keycloak does not merge a nested object on `PUT`: `smtpServer` with one field is a
@@ -36,6 +44,8 @@ this module accepts is nested, and that is a constraint on adding one, not an ac
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -101,6 +111,41 @@ REFUSED_REALM_SETTINGS: dict[str, str] = {
 #: The only keys a deployment overlay may change.
 OVERLAY_REALM_SETTINGS = frozenset({"supportedLocales"})
 
+#: Prefix of the variables that override a declared value; the realm key follows in upper
+#: snake case (`loginTheme` -> `CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME`). `PLATFORM_` keeps
+#: them apart from the connection settings under `CELINE_KEYCLOAK_`.
+ENV_OVERRIDE_PREFIX = "CELINE_KEYCLOAK_PLATFORM_"
+
+#: Written as a variable's value, the key is not declared at all: `bootstrap` stops
+#: managing it, exactly as if `platform.yaml` did not name it. Nothing is reset.
+ENV_OVERRIDE_NULL = "null"
+
+#: The keys a deployment may override from the environment. What a deployment reasonably
+#: differs on: the themes its Keycloak ships, languages, lifespans, brute-force tuning.
+#: Left out on purpose: the features other commands require (`organizationsEnabled`,
+#: `adminPermissionsEnabled`), `internationalizationEnabled` (provisioning's `locale` is
+#: dropped without it), and the username and email rules the invitation relies on.
+ENV_OVERRIDABLE_SETTINGS = (
+    "loginTheme",
+    "emailTheme",
+    "supportedLocales",
+    "defaultLocale",
+    "registrationAllowed",
+    "resetPasswordAllowed",
+    "accessTokenLifespan",
+    "accessTokenLifespanForImplicitFlow",
+    "ssoSessionIdleTimeout",
+    "ssoSessionMaxLifespan",
+    "actionTokenGeneratedByAdminLifespan",
+    "actionTokenGeneratedByUserLifespan",
+    "permanentLockout",
+    "waitIncrementSeconds",
+    "quickLoginCheckMilliSeconds",
+    "minimumQuickLoginWaitSeconds",
+    "maxFailureWaitSeconds",
+    "failureFactor",
+)
+
 #: Locales the `rec` login and email themes ship bundles for, and the only values the
 #: provisioning service accepts as a user's `locale`. A fourth is a theme and service
 #: release, never an overlay.
@@ -110,6 +155,11 @@ THEME_LOCALES = frozenset({"it", "en", "es"})
 THEME_SETTINGS = {"loginTheme": "login", "emailTheme": "email"}
 
 _TOP_LEVEL_KEYS = frozenset({"realm_settings", "role_groups"})
+
+
+def env_override_name(key: str) -> str:
+    """The variable that overrides realm key `key`."""
+    return ENV_OVERRIDE_PREFIX + re.sub(r"(?<!^)(?=[A-Z])", "_", key).upper()
 
 
 class PlatformDeclarationError(ValueError):
@@ -168,7 +218,7 @@ def _read_mapping(path: Path) -> dict[str, Any]:
     return data
 
 
-def _check_value(path: Path, key: str, value: Any) -> None:
+def _check_value(path: "Path | str", key: str, value: Any) -> None:
     kind = REALM_SETTING_TYPES[key]
     if kind == _BOOL:
         ok = isinstance(value, bool)
@@ -259,12 +309,66 @@ def _check_locales(settings: dict[str, Any], sources: dict[str, str]) -> None:
         )
 
 
-def load_platform(path: Path, overlays: "list[Path] | tuple[Path, ...]" = ()) -> PlatformDeclaration:
-    """Read `platform.yaml` and apply each overlay in order, refusing anything invalid.
+def _parse_env_value(name: str, key: str, raw: str) -> Any:
+    """A variable's text as the value its key's type needs, refusing what does not parse."""
+    kind = REALM_SETTING_TYPES[key]
+    text = raw.strip()
+    if kind == _BOOL:
+        if text.lower() not in ("true", "false"):
+            raise PlatformDeclarationError(f"{name}: must be true or false, got {raw!r}")
+        value: Any = text.lower() == "true"
+    elif kind == _SECONDS:
+        if not text.isdigit():
+            raise PlatformDeclarationError(f"{name}: must be a {kind}, got {raw!r}")
+        value = int(text)
+    elif kind == _LOCALES:
+        value = [part.strip() for part in text.split(",")]
+    else:
+        value = text
+    _check_value(name, key, value)
+    return value
+
+
+def apply_env_overrides(declaration: PlatformDeclaration, environ: Mapping[str, str]) -> None:
+    """Override each key of `ENV_OVERRIDABLE_SETTINGS` its variable sets, in place.
+
+    Unset or empty: the declared value stands. `null`: the key is dropped, so `bootstrap`
+    leaves it alone. Anything else replaces the value and becomes the key's source.
+    A locale list is comma-separated. A set variable of this prefix naming any other key
+    is refused, so an override that would not apply never looks as if it did.
+    """
+    names = {env_override_name(key): key for key in ENV_OVERRIDABLE_SETTINGS}
+    unknown = sorted(
+        name for name, raw in environ.items()
+        if name.startswith(ENV_OVERRIDE_PREFIX) and name not in names and raw.strip()
+    )
+    if unknown:
+        raise PlatformDeclarationError(
+            f"{unknown}: not an overridable platform setting; accepted: {sorted(names)}"
+        )
+    for name, key in names.items():
+        raw = environ.get(name, "")
+        if not raw.strip():
+            continue
+        if raw.strip().lower() == ENV_OVERRIDE_NULL:
+            declaration.realm_settings.pop(key, None)
+            declaration.sources.pop(key, None)
+            continue
+        declaration.realm_settings[key] = _parse_env_value(name, key, raw)
+        declaration.sources[key] = name
+
+
+def load_platform(
+    path: Path,
+    overlays: "list[Path] | tuple[Path, ...]" = (),
+    environ: Mapping[str, str] | None = None,
+) -> PlatformDeclaration:
+    """Read `platform.yaml`, apply each overlay in order, then the environment's overrides.
 
     An overlay has the declaration's shape and may name `realm_settings.supportedLocales`
-    only. Key-level merge, last wins, and a list replaces a list. Every check runs on
-    the merged result, before `bootstrap` reads anything from Keycloak.
+    only. Key-level merge, last wins, and a list replaces a list. The environment
+    (`apply_env_overrides`) wins over both. Every check runs on the merged result,
+    before `bootstrap` reads anything from Keycloak.
     """
     data = _read_mapping(path)
     settings = _realm_settings(path, data)
@@ -293,6 +397,8 @@ def load_platform(path: Path, overlays: "list[Path] | tuple[Path, ...]" = ()) ->
             declaration.realm_settings[key] = value
             declaration.sources[key] = str(overlay)
 
+    if environ is not None:
+        apply_env_overrides(declaration, environ)
     _check_locales(declaration.realm_settings, declaration.sources)
     return declaration
 

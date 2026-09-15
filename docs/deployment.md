@@ -64,6 +64,7 @@ infra's `IGNORE_EXISTING` skip a realm that already exists).
 | `bruteForceProtected` | `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` | Unset: on, and off when `ENV` is `dev`, `development`, `local`, `test` or `ci` |
 | `smtpServer` | `CELINE_KEYCLOAK_SMTP_*`, fed from the deployment's secret | Below. Unset `CELINE_KEYCLOAK_SMTP_HOST`: left alone |
 | `supportedLocales`, narrower | a deployment overlay, `bootstrap --overlay <file>` | The only key an overlay may change. It must keep `defaultLocale` (`it`) and name only `it`, `en`, `es` |
+| themes, languages, lifespans, `registrationAllowed`, `resetPasswordAllowed`, brute-force tuning | `CELINE_KEYCLOAK_PLATFORM_<KEY>` | Overrides `platform.yaml` and any overlay. Below |
 
 `verifyEmail` is deliberately **not** declared, and `platform.yaml` refuses it: the invitation
 already carries `VERIFY_EMAIL`, and turning it on would stop every existing account with
@@ -101,6 +102,31 @@ The realm imports used to create both. They now come from declarations, so a rea
   On a realm whose `oauth2_proxy` came from infra's import, the first `sync` replaces its
   redirect URIs with those four. The webapp entry is also what the provisioning service's
   invitation links return through.
+
+#### Overriding a platform value from the environment
+
+A deployment whose Keycloak differs from what the image assumes overrides a value instead of
+mounting its own `platform.yaml`. The variable is `CELINE_KEYCLOAK_PLATFORM_` followed by the
+realm key in upper snake case; the keys it accepts are `ENV_OVERRIDABLE_SETTINGS` in
+[`platform.py`](../src/celine/policies/cli/keycloak/platform.py).
+
+| Value | Effect |
+|---|---|
+| unset or empty | the declared value stands |
+| `null` | the key is not declared: `bootstrap` leaves the realm's value alone, so a new realm keeps Keycloak's default. Nothing is reset |
+| anything else | replaces the declared value, typed like the file: `true`/`false`, a non-negative integer, a string, or comma-separated locales |
+
+Every check still runs on the result: a theme must be listed by the server, locales must
+contain `defaultLocale`. A `CELINE_KEYCLOAK_PLATFORM_*` variable naming a key that is not
+listed is refused: the features other commands require, `internationalizationEnabled` and the
+username and email rules stay the image's.
+
+A stock Keycloak, which ships no `rec` theme:
+
+```yaml
+CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME: "null"
+CELINE_KEYCLOAK_PLATFORM_EMAIL_THEME: "null"
+```
 
 #### SMTP
 
