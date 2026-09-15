@@ -18,6 +18,7 @@ callers that no import graph connects.
 
 from __future__ import annotations
 
+import click
 import pytest
 from typer.testing import CliRunner
 
@@ -25,6 +26,17 @@ from celine.policies.cli.keycloak.commands.commands import keycloak_app
 from celine.policies.cli.main import app
 
 runner = CliRunner()
+
+
+def help_of(*args: str) -> str:
+    """The `--help` text with styling removed.
+
+    Typer forces a Rich terminal when `GITHUB_ACTIONS` is set, and Rich styles an
+    option's leading dash apart from its name, so `--dry-run` is not a substring of
+    the raw output in CI.
+    """
+    return click.unstyle(runner.invoke(app, [*args, "--help"]).output)
+
 
 # Every subcommand of `celine-policies keycloak`, as documented in AGENTS.md and
 # driven from taskfile.yaml.
@@ -102,7 +114,7 @@ class TestSyncOptions:
 
     @pytest.fixture
     def help_text(self) -> str:
-        return runner.invoke(app, ["keycloak", "sync", "--help"]).output
+        return help_of("keycloak", "sync")
 
     def test_dry_run_is_offered(self, help_text: str):
         assert "--dry-run" in help_text
@@ -124,7 +136,7 @@ class TestSyncOptions:
 class TestSyncUsersOptions:
     @pytest.fixture
     def help_text(self) -> str:
-        return runner.invoke(app, ["keycloak", "sync-users", "--help"]).output
+        return help_of("keycloak", "sync-users")
 
     def test_dry_run_is_offered(self, help_text: str):
         """It provisions real accounts and passwords; previewing must be possible."""
@@ -182,7 +194,7 @@ class TestSyncUsersOptions:
 class TestSyncOrgsOptions:
     @pytest.fixture
     def help_text(self) -> str:
-        return runner.invoke(app, ["keycloak", "sync-orgs", "--help"]).output
+        return help_of("keycloak", "sync-orgs")
 
     def test_dry_run_is_offered(self, help_text: str):
         assert "--dry-run" in help_text
