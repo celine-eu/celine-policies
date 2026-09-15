@@ -47,7 +47,10 @@ tasks:
   keycloak:sync:
     deps: [keycloak:bootstrap]
     cmds:
-      - uv run celine-policies keycloak sync
+      # The master admin, not celine-admin-cli: granting a client realm-management
+      # roles (svc-provisioning, ADR-0007) is refused 403 to celine-admin-cli, which
+      # Keycloak lets map none of them although it holds them (measured 2026-09-15).
+      - uv run celine-policies keycloak sync --admin-user admin --admin-password admin
 
   keycloak:dev-users:
     deps: [keycloak:bootstrap]

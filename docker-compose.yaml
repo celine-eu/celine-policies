@@ -26,7 +26,7 @@ services:
     command:
       - |
         celine-policies keycloak bootstrap --admin-user admin --admin-password admin && \
-        celine-policies keycloak sync --secrets-file /tmp/.secrets.yaml
+        celine-policies keycloak sync --admin-user admin --admin-password admin --secrets-file /tmp/.secrets.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "keycloak.celine.localhost:host-gateway"
