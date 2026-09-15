@@ -46,7 +46,7 @@ from celine.policies.cli.keycloak.client import KeycloakError
 
 if TYPE_CHECKING:
     from celine.policies.cli.keycloak.client import KeycloakAdminClient
-    from celine.policies.cli.keycloak.settings import SmtpSettings
+    from celine.policies.cli.keycloak.settings import RealmAdminSettings, SmtpSettings
 
 logger = logging.getLogger(__name__)
 
@@ -436,6 +436,9 @@ class PlatformResult:
 
     #: The realm did not exist and was (or would be) created first.
     realm_created: bool = False
+    #: The operator realm admin was (or would be) created, and put in this group.
+    realm_admin_created: str | None = None
+    realm_admin_group_added: tuple[str, str] | None = None
 
     @property
     def destructive(self) -> list[SettingChange]:
@@ -445,6 +448,8 @@ class PlatformResult:
     def changed(self) -> bool:
         return bool(
             self.realm_created
+            or self.realm_admin_created
+            or self.realm_admin_group_added
             or self.settings
             or self.roles_created
             or self.groups_created
@@ -471,6 +476,7 @@ async def converge_platform(
     brute_force_protected: bool,
     dry_run: bool,
     smtp: "SmtpSettings | None" = None,
+    realm_admin: "RealmAdminSettings | None" = None,
 ) -> PlatformResult:
     """Make the realm match the declaration, touching nothing it does not declare.
 
@@ -506,6 +512,10 @@ async def converge_platform(
             result.role_mappings_added.append((rg.path, rg.realm_role))
         elif rg.realm_role not in await kc.get_group_realm_role_names(group_id):
             result.role_mappings_added.append((rg.path, rg.realm_role))
+
+    admin_id: str | None = None
+    if realm_admin is not None and realm_admin.configured:
+        admin_id = await _plan_realm_admin(kc, declaration, realm_admin, groups, result)
 
     if dry_run:
         return result
@@ -546,7 +556,68 @@ async def converge_platform(
             group_id = await kc.create_group(rg.path.lstrip("/"))
         await kc.add_group_realm_role(group_id, rg.realm_role)
 
+    if result.realm_admin_created or result.realm_admin_group_added:
+        await _apply_realm_admin(kc, realm_admin, admin_id, result)
+
     return result
+
+
+async def _plan_realm_admin(
+    kc: "KeycloakAdminClient",
+    declaration: PlatformDeclaration,
+    admin: "RealmAdminSettings",
+    groups: dict[str, str | None],
+    result: PlatformResult,
+) -> str | None:
+    """Plan the operator realm admin, refusing before any write. Returns its id, if it exists."""
+    username = admin.username.strip()
+    if not admin.first_name.strip() or not admin.last_name.strip():
+        raise PlatformDeclarationError(
+            "CELINE_KEYCLOAK_REALM_ADMIN_FIRST_NAME and _LAST_NAME must not be empty: the "
+            "realm's user profile requires both, and Keycloak refuses the sign-in without them"
+        )
+    group_known = admin.group in groups or await kc.get_group_by_path(admin.group) is not None
+    if not group_known:
+        raise PlatformDeclarationError(
+            f"CELINE_KEYCLOAK_REALM_ADMIN_GROUP {admin.group!r} is neither a role group "
+            f"platform.yaml declares nor a group the realm has"
+        )
+    user = await kc.get_user_by_username(username)
+    if user is None:
+        if not admin.password.get_secret_value():
+            raise PlatformDeclarationError(
+                f"realm admin {username!r} does not exist, and creating it needs "
+                f"CELINE_KEYCLOAK_REALM_ADMIN_PASSWORD"
+            )
+        result.realm_admin_created = username
+        result.realm_admin_group_added = (username, admin.group)
+        return None
+    paths = {g.get("path") for g in await kc.get_user_groups(user["id"])}
+    if admin.group not in paths:
+        result.realm_admin_group_added = (username, admin.group)
+    return user["id"]
+
+
+async def _apply_realm_admin(
+    kc: "KeycloakAdminClient",
+    admin: "RealmAdminSettings",
+    admin_id: str | None,
+    result: PlatformResult,
+) -> None:
+    if result.realm_admin_created:
+        admin_id, _ = await kc.ensure_user(
+            admin.username.strip(),
+            email=admin.email or None,
+            first_name=admin.first_name or None,
+            last_name=admin.last_name or None,
+            temporary_password=admin.password.get_secret_value(),
+            temporary=False,
+            email_verified=True,
+        )
+    group = await kc.get_group_by_path(admin.group)
+    if group is None or admin_id is None:
+        raise PlatformDeclarationError(f"realm admin group {admin.group!r} not found after converging")
+    await kc.add_user_to_group(admin_id, group["id"])
 
 
 # ---------------------------------------------------------------------------

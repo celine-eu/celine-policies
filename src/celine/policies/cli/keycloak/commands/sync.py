@@ -399,4 +399,13 @@ async def _async_sync(
             dry_run=False,
         )
 
+        # The claim scopes were ensured before the plan, and their assignment to the
+        # oauth2-proxy client skipped if it did not exist yet. On a realm without the
+        # import this run is what created it (it is declared since 2026-09-14), and
+        # without this its tokens would carry no organization or groups claim until
+        # the next sync. Measured on a fresh 26.7.3.
+        if config.oauth2_proxy_client and config.oauth2_proxy_client in result.clients_created:
+            if await client.ensure_realm_claim_scopes(config.oauth2_proxy_client):
+                typer.echo(f"  ! realm claim scopes assigned to {config.oauth2_proxy_client}")
+
         return result

@@ -637,7 +637,13 @@ class TestIdempotenceOnTheRealConfig:
         )
         proxy = config.oauth2_proxy_client
         if proxy:
-            state.clients[proxy] = kc_client(proxy)
+            declared = next((c for c in config.clients if c.client_id == proxy), None)
+            state.clients[proxy] = kc_client(
+                proxy,
+                declared.name if declared else "",
+                declared.description if declared else "",
+                declared.service_account_enabled if declared else True,
+            ) | (declared.login_representation() if declared else {})
             state.client_audience_mappers[proxy] = {
                 audience: f"mapper-{proxy}-{audience}"
                 for audience in config.get_service_client_ids() | {proxy}

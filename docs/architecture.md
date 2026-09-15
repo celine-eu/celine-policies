@@ -61,8 +61,9 @@ run instead of writing them:
   a deployment overlay may narrow `supportedLocales` and nothing else), brute force from
   `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `smtpServer` from `CELINE_KEYCLOAK_SMTP_*`; then
   create or refresh the `celine-admin-cli` service account with realm-management roles.
-  It refuses a theme the server does not list. With the admin CLI client's own credentials
-  it converges the platform and skips the client
+  It refuses a theme the server does not list. With `CELINE_KEYCLOAK_REALM_ADMIN_USERNAME` set
+  it creates the operator realm admin once and keeps it in `/admins`. With the admin CLI
+  client's own credentials it converges the platform and skips the client
 - `sync` — reconcile scopes, clients, audience mappers, the realm claim scopes and
   service-account administration rights in Keycloak to match `clients.yaml`. It refuses to
   grant `admin_permissions` on a realm where `bootstrap` has not turned them on
@@ -74,6 +75,9 @@ run instead of writing them:
 - `sync-orgs` and `sync-users` refuse a realm without Organizations (`bootstrap`) or without
   the realm claim scopes (`sync`), in a dry run too
 - `set-password` — set a user's password; development realms only (`ENV=dev`)
+- `seed-dev-users` — create the development users (`admin`, `manager`, `editor`, `viewer`, from
+  `config/keycloak/dev-users.yaml`) with their groups; development realms only, and a password is
+  never reset
 - `set-user-organization` — assign a user to organizations and org-level groups
 - `status` — show current scopes, clients, and assignments
 

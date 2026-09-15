@@ -51,6 +51,7 @@ from celine.policies.cli.keycloak.secrets_file import merge_secrets_file
 from celine.policies.cli.keycloak.settings import (
     DEFAULT_ADMIN_CLIENT_ID,
     KeycloakSettings,
+    RealmAdminSettings,
     SmtpSettings,
 )
 from celine.policies.cli.keycloak.commands._utils import configure_logging
@@ -281,6 +282,11 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
         typer.secho(f"  + group {path}", fg=typer.colors.GREEN)
     for path, role in result.role_mappings_added:
         typer.secho(f"  + {path} -> realm role {role}", fg=typer.colors.GREEN)
+    if result.realm_admin_created:
+        typer.secho(f"  + realm admin {result.realm_admin_created}", fg=typer.colors.GREEN)
+    if result.realm_admin_group_added:
+        user, group = result.realm_admin_group_added
+        typer.secho(f"  + {user} -> group {group}", fg=typer.colors.GREEN)
 
 
 def _update_secrets_file(
@@ -341,7 +347,9 @@ async def _async_bootstrap(
             export.write_text(json.dumps(await client.partial_export(), indent=1, sort_keys=True))
 
         converge = dict(
-            brute_force_protected=settings.brute_force_protected, smtp=SmtpSettings()
+            brute_force_protected=settings.brute_force_protected,
+            smtp=SmtpSettings(),
+            realm_admin=RealmAdminSettings(),
         )
         platform = await converge_platform(client, declaration, dry_run=True, **converge)
         if not dry_run:

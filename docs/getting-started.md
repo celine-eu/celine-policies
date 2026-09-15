@@ -83,6 +83,18 @@ Participants are also added to any group `clients.yaml` declares under
 `keycloak sync` first, which is what creates the group. `--no-admin-groups` turns that off.
 See [Realm administration](scopes-and-permissions.md#realm-administration).
 
+### Development users (optional)
+
+A realm created from the dev import already has them. Any other development realm gets them
+from:
+
+```bash
+ENV=dev celine-policies keycloak seed-dev-users
+```
+
+`admin`, `manager`, `editor` and `viewer`, each with its username as password, in the role group
+of the same rank (`config/keycloak/dev-users.yaml`). It refuses outside a development `ENV`.
+
 ### Step 5: Sync Organizations (optional)
 
 Import organizations from an `owners.yaml` file:

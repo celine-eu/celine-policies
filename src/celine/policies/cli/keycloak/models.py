@@ -218,6 +218,53 @@ class AdminPermissions(BaseModel):
         return not self.groups
 
 
+class BrowserLogin(BaseModel):
+    """A client people sign in through (an OIDC relying party), not a service account.
+
+    Declared for `oauth2_proxy`, which the realm imports used to create and nothing else
+    did: a realm `bootstrap` creates had no browser login until `sync` could say so
+    (plan each-cli-command-owns-one-level, Phase 4). Every service client declares none,
+    and for those `sync` keeps all three login flows off, as it always has.
+
+    Only the keys below are managed. Anything else on the client (session attributes,
+    front-channel logout, protocol mappers other than the audience ones) is left as found.
+    """
+
+    redirect_uris: list[str] = Field(..., min_length=1, description="Valid redirect URIs")
+    web_origins: list[str] = Field(
+        default_factory=lambda: ["+"],
+        description="CORS origins; '+' means the origins of the redirect URIs",
+    )
+    implicit_flow: bool = Field(default=False, description="implicitFlowEnabled")
+    direct_access_grants: bool = Field(
+        default=False, description="directAccessGrantsEnabled (the password grant)"
+    )
+    access_token_lifespan: int | None = Field(
+        default=None, description="access.token.lifespan, in seconds; None leaves it alone"
+    )
+
+    def representation(self) -> dict[str, Any]:
+        """The client representation keys this block owns, as Keycloak spells them."""
+        rep: dict[str, Any] = {
+            "standardFlowEnabled": True,
+            "implicitFlowEnabled": self.implicit_flow,
+            "directAccessGrantsEnabled": self.direct_access_grants,
+            "redirectUris": list(self.redirect_uris),
+            "webOrigins": list(self.web_origins),
+        }
+        if self.access_token_lifespan is not None:
+            rep["attributes"] = {"access.token.lifespan": str(self.access_token_lifespan)}
+        return rep
+
+
+#: The login flows of a client that declares no `browser` block: a service account only.
+NO_BROWSER_LOGIN: dict[str, Any] = {
+    "standardFlowEnabled": False,
+    "implicitFlowEnabled": False,
+    "directAccessGrantsEnabled": False,
+}
+
+
 class ClientConfig(BaseModel):
     """Configuration for a Keycloak client."""
 
@@ -276,6 +323,13 @@ class ClientConfig(BaseModel):
         description="Enable service account (client credentials flow)",
     )
 
+    # A client people sign in through. Absent for every service client. Not a grant key:
+    # it is the client's identity, declared by the one file that declares the client.
+    browser: BrowserLogin | None = Field(
+        default=None,
+        description="Browser sign-in (redirect URIs, flows). Absent: a service account only.",
+    )
+
     # What this client's service account may administer in the realm.
     #
     # Not a grant key: a second file may widen a client's *scopes*, but not what
@@ -317,6 +371,10 @@ class ClientConfig(BaseModel):
         if not v and info.data.get("client_id"):
             return info.data["client_id"]
         return v or ""
+
+    def login_representation(self) -> dict[str, Any]:
+        """The flow, redirect and attribute keys `sync` writes on this client."""
+        return self.browser.representation() if self.browser else dict(NO_BROWSER_LOGIN)
 
     def has_placeholder_secret(self) -> bool:
         """Whether this client's secret is a development placeholder.

@@ -451,7 +451,7 @@ class TestShippedClientsYaml:
             }
             assert derived <= known, f"{client.client_id} derives an unknown audience"
 
-    def test_the_oauth2_proxy_is_the_only_external_audience(
+    def test_no_audience_points_outside_the_file(
         self, config: KeycloakConfig
     ):
         """`extra_audiences` may point outside this file — but not by accident.
@@ -461,9 +461,9 @@ class TestShippedClientsYaml:
 
         `svc-ds-provenance` used to be the second entry here: three clients named
         it as an audience while nothing declared it, so the mappers pointed at a
-        client that did not exist. It is a managed client now, which is why the
-        set is down to one. `oauth2_proxy` stays outside deliberately — it is
-        declared by the realm import as `oauth2_proxy_client`, not by the sync.
+        client that did not exist. It is a managed client now. `oauth2_proxy` was
+        the last: the realm import created it until 2026-09-14, when it was declared
+        here so a realm without the import gets it too.
         """
         known = config.get_client_ids()
         external = {
@@ -472,7 +472,26 @@ class TestShippedClientsYaml:
             for audience in client.extra_audiences
             if audience not in known
         }
-        assert external == {"oauth2_proxy"}
+        assert external == set()
+
+    def test_the_oauth2_proxy_client_is_declared_for_browser_login(self, config: KeycloakConfig):
+        """What the imports gave it, so a realm `bootstrap` creates signs people in."""
+        proxy = next(c for c in config.clients if c.client_id == config.oauth2_proxy_client)
+        assert proxy.service_account_enabled is False
+        assert proxy.browser is not None
+        rep = proxy.login_representation()
+        assert rep["standardFlowEnabled"] is True
+        assert rep["directAccessGrantsEnabled"] is True
+        hosts = {u.split("://")[1].split("/")[0].split(".")[0] for u in rep["redirectUris"]}
+        assert hosts == {"sso", "superset", "webapp", "assistant"}
+        assert rep["attributes"] == {"access.token.lifespan": "1800"}
+
+    def test_the_proxy_redirects_follow_the_deployment(self, monkeypatch):
+        monkeypatch.setenv("CELINE_DOMAIN", "demo3.example.org")
+        monkeypatch.setenv("CELINE_URL_SCHEME", "https")
+        config = KeycloakConfig.from_yaml(CLIENTS_YAML)
+        proxy = next(c for c in config.clients if c.client_id == "oauth2_proxy")
+        assert "https://webapp.demo3.example.org/*" in proxy.browser.redirect_uris
 
     def test_the_oauth2_proxy_client_is_declared(self, config: KeycloakConfig):
         """Without it, no user JWT carries any service audience."""

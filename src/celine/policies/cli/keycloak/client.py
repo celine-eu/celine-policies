@@ -912,8 +912,12 @@ class KeycloakAdminClient:
         description: str = "",
         secret: str | None = None,
         service_account_enabled: bool = True,
+        login: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
-        """Create a new client with client credentials grant.
+        """Create a new confidential client.
+
+        `login` is `ClientConfig.login_representation()`: the flows, redirect URIs and
+        attributes. Absent, every login flow is off, which is a service account only.
 
         Returns tuple of (client_uuid, client_secret).
         """
@@ -929,6 +933,7 @@ class KeycloakAdminClient:
             "implicitFlowEnabled": False,
             "directAccessGrantsEnabled": False,
             "clientAuthenticatorType": "client-secret",
+            **(login or {}),
         }
 
         if secret:
@@ -955,9 +960,16 @@ class KeycloakAdminClient:
         description: str = "",
         service_account_enabled: bool = True,
         secret: str | None = None,
+        login: dict[str, Any] | None = None,
     ) -> None:
-        """Update an existing client."""
+        """Update an existing client.
+
+        `login` as for `create_client`. Its `attributes` are merged into the client's,
+        never replacing them: the representation holds Keycloak's own attributes too.
+        """
         current = await self.get_client(client_uuid)
+        login = dict(login or {})
+        attributes = {**(current.get("attributes") or {}), **login.pop("attributes", {})}
 
         payload = {
             **current,
@@ -969,6 +981,8 @@ class KeycloakAdminClient:
             "standardFlowEnabled": False,
             "implicitFlowEnabled": False,
             "directAccessGrantsEnabled": False,
+            **login,
+            "attributes": attributes,
         }
 
         if secret:

@@ -295,6 +295,41 @@ class SmtpSettings(BaseSettings):
         return self.auth if self.auth is not None else bool(self.user)
 
 
+class RealmAdminSettings(BaseSettings):
+    """The operator realm admin `keycloak bootstrap` creates (requester, 2026-09-14).
+
+    The realm imports used to create one (`celine-admin`, in `/admins`) in every environment.
+    Once they are dropped, `bootstrap` does, from the environment:
+
+        CELINE_KEYCLOAK_REALM_ADMIN_USERNAME    unset or empty: no realm admin is managed
+        CELINE_KEYCLOAK_REALM_ADMIN_EMAIL
+        CELINE_KEYCLOAK_REALM_ADMIN_FIRST_NAME  default Celine
+        CELINE_KEYCLOAK_REALM_ADMIN_LAST_NAME   default Admin
+        CELINE_KEYCLOAK_REALM_ADMIN_PASSWORD    required to create the account; never re-sent
+        CELINE_KEYCLOAK_REALM_ADMIN_GROUP       default /admins
+
+    One operator account. It is created once and kept in its group. Its password is not
+    reset on later runs: an operator who changed it keeps the new one.
+
+    The names default to what infra's import used, and must not be empty: the realm's user
+    profile requires both, and without them Keycloak refuses the sign-in with
+    "Account is not fully set up" (measured on 26.7.3).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="CELINE_KEYCLOAK_REALM_ADMIN_", extra="ignore")
+
+    username: str = ""
+    email: str = ""
+    first_name: str = "Celine"
+    last_name: str = "Admin"
+    password: SecretStr = SecretStr("")
+    group: str = "/admins"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.username.strip())
+
+
 class SyncUsersSettings(BaseSettings):  # <<< NEW
     """Settings for the sync-users command.
 

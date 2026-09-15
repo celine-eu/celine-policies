@@ -659,6 +659,12 @@ def compute_sync_plan(
     for client_config in config.clients:
         client_id = client_config.client_id
 
+        # The oauth2-proxy client's audiences are planned below, from every service
+        # client. Declaring it (Phase 4 of each-cli-command-owns-one-level) must not also
+        # plan them here, where it has no scopes and would have every one removed.
+        if client_id == config.oauth2_proxy_client:
+            continue
+
         desired_audiences = client_config.desired_audiences(prefix_to_client)
 
         # Warn about extra_audiences entries that don't map to a managed client_id.
@@ -921,6 +927,20 @@ def _client_needs_update(config: ClientConfig, current: dict[str, Any]) -> bool:
         return True
     if config.service_account_enabled != current.get("serviceAccountsEnabled", False):
         return True
+    if config.browser is not None:
+        # Only a client that declares browser login has its flows compared: a service
+        # client's were never compared, and comparing them now would plan an update of
+        # every client a realm import or a hand edit ever touched.
+        for key, desired in config.login_representation().items():
+            if key == "attributes":
+                have = current.get("attributes") or {}
+                if any(have.get(k) != v for k, v in desired.items()):
+                    return True
+            elif key in ("redirectUris", "webOrigins"):
+                if sorted(current.get(key) or []) != sorted(desired):
+                    return True
+            elif current.get(key, False) != desired:
+                return True
 
     return False
 
@@ -1030,6 +1050,7 @@ async def apply_sync_plan(
                 description=client_config.description,
                 secret=client_config.secret,
                 service_account_enabled=client_config.service_account_enabled,
+                login=client_config.login_representation(),
             )
             client_uuids[client_config.client_id] = client_uuid
             result.clients_created.append(client_config.client_id)
@@ -1069,6 +1090,7 @@ async def apply_sync_plan(
                 description=client_config.description,
                 service_account_enabled=client_config.service_account_enabled,
                 secret=client_config.secret,
+                login=client_config.login_representation(),
             )
 
             result.clients_updated.append(client_config.client_id)

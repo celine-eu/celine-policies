@@ -49,6 +49,12 @@ tasks:
     cmds:
       - uv run celine-policies keycloak sync
 
+  keycloak:dev-users:
+    deps: [keycloak:bootstrap]
+    desc: "Create the development users (admin, manager, editor, viewer)"
+    cmds:
+      - uv run celine-policies keycloak seed-dev-users
+
   keycloak:sync-users:
     deps: [keycloak:bootstrap]
     desc: "Sync Keycloak users from REC registry YAML"

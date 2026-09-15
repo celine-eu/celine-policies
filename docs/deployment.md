@@ -78,6 +78,30 @@ realm_settings:
 
 `bootstrap` prints the file each changed key came from.
 
+#### The realm admin and the browser login client
+
+The realm imports used to create both. They now come from declarations, so a realm that
+`bootstrap` created has them too.
+
+- **The operator realm admin** is `bootstrap`'s, in every environment, when
+  `CELINE_KEYCLOAK_REALM_ADMIN_USERNAME` is set. It is created once, with
+  `CELINE_KEYCLOAK_REALM_ADMIN_PASSWORD` (a secret), `_EMAIL`, and `_FIRST_NAME`/`_LAST_NAME`
+  (default `Celine`/`Admin`; the realm's user profile requires both, and Keycloak refuses
+  the sign-in without them). It is then kept in `CELINE_KEYCLOAK_REALM_ADMIN_GROUP`
+  (`/admins`). Its password is never re-sent.
+- **`oauth2_proxy`** is declared in `clients.yaml` and created by `sync`. `sync` also owns
+  its secret, flows, redirect URIs, web origins, default scopes and audience mappers. Set:
+
+  | Variable | Default | |
+  |---|---|---|
+  | `OAUTH2_PROXY_CLIENT_SECRET` | `oauth2_proxy` (refused outside dev) | the secret oauth2-proxy is configured with |
+  | `CELINE_DOMAIN` | `celine.localhost` | redirect URIs: `sso`, `superset`, `webapp` and `assistant` on it, each `/*` |
+  | `CELINE_URL_SCHEME` | `http` | `https` in a deployment |
+
+  On a realm whose `oauth2_proxy` came from infra's import, the first `sync` replaces its
+  redirect URIs with those four. The webapp entry is also what the provisioning service's
+  invitation links return through.
+
 #### SMTP
 
 | Variable | Default | |

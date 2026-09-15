@@ -255,6 +255,48 @@ scopes:
 # =============================================================================
 
 clients:
+  # ---------------------------------------------------------------------------
+  # The browser login client: oauth2-proxy signs people in through it, and the
+  # provisioning service's invitation links return to the webapp through it.
+  #
+  # Declared here since 2026-09-14 (requester; plan each-cli-command-owns-one-level,
+  # Phase 4): only the realm imports created it before, so a realm `bootstrap` creates
+  # had no browser login. `sync` owns what `browser:` names, the secret and the
+  # audience mappers (from `oauth2_proxy_client` above); anything else on the client
+  # is left as found.
+  #
+  # The redirect URIs are the union of both imports' hosts: sso and superset (infra),
+  # webapp and assistant (the dev import, and the invitation's return address).
+  # CELINE_DOMAIN and CELINE_URL_SCHEME aim them per deployment; the defaults are the
+  # local stack. The secret must equal the one oauth2-proxy is configured with.
+  # ---------------------------------------------------------------------------
+  - client_id: oauth2_proxy
+    name: oauth2_proxy
+    description: OIDC client for oauth2-proxy
+    secret: ${OAUTH2_PROXY_CLIENT_SECRET:-oauth2_proxy}
+    service_account_enabled: false
+    # What infra's import gave it. The dev import gave only profile and email, so its tokens
+    # carried no realm_access; this aligns the local realm with the deployed ones. `basic` is
+    # on both already. organization, groups and dataspace are `sync`'s realm claim scopes.
+    default_scopes:
+      - web-origins
+      - acr
+      - profile
+      - roles
+      - email
+    browser:
+      redirect_uris:
+        - ${CELINE_URL_SCHEME:-http}://sso.${CELINE_DOMAIN:-celine.localhost}/*
+        - ${CELINE_URL_SCHEME:-http}://superset.${CELINE_DOMAIN:-celine.localhost}/*
+        - ${CELINE_URL_SCHEME:-http}://webapp.${CELINE_DOMAIN:-celine.localhost}/*
+        - ${CELINE_URL_SCHEME:-http}://assistant.${CELINE_DOMAIN:-celine.localhost}/*
+      web_origins:
+        - "+"
+      # Both imports enable these, and removing them is a separate decision.
+      implicit_flow: true
+      direct_access_grants: true
+      access_token_lifespan: 1800
+
   - client_id: svc-digital-twin
     name: Digital Twin Service
     secret: ${SVC_DT_SECRET:-svc-digital-twin}

@@ -1,0 +1,31 @@
+# Development users: one per role group, with their username as password.
+#
+# `celine-policies keycloak seed-dev-users` creates them, and refuses outside a development
+# ENV. They are what the dev realm import (import/realm-celine.json) has always carried;
+# once the import is dropped this file and that command are where they come from
+# (requester, 2026-09-14). `admin` is the one the local stack depends on.
+users:
+  - username: admin
+    email: admin@celine.localhost
+    first_name: Admin
+    last_name: User
+    password: admin
+    group: /admins
+  - username: manager
+    email: manager@celine.localhost
+    first_name: Manager
+    last_name: User
+    password: manager
+    group: /managers
+  - username: editor
+    email: editor@celine.localhost
+    first_name: Editor
+    last_name: User
+    password: editor
+    group: /editors
+  - username: viewer
+    email: viewer@celine.localhost
+    first_name: Viewer
+    last_name: User
+    password: viewer
+    group: /viewers

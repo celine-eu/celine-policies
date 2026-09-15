@@ -36,6 +36,7 @@ COMMANDS = [
     "sync-orgs",
     "set-password",
     "set-user-organization",
+    "seed-dev-users",
 ]
 
 

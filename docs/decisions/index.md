@@ -46,3 +46,4 @@ edited to say something else.
 | [ADR-0006](ADR-0006-the-registry-is-the-source-of-members.md) | The REC registry is the source of members, and a YAML file is a seed |
 | [ADR-0007](ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md) | Realm-wide administration is declarable, for a holder with no public route |
 | [ADR-0008](ADR-0008-each-cli-command-owns-one-level-of-the-realm.md) | Each CLI command owns one level of the realm, and checks the levels below it; `bootstrap` owns the platform level (supersedes ADR-0003's enabling of admin permissions by `sync`) |
+| [ADR-0009](ADR-0009-what-the-realm-import-carried-is-declared.md) | What the realm import carried is declared: `oauth2_proxy` in `clients.yaml`, the operator realm admin in `bootstrap`, the dev users in `seed-dev-users` |
