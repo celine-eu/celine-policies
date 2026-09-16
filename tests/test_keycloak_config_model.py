@@ -486,6 +486,19 @@ class TestShippedClientsYaml:
         assert hosts == {"sso", "superset", "webapp", "assistant"}
         assert rep["attributes"] == {"access.token.lifespan": "1800"}
 
+    def test_the_browser_token_carries_the_manager_dashboard_surface_scopes(
+        self, config: KeycloakConfig
+    ):
+        """Scopes express browser intent; the matching REC organization still grants access."""
+        proxy = next(c for c in config.clients if c.client_id == config.oauth2_proxy_client)
+        assert {
+            "community.read",
+            "community.devices.read",
+            "community.nudging.read",
+            "community.alerts.write",
+            "community.objectives.write",
+        } <= set(proxy.default_scopes)
+
     def test_the_proxy_redirects_follow_the_deployment(self, monkeypatch):
         monkeypatch.setenv("CELINE_DOMAIN", "demo3.example.org")
         monkeypatch.setenv("CELINE_URL_SCHEME", "https")

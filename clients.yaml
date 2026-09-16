@@ -284,6 +284,14 @@ clients:
       - profile
       - roles
       - email
+      # Browser intent for the REC Manager Dashboard. These scopes never grant
+      # a human on their own: celine-community also requires `/admins` at realm
+      # level or `/admins`/`/managers` inside the matching REC organization.
+      - community.read
+      - community.devices.read
+      - community.nudging.read
+      - community.alerts.write
+      - community.objectives.write
     browser:
       redirect_uris:
         - ${CELINE_URL_SCHEME:-http}://sso.${CELINE_DOMAIN:-celine.localhost}/*
