@@ -386,11 +386,16 @@ class KeycloakAdminClient:
     # HTTP helpers
     # -------------------------------------------------------------------------
 
-    async def _get(self, path: str) -> Any:
-        """Make GET request to admin API."""
+    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """Make GET request to admin API.
+
+        Query values go in `params`, never into `path`: httpx encodes them, and
+        an unencoded `+` reads as a space, so a plus-addressed email matches
+        nobody and a freshly created account "cannot be retrieved".
+        """
         url = f"{self._settings.admin_url}{path}"
         headers = await self._headers()
-        response = await self._client.get(url, headers=headers)
+        response = await self._client.get(url, headers=headers, params=params)
         return self._handle_response(response)
 
     async def _post(self, path: str, json: list | dict | str | None = None) -> Any:
@@ -900,7 +905,7 @@ class KeycloakAdminClient:
 
     async def get_client_by_client_id(self, client_id: str) -> dict[str, Any] | None:
         """Get a client by clientId."""
-        clients = await self._get(f"/clients?clientId={client_id}")
+        clients = await self._get("/clients", params={"clientId": client_id})
         if clients:
             return clients[0]
         return None
@@ -1364,7 +1369,8 @@ class KeycloakAdminClient:
         """One policy on the admin-permissions resource server, by exact name."""
         policies = (
             await self._get(
-                f"/clients/{ap_uuid}/authz/resource-server/policy?name={name}"
+                f"/clients/{ap_uuid}/authz/resource-server/policy",
+                params={"name": name},
             )
             or []
         )
@@ -1679,9 +1685,9 @@ class KeycloakAdminClient:
 
     async def get_user_by_username(self, username: str) -> "dict[str, Any] | None":
         """Get a Keycloak user by exact username. Returns None if not found."""
-        # Encoded: an unencoded `+` reads as a space, so a plus-addressed username
-        # matches nobody and a freshly created account "cannot be retrieved".
-        results = await self._get(f"/users?username={quote(username, safe='')}&exact=true")
+        results = await self._get(
+            "/users", params={"username": username, "exact": "true"}
+        )
         if results:
             return results[0]
         return None
@@ -1707,7 +1713,7 @@ class KeycloakAdminClient:
         deliberately, because picking between them is not a decision an
         automated provisioning call should make.
         """
-        results = await self._get(f"/users?email={quote(email, safe='')}&exact=true")
+        results = await self._get("/users", params={"email": email, "exact": "true"})
         if results:
             return results[0]
         return None
@@ -1847,7 +1853,9 @@ class KeycloakAdminClient:
         has no direct GET-by-path endpoint.
         """
         name = path.lstrip("/")
-        results = await self._get(f"/groups?search={name}&exact=true")
+        results = await self._get(
+            "/groups", params={"search": name, "exact": "true"}
+        )
         for group in results or []:
             if group.get("path") == path:
                 return group
@@ -2152,9 +2160,27 @@ class KeycloakAdminClient:
         org_id = await self.create_organization(alias, name, description, attributes)
         return org_id, True
 
-    async def get_organization_members(self, org_id: str) -> list[dict[str, Any]]:
-        """Get all members of an organization."""
-        return await self._get(f"/organizations/{org_id}/members") or []
+    async def get_organization_members(
+        self, org_id: str, page_size: int = 100
+    ) -> list[dict[str, Any]]:
+        """Get all members of an organization.
+
+        Keycloak pages this endpoint and answers ten members when asked for no
+        `max` (measured on 26.7.3), so it is read page by page until a short
+        page comes back.
+        """
+        members: list[dict[str, Any]] = []
+        while True:
+            page = (
+                await self._get(
+                    f"/organizations/{org_id}/members",
+                    params={"first": len(members), "max": page_size},
+                )
+                or []
+            )
+            members.extend(page)
+            if len(page) < page_size:
+                return members
 
     async def add_user_to_organization(self, org_id: str, user_id: str) -> None:
         """Add a user to an organization by Keycloak user UUID."""
@@ -2165,12 +2191,12 @@ class KeycloakAdminClient:
     async def is_user_in_organization(self, org_id: str, user_id: str) -> bool:
         """Whether a user is a member of an organization, asked one user at a time.
 
-        Deliberately not `get_organization_members`: that endpoint takes no
-        `first`/`max`, so a large organization answers with whatever page
-        Keycloak feels like and a member past the end reads as absent. A check
-        that under-reports membership is worse than no check — it would report
-        drift that is not there, and an operator who chases one false finding
-        stops reading the next real one.
+        Deliberately not `get_organization_members`: that listing is paged, and
+        a listing read one page short makes a member past the end read as
+        absent. A check that under-reports membership is worse than no check —
+        it would report drift that is not there, and an operator who chases one
+        false finding stops reading the next real one. One user, one request,
+        no paging to get wrong.
         """
         try:
             await self._get(f"/organizations/{org_id}/members/{user_id}")
