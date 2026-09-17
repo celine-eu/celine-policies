@@ -14,7 +14,7 @@ dependencies = [
     "cachetools>=5.5.0",
     "structlog>=25.5.0",
     "celine-regorus>=0.9.1.post20260227075446",
-    "celine-sdk>=1.13.0",
+    "celine-sdk>=1.20.0",
     "typer>=0.23.1",
     # Imported directly by the Keycloak CLI (settings, models, sync, bootstrap,
     # _utils) but never declared — it arrived transitively via uvicorn[standard].
