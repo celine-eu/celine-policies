@@ -72,7 +72,7 @@ def kc() -> RecordingKeycloak:
     return RecordingKeycloak()
 
 
-REC = OrganizationSpec(alias="greenland", name="Greenland", description="", type="rec")
+REC = OrganizationSpec(alias="example-rec", name="Example REC", description="", type="rec")
 DSO = OrganizationSpec(alias="edyna", name="Edyna", description="ops@edyna", type="dso")
 
 
@@ -88,15 +88,15 @@ async def test_the_organization_type_attribute_separates_a_rec_from_an_operator(
         for call, alias, attrs in kc.calls
         if call == "ensure_organization"
     }
-    assert types == {"greenland": ["rec"], "edyna": ["dso"]}
+    assert types == {"example-rec": ["rec"], "edyna": ["dso"]}
 
 
 async def test_the_community_type_is_carried_through_rather_than_assumed(kc):
     """`type: energy-community` in the bundle reaches the organization intact."""
-    spec = OrganizationSpec(alias="gl", name="GL", type="energy-community")
+    spec = OrganizationSpec(alias="ex", name="EX", type="energy-community")
     await Provisioner(kc).ensure_community(spec)
 
-    assert ("ensure_organization", "gl", {"type": ["energy-community"]}) in kc.calls
+    assert ("ensure_organization", "ex", {"type": ["energy-community"]}) in kc.calls
 
 
 async def test_operators_are_ensured_before_the_community(kc):
@@ -105,7 +105,7 @@ async def test_operators_are_ensured_before_the_community(kc):
     await Provisioner(kc).ensure_community(REC, [DSO])
 
     order = [alias for call, alias, _ in kc.calls if call == "ensure_organization"]
-    assert order == ["edyna", "greenland"]
+    assert order == ["edyna", "example-rec"]
 
 
 async def test_every_role_and_group_of_the_hierarchy_is_ensured_each_run(kc):
@@ -127,8 +127,8 @@ async def test_the_member_group_is_viewers_and_comes_back_resolved(kc):
     second chance to disagree."""
     outcome = await Provisioner(kc).ensure_community(REC)
 
-    assert outcome.member_group_id == "grp-org-greenland-viewers"
-    assert outcome.org_id == "org-greenland"
+    assert outcome.member_group_id == "grp-org-example-rec-viewers"
+    assert outcome.org_id == "org-example-rec"
 
 
 async def test_a_second_run_reports_nothing_created(kc):
@@ -157,7 +157,7 @@ async def test_the_account_exists_before_it_is_filed_anywhere(kc):
     kc.calls.clear()
 
     await Provisioner(kc).ensure_participant(
-        username="gl-00001",
+        username="ex-00001",
         org_id=outcome.org_id,
         member_group_id=outcome.member_group_id,
         password="pw",
@@ -174,8 +174,8 @@ async def test_a_participant_is_filed_in_every_realm_group_the_caller_resolved(k
     """Resolution stays with the caller: a missing group has to stop a run before
     it has provisioned half of it, and this method only ever sees one member."""
     await Provisioner(kc).ensure_participant(
-        username="gl-00001",
-        org_id="org-greenland",
+        username="ex-00001",
+        org_id="org-example-rec",
         realm_group_ids={"/participants": "g1", "/viewers": "g2"},
     )
 
@@ -185,7 +185,7 @@ async def test_a_participant_is_filed_in_every_realm_group_the_caller_resolved(k
 
 async def test_no_org_group_call_when_the_caller_has_no_group_to_file_into(kc):
     outcome = await Provisioner(kc).ensure_participant(
-        username="gl-00001", org_id="org-greenland", member_group_id=None
+        username="ex-00001", org_id="org-example-rec", member_group_id=None
     )
 
     assert not any(c[0] == "ensure_user_in_org_group" for c in kc.calls)
@@ -195,10 +195,10 @@ async def test_no_org_group_call_when_the_caller_has_no_group_to_file_into(kc):
 async def test_an_existing_account_keeps_its_password(kc):
     """Resetting a credential because a reconcile ran is a denial of service with
     a schedule. It is opt-in, and this is the test that keeps it that way."""
-    kc.existing_users.add("gl-00001")
+    kc.existing_users.add("ex-00001")
 
     outcome = await Provisioner(kc).ensure_participant(
-        username="gl-00001", org_id="org-greenland", password="pw"
+        username="ex-00001", org_id="org-example-rec", password="pw"
     )
 
     assert not outcome.created
@@ -207,26 +207,26 @@ async def test_an_existing_account_keeps_its_password(kc):
 
 
 async def test_reset_password_reaches_an_account_that_already_existed(kc):
-    kc.existing_users.add("gl-00001")
+    kc.existing_users.add("ex-00001")
 
     outcome = await Provisioner(kc).ensure_participant(
-        username="gl-00001",
-        org_id="org-greenland",
+        username="ex-00001",
+        org_id="org-example-rec",
         password="pw",
         temporary=False,
         reset_password=True,
     )
 
     assert outcome.password_set
-    assert ("set_user_password", "uuid-gl-00001", "pw", False) in kc.calls
+    assert ("set_user_password", "uuid-ex-00001", "pw", False) in kc.calls
 
 
 async def test_reset_password_does_not_re_set_a_credential_just_created(kc):
     """`ensure_user` already carried it. Setting it twice is one more write and
     one more chance for the two to disagree."""
     outcome = await Provisioner(kc).ensure_participant(
-        username="gl-00001",
-        org_id="org-greenland",
+        username="ex-00001",
+        org_id="org-example-rec",
         password="pw",
         reset_password=True,
     )
@@ -240,7 +240,7 @@ async def test_the_username_comes_back_with_the_keycloak_uuid_beside_it(kc):
     username. The two names collide across the seam and this package uses
     neither ambiguously."""
     outcome = await Provisioner(kc).ensure_participant(
-        username="a.person@example.org", org_id="org-greenland"
+        username="a.person@example.org", org_id="org-example-rec"
     )
 
     assert outcome.username == "a.person@example.org"

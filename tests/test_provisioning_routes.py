@@ -65,7 +65,7 @@ class FakeService:
         if self.raises:
             raise self.raises
         return UpsertResult(
-            username="gl-00001",
+            username="ex-00001",
             keycloak_id="uuid-1",
             created=True,
             invitation=self.invitation if invite else "not_requested",
@@ -76,7 +76,7 @@ class FakeService:
         if self.raises:
             raise self.raises
         return InvitationResult(
-            username="gl-00001",
+            username="ex-00001",
             keycloak_id="uuid-1",
             invitation="sent",
             actions=("UPDATE_PASSWORD", "VERIFY_EMAIL"),
@@ -87,7 +87,7 @@ class FakeService:
         self.calls.append(("disable", community, key))
         if self.raises:
             raise self.raises
-        return DisableResult(username="gl-00001", keycloak_id="uuid-1", changed=True)
+        return DisableResult(username="ex-00001", keycloak_id="uuid-1", changed=True)
 
     async def reconcile(self, community):
         self.calls.append(("reconcile", community))
@@ -138,7 +138,7 @@ RESET = {"intent": "password_reset"}
 def test_no_token_is_refused(app_with):
     client, service = app_with(scopes=WRITE)
 
-    response = client.put("/participants/greenland/gl-00001", json=BODY)
+    response = client.put("/participants/example-rec/ex-00001", json=BODY)
 
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "missing_token"
@@ -149,7 +149,7 @@ def test_a_token_that_does_not_verify_is_refused(app_with):
     client, service = app_with(scopes=WRITE, valid_token=False)
 
     response = client.put(
-        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 401
@@ -163,7 +163,7 @@ def test_a_valid_token_without_the_scope_is_forbidden(app_with):
     client, service = app_with(scopes=("onboarding.admin",))
 
     response = client.put(
-        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 403
@@ -178,7 +178,7 @@ def test_the_write_scope_does_not_authorise_a_sweep(app_with):
     client, _ = app_with(scopes=WRITE)
 
     response = client.post(
-        "/reconcile/greenland", headers={"Authorization": "Bearer x"}
+        "/reconcile/example-rec", headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 403
@@ -188,7 +188,7 @@ def test_the_reconcile_scope_does_not_authorise_an_upsert(app_with):
     client, _ = app_with(scopes=RECONCILE)
 
     response = client.put(
-        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 403
@@ -197,10 +197,10 @@ def test_the_reconcile_scope_does_not_authorise_an_upsert(app_with):
 @pytest.mark.parametrize(
     "method,path",
     [
-        ("put", "/participants/greenland/gl-00001"),
-        ("post", "/participants/greenland/gl-00001/invitation"),
-        ("post", "/participants/greenland/gl-00001/disable"),
-        ("post", "/reconcile/greenland"),
+        ("put", "/participants/example-rec/ex-00001"),
+        ("post", "/participants/example-rec/ex-00001/invitation"),
+        ("post", "/participants/example-rec/ex-00001/disable"),
+        ("post", "/reconcile/example-rec"),
     ],
 )
 def test_provisioning_admin_satisfies_every_route(app_with, method, path):
@@ -227,12 +227,12 @@ def test_the_upsert_returns_the_uuid_under_the_name_onboarding_stores(app_with):
     client, _ = app_with(scopes=WRITE)
 
     response = client.put(
-        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
     )
 
     assert response.json() == {
         "user_id": "uuid-1",
-        "username": "gl-00001",
+        "username": "ex-00001",
         "created": True,
         "invitation": "not_requested",
         "invited": False,
@@ -243,7 +243,7 @@ def test_a_body_with_no_email_is_refused_before_anything_is_written(app_with):
     client, service = app_with(scopes=WRITE)
 
     response = client.put(
-        "/participants/greenland/gl-00001", json={}, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json={}, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 422
@@ -254,7 +254,7 @@ def test_the_upsert_passes_locale_and_invite_through(app_with):
     client, service = app_with(scopes=WRITE, service=FakeService(invitation="sent"))
 
     response = client.put(
-        "/participants/greenland/gl-00001",
+        "/participants/example-rec/ex-00001",
         json={**BODY, "locale": "es", "invite": True},
         headers={"Authorization": "Bearer x"},
     )
@@ -263,7 +263,7 @@ def test_the_upsert_passes_locale_and_invite_through(app_with):
     assert response.json()["invitation"] == "sent"
     assert response.json()["invited"] is True
     assert service.calls == [
-        ("ensure_participant", "greenland", "gl-00001", BODY["email"], "es", True)
+        ("ensure_participant", "example-rec", "ex-00001", BODY["email"], "es", True)
     ]
 
 
@@ -271,7 +271,7 @@ def test_locale_and_invite_default_to_nothing_and_false(app_with):
     client, service = app_with(scopes=WRITE)
 
     client.put(
-        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
     )
 
     assert service.calls[0][4:] == (None, False)
@@ -284,7 +284,7 @@ def test_a_locale_the_themes_do_not_carry_is_refused_with_422(app_with, locale):
     client, service = app_with(scopes=WRITE)
 
     response = client.put(
-        "/participants/greenland/gl-00001",
+        "/participants/example-rec/ex-00001",
         json={**BODY, "locale": locale},
         headers={"Authorization": "Bearer x"},
     )
@@ -312,7 +312,7 @@ def test_an_invitation_that_was_not_sent_is_still_a_200_with_the_reason(
     client, _ = app_with(scopes=WRITE, service=FakeService(invitation=invitation))
 
     response = client.put(
-        "/participants/greenland/gl-00001",
+        "/participants/example-rec/ex-00001",
         json={**BODY, "invite": True},
         headers={"Authorization": "Bearer x"},
     )
@@ -329,7 +329,7 @@ def test_a_keycloak_failure_on_the_upsert_is_502_with_its_code(app_with):
     )
 
     response = client.put(
-        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 502
@@ -342,7 +342,7 @@ def test_the_upsert_is_always_200_so_a_retry_looks_like_the_same_call(app_with):
     client, _ = app_with(scopes=WRITE)
 
     response = client.put(
-        "/participants/greenland/gl-00001", json=BODY, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 200
@@ -355,7 +355,7 @@ def test_an_invitation_reports_what_was_emailed_and_carries_no_credential(app_wi
     client, service = app_with(scopes=WRITE)
 
     response = client.post(
-        "/participants/greenland/gl-00001/invitation",
+        "/participants/example-rec/ex-00001/invitation",
         json=INVITE,
         headers={"Authorization": "Bearer x"},
     )
@@ -363,13 +363,13 @@ def test_an_invitation_reports_what_was_emailed_and_carries_no_credential(app_wi
     assert response.status_code == 200
     assert response.json() == {
         "user_id": "uuid-1",
-        "username": "gl-00001",
+        "username": "ex-00001",
         "invitation": "sent",
         "actions": ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
         "lifespan": 604800,
     }
     assert "password" not in response.text.replace("UPDATE_PASSWORD", "")
-    assert service.calls == [("send_invitation", "greenland", "gl-00001", "invitation")]
+    assert service.calls == [("send_invitation", "example-rec", "ex-00001", "invitation")]
 
 
 @pytest.mark.parametrize("intent", ["invitation", "password_reset"])
@@ -377,13 +377,13 @@ def test_the_intent_reaches_the_service_as_given(app_with, intent):
     client, service = app_with(scopes=WRITE)
 
     response = client.post(
-        "/participants/greenland/gl-00001/invitation",
+        "/participants/example-rec/ex-00001/invitation",
         json={"intent": intent},
         headers={"Authorization": "Bearer x"},
     )
 
     assert response.status_code == 200
-    assert service.calls == [("send_invitation", "greenland", "gl-00001", intent)]
+    assert service.calls == [("send_invitation", "example-rec", "ex-00001", intent)]
 
 
 @pytest.mark.parametrize(
@@ -399,7 +399,7 @@ def test_an_invitation_without_a_known_intent_is_refused_before_the_service(
     client, service = app_with(scopes=WRITE)
 
     response = client.post(
-        "/participants/greenland/gl-00001/invitation",
+        "/participants/example-rec/ex-00001/invitation",
         json=body,
         headers={"Authorization": "Bearer x"},
     )
@@ -409,9 +409,9 @@ def test_an_invitation_without_a_known_intent_is_refused_before_the_service(
 
 
 NOT_FOUND = [
-    (CommunityNotFound("The registry has no community 'greenland'"), "community_not_found"),
-    (MemberNotFound("greenland has no active member 'x'"), "member_not_found"),
-    (AccountNotFound("greenland/x is registered as 'x', and the realm has no such account"), "account_not_found"),
+    (CommunityNotFound("The registry has no community 'example-rec'"), "community_not_found"),
+    (MemberNotFound("example-rec has no active member 'x'"), "member_not_found"),
+    (AccountNotFound("example-rec/x is registered as 'x', and the realm has no such account"), "account_not_found"),
 ]
 
 
@@ -424,7 +424,7 @@ def test_every_404_says_which_thing_is_missing(app_with, path, error, code):
     client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
 
     response = client.post(
-        f"/participants/greenland/x/{path}",
+        f"/participants/example-rec/x/{path}",
         json=INVITE if path == "invitation" else None,
         headers={"Authorization": "Bearer x"},
     )
@@ -447,24 +447,24 @@ def test_a_sweep_of_a_community_the_registry_does_not_have_is_404(app_with):
 
 def test_an_invitation_to_a_disabled_account_is_409(app_with):
     client, _ = app_with(
-        scopes=WRITE, service=FakeService(raises=AccountDisabled("greenland/x is disabled"))
+        scopes=WRITE, service=FakeService(raises=AccountDisabled("example-rec/x is disabled"))
     )
 
     response = client.post(
-        "/participants/greenland/x/invitation", json=INVITE, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/x/invitation", json=INVITE, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 409
     assert response.json() == {
-        "detail": {"code": "account_disabled", "message": "greenland/x is disabled"}
+        "detail": {"code": "account_disabled", "message": "example-rec/x is disabled"}
     }
 
 
 CONFLICTS = [
-    (HasPassword("greenland/x already has a password"), INVITE, "has_password"),
-    (NoPassword("greenland/x has no password to reset"), RESET, "no_password"),
-    (NoEmail("greenland/x has no email address"), INVITE, "no_email"),
-    (NoEmail("greenland/x has no email address"), RESET, "no_email"),
+    (HasPassword("example-rec/x already has a password"), INVITE, "has_password"),
+    (NoPassword("example-rec/x has no password to reset"), RESET, "no_password"),
+    (NoEmail("example-rec/x has no email address"), INVITE, "no_email"),
+    (NoEmail("example-rec/x has no email address"), RESET, "no_email"),
 ]
 
 
@@ -479,7 +479,7 @@ def test_an_intent_the_account_does_not_fit_or_no_address_is_409_with_its_code(
     client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
 
     response = client.post(
-        "/participants/greenland/x/invitation", json=body, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/x/invitation", json=body, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 409
@@ -494,7 +494,7 @@ def test_an_invitation_within_the_cooldown_is_429_with_retry_after(app_with):
     )
 
     response = client.post(
-        "/participants/greenland/x/invitation", json=INVITE, headers={"Authorization": "Bearer x"}
+        "/participants/example-rec/x/invitation", json=INVITE, headers={"Authorization": "Bearer x"}
     )
 
     assert response.status_code == 429
@@ -506,7 +506,7 @@ def test_an_invitation_within_the_cooldown_is_429_with_retry_after(app_with):
     "error,code",
     [
         (RegistryUnavailable("registry unreachable"), "registry_unavailable"),
-        (SendFailed("Keycloak did not email greenland/gl-00001"), "send_failed"),
+        (SendFailed("Keycloak did not email example-rec/ex-00001"), "send_failed"),
         (ProvisioningError("something else"), "provisioning_failed"),
     ],
 )
@@ -517,7 +517,7 @@ def test_a_registry_or_keycloak_failure_is_502_with_its_code(app_with, error, co
     client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
 
     response = client.post(
-        "/participants/greenland/gl-00001/invitation",
+        "/participants/example-rec/ex-00001/invitation",
         json=INVITE,
         headers={"Authorization": "Bearer x"},
     )
@@ -533,11 +533,11 @@ def test_a_registry_or_keycloak_failure_is_502_with_its_code(app_with, error, co
 def test_a_clean_sweep_reports_what_it_did(app_with):
     client, _ = app_with(scopes=RECONCILE)
 
-    response = client.post("/reconcile/greenland", headers={"Authorization": "Bearer x"})
+    response = client.post("/reconcile/example-rec", headers={"Authorization": "Bearer x"})
 
     assert response.status_code == 200
     assert response.json() == {
-        "community": "greenland",
+        "community": "example-rec",
         "members": 2,
         "created": 1,
         "existing": 1,
@@ -559,8 +559,8 @@ def test_a_sweep_that_leaves_a_member_outside_its_organization_fails_loudly(app_
             existing=1,
             divergences=(
                 Divergence(
-                    key="gl-00001",
-                    username="gl-00001",
+                    key="ex-00001",
+                    username="ex-00001",
                     kind="not in the REC organization",
                     detail="no `organization` claim",
                 ),
@@ -570,15 +570,15 @@ def test_a_sweep_that_leaves_a_member_outside_its_organization_fails_loudly(app_
     service.reconcile = diverging
     client, _ = app_with(scopes=RECONCILE, service=service)
 
-    response = client.post("/reconcile/greenland", headers={"Authorization": "Bearer x"})
+    response = client.post("/reconcile/example-rec", headers={"Authorization": "Bearer x"})
 
     assert response.status_code == 500
     detail = response.json()["detail"]
     assert detail["code"] == "reconcile_diverged"
     assert "1 member" in detail["message"]
     # the report is still the body, where the SDK reads it
-    assert detail["divergences"][0]["key"] == "gl-00001"
-    assert detail["community"] == "greenland"
+    assert detail["divergences"][0]["key"] == "ex-00001"
+    assert detail["community"] == "example-rec"
 
 
 # --- the shape of the surface --------------------------------------------

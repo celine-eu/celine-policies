@@ -38,23 +38,23 @@ from celine.policies.cli.keycloak.registry import (
 from celine.policies.cli.keycloak.settings import KeycloakSettings, SyncUsersSettings
 from celine.provisioning.registry import RegistryCommunityNotFound
 
-GREENLAND = """
+EXAMPLE_REC = """
     community:
-      id: greenland
-      name: Greenland Energy Community
+      id: example-rec
+      name: Example Energy Community
       operators:
-        set-distribuzione:
-          name: SET Distribuzione S.p.A.
+        example-dso:
+          name: Example DSO S.p.A.
     members:
-      gl-00001:
+      ex-00001:
         name: Mario Rossi
-        user_id: gl-00001
+        user_id: ex-00001
         status: active
       20260912-a3f9c2:
         name: Alice Onboarded
         user_id: alice@example.com
         status: active
-      gl-00009:
+      ex-00009:
         name: Pending Pat
         user_id: pat@example.com
         status: pending
@@ -151,7 +151,7 @@ class TestFetchRecDocuments:
 
             async def export_communities(self, keys):
                 captured["keys"] = keys
-                return _stream(GREENLAND, BLUELAND)
+                return _stream(EXAMPLE_REC, BLUELAND)
 
         _install_sdk(monkeypatch, FakeAdminClient)
 
@@ -162,7 +162,7 @@ class TestFetchRecDocuments:
             client_secret="s3cret",
         )
 
-        assert [d["community"]["id"] for d in docs] == ["greenland", "blueland"]
+        assert [d["community"]["id"] for d in docs] == ["example-rec", "blueland"]
         assert captured["base_url"] == "http://registry.internal"
         assert captured["keys"] is None
 
@@ -179,7 +179,7 @@ class TestFetchRecDocuments:
 
             async def export_communities(self, keys):
                 captured["keys"] = keys
-                return _stream(GREENLAND)
+                return _stream(EXAMPLE_REC)
 
         _install_sdk(monkeypatch, FakeAdminClient)
 
@@ -188,10 +188,10 @@ class TestFetchRecDocuments:
             issuer="http://kc.internal/realms/celine",
             client_id="celine-cli",
             client_secret="s3cret",
-            community_keys=["greenland"],
+            community_keys=["example-rec"],
         )
 
-        assert captured["keys"] == ["greenland"]
+        assert captured["keys"] == ["example-rec"]
 
     @pytest.mark.asyncio
     async def test_a_failure_names_the_url_the_client_and_the_issuer(
@@ -279,7 +279,7 @@ class TestFetchRecDocuments:
                 raise AssertionError(f"sync-users must not call {name}")
 
             async def export_communities(self, keys):
-                return _stream(GREENLAND)
+                return _stream(EXAMPLE_REC)
 
         _install_sdk(monkeypatch, FakeAdminClient)
 
@@ -371,14 +371,14 @@ class TestChoosingASource:
         self, tmp_path: Path, kc_settings
     ):
         """Bootstrap runs before the registry holds anything, and offline is real."""
-        path = _write(tmp_path, GREENLAND)
+        path = _write(tmp_path, EXAMPLE_REC)
         settings = SyncUsersSettings(rec_yaml=path)
 
         documents, source = _resolve_source(
             settings, kc_settings=kc_settings, from_registry=False
         )
 
-        assert [d["community"]["id"] for d in documents] == ["greenland"]
+        assert [d["community"]["id"] for d in documents] == ["example-rec"]
         assert source == str(path)
 
     def test_both_sources_at_once_is_refused_naming_the_one_it_would_use(
@@ -386,7 +386,7 @@ class TestChoosingASource:
     ):
         """Silently preferring one would make the flag look like it did nothing."""
         settings = SyncUsersSettings(
-            rec_yaml=_write(tmp_path, GREENLAND),
+            rec_yaml=_write(tmp_path, EXAMPLE_REC),
             registry_url="http://registry.internal",
         )
 
@@ -420,7 +420,7 @@ class TestChoosingASource:
         self, stub_registry, kc_settings
     ):
         """`CELINE_SYNC_USERS_REGISTRY_URL` should not also need the flag."""
-        stub_registry(_stream(GREENLAND))
+        stub_registry(_stream(EXAMPLE_REC))
         settings = SyncUsersSettings(
             registry_url="http://registry.internal",
             registry_client_secret="s3cret",
@@ -430,11 +430,11 @@ class TestChoosingASource:
             settings, kc_settings=kc_settings, from_registry=True
         )
 
-        assert [d["community"]["id"] for d in documents] == ["greenland"]
+        assert [d["community"]["id"] for d in documents] == ["example-rec"]
         assert source == "registry http://registry.internal"
 
     def test_the_registry_call_gets_the_realm_issuer(self, stub_registry, kc_settings):
-        calls = stub_registry(_stream(GREENLAND))
+        calls = stub_registry(_stream(EXAMPLE_REC))
         settings = SyncUsersSettings(
             registry_url="http://registry.internal", registry_client_secret="s3cret"
         )
@@ -528,7 +528,7 @@ class TestTheRegistrySecret:
 class TestNarrowingToNamedCommunities:
     def test_it_keeps_only_the_named_one(self, tmp_path: Path, kc_settings):
         settings = SyncUsersSettings(
-            rec_yaml=_write(tmp_path, GREENLAND, BLUELAND), communities=["blueland"]
+            rec_yaml=_write(tmp_path, EXAMPLE_REC, BLUELAND), communities=["blueland"]
         )
 
         documents, _ = _resolve_source(
@@ -546,26 +546,26 @@ class TestNarrowingToNamedCommunities:
         supposed to catch drift the thing that hides it.
         """
         settings = SyncUsersSettings(
-            rec_yaml=_write(tmp_path, GREENLAND), communities=["greenlnad"]
+            rec_yaml=_write(tmp_path, EXAMPLE_REC), communities=["exmaple-rec"]
         )
 
-        with pytest.raises(_SourceError, match="greenlnad"):
+        with pytest.raises(_SourceError, match="exmaple-rec"):
             _resolve_source(settings, kc_settings=kc_settings, from_registry=False)
 
     def test_narrowing_the_registry_is_the_servers_job(
         self, stub_registry, kc_settings
     ):
         """Asked for one, the export returns one — and 404s a name it lacks."""
-        calls = stub_registry(_stream(GREENLAND))
+        calls = stub_registry(_stream(EXAMPLE_REC))
         settings = SyncUsersSettings(
             registry_url="http://registry.internal",
             registry_client_secret="s3cret",
-            communities=["greenland"],
+            communities=["example-rec"],
         )
 
         _resolve_source(settings, kc_settings=kc_settings, from_registry=True)
 
-        assert calls[0]["community_keys"] == ["greenland"]
+        assert calls[0]["community_keys"] == ["example-rec"]
 
     def test_naming_nothing_asks_the_registry_for_everything(
         self, stub_registry, kc_settings
@@ -575,7 +575,7 @@ class TestNarrowingToNamedCommunities:
         That is what makes a scheduled reconcile possible without a list of REC
         slugs maintained somewhere else.
         """
-        calls = stub_registry(_stream(GREENLAND, BLUELAND))
+        calls = stub_registry(_stream(EXAMPLE_REC, BLUELAND))
         settings = SyncUsersSettings(
             registry_url="http://registry.internal", registry_client_secret="s3cret"
         )
@@ -585,7 +585,7 @@ class TestNarrowingToNamedCommunities:
         )
 
         assert calls[0]["community_keys"] is None
-        assert [d["community"]["id"] for d in documents] == ["greenland", "blueland"]
+        assert [d["community"]["id"] for d in documents] == ["example-rec", "blueland"]
 
 
 # ---------------------------------------------------------------------------
@@ -604,11 +604,11 @@ class TestTheTwoSourcesProduceTheSamePlans:
         self, tmp_path: Path, stub_registry, kc_settings
     ):
         from_file, _ = _resolve_source(
-            SyncUsersSettings(rec_yaml=_write(tmp_path, GREENLAND, BLUELAND)),
+            SyncUsersSettings(rec_yaml=_write(tmp_path, EXAMPLE_REC, BLUELAND)),
             kc_settings=kc_settings,
             from_registry=False,
         )
-        stub_registry(_stream(GREENLAND, BLUELAND))
+        stub_registry(_stream(EXAMPLE_REC, BLUELAND))
         from_registry, _ = _resolve_source(
             SyncUsersSettings(
                 registry_url="http://registry.internal",
@@ -626,41 +626,41 @@ class TestTheTwoSourcesProduceTheSamePlans:
 class TestLoadCommunities:
     def test_one_plan_per_document(self):
         plans = _load_communities(
-            [doc for doc in yaml.safe_load_all(_stream(GREENLAND, BLUELAND)) if doc],
+            [doc for doc in yaml.safe_load_all(_stream(EXAMPLE_REC, BLUELAND)) if doc],
             source="two.yaml",
         )
 
-        assert [p.community["id"] for p in plans] == ["greenland", "blueland"]
+        assert [p.community["id"] for p in plans] == ["example-rec", "blueland"]
         assert [p.community_type for p in plans] == ["rec", "rec"]
 
     def test_members_and_operators_travel_with_their_community(self):
         plans = _load_communities(
-            [doc for doc in yaml.safe_load_all(_stream(GREENLAND, BLUELAND)) if doc],
+            [doc for doc in yaml.safe_load_all(_stream(EXAMPLE_REC, BLUELAND)) if doc],
             source="two.yaml",
         )
 
         assert [p["key"] for p in plans[0].participants] == [
-            "gl-00001",
+            "ex-00001",
             "20260912-a3f9c2",
         ]
-        assert [op["id"] for op in plans[0].operators] == ["set-distribuzione"]
+        assert [op["id"] for op in plans[0].operators] == ["example-dso"]
         assert plans[1].operators == []
 
     def test_the_pending_member_is_not_in_any_plan(self):
-        """`gl-00009` is `status: pending` and never reaches provisioning."""
+        """`ex-00009` is `status: pending` and never reaches provisioning."""
         plans = _load_communities(
-            [doc for doc in yaml.safe_load_all(_stream(GREENLAND)) if doc],
+            [doc for doc in yaml.safe_load_all(_stream(EXAMPLE_REC)) if doc],
             source="one.yaml",
         )
 
-        assert "gl-00009" not in [p["key"] for p in plans[0].participants]
+        assert "ex-00009" not in [p["key"] for p in plans[0].participants]
 
     def test_a_document_missing_community_id_names_which_document(self):
         """With several in a stream, "which one" is the whole question."""
         with pytest.raises(ValueError, match="document 2"):
             _load_communities(
                 [
-                    {"community": {"id": "greenland"}},
+                    {"community": {"id": "example-rec"}},
                     {"members": {}},
                 ],
                 source="two.yaml",
@@ -673,11 +673,11 @@ class TestLoadCommunities:
         hand-assembled file, and provisioning the same REC twice from two
         disagreeing member lists is worse than refusing.
         """
-        with pytest.raises(ValueError, match="greenland"):
+        with pytest.raises(ValueError, match="example-rec"):
             _load_communities(
                 [
-                    {"community": {"id": "greenland"}},
-                    {"community": {"id": "greenland"}},
+                    {"community": {"id": "example-rec"}},
+                    {"community": {"id": "example-rec"}},
                 ],
                 source="two.yaml",
             )

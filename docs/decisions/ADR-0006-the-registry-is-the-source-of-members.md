@@ -56,7 +56,7 @@ only as the fallback for a row carrying no `user_id`, which the registry cannot 
 The two conventions are **not converged**, and do not need to be. The username is a
 **static handle the participant neither chooses nor changes** — it is what an account is
 matched by, with email as a fallback where a lookup offers one. Its shape therefore carries
-no meaning: `gl-00001` from a seed and `a.person@example.org` from onboarding are equally
+no meaning: `ex-00001` from a seed and `a.person@example.org` from onboarding are equally
 correct, and the second is **not an email** — it is a string onboarding happened to take
 from one, and it would still be the username if that convention changed tomorrow.
 

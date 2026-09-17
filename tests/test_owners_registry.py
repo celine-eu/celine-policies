@@ -28,10 +28,10 @@ from celine.policies.cli.keycloak.commands._utils import load_owners
 BASE = textwrap.dedent(
     """
     owners:
-      - id: greenland
+      - id: example-rec
         type: schema:NGO
-        name: Greenland Soc. Coop.
-        url: https://www.greenland.it
+        name: Example REC Soc. Coop.
+        url: https://www.rec.example.org
         organization:
           create: true
           role: rec
@@ -50,17 +50,17 @@ BASE = textwrap.dedent(
 OVERLAY = textwrap.dedent(
     """
     owners:
-      - id: greenland
+      - id: example-rec
         type: schema:NGO
-        name: Greenland Soc. Coop. (staging)
-        url: https://staging.greenland.it
+        name: Example REC Soc. Coop. (staging)
+        url: https://staging.rec.example.org
         organization:
           create: false
 
-      - id: set-distribuzione
+      - id: example-dso
         type: schema:Corporation
-        name: SET Distribuzione S.p.A.
-        url: https://www.setdistribuzione.it
+        name: Example DSO S.p.A.
+        url: https://www.dso.example.org
         organization:
           create: true
           role: dso
@@ -81,13 +81,13 @@ def _write(tmp_path: Path, name: str, body: str) -> Path:
 
 def test_a_valid_registry_loads_with_its_keycloak_block(tmp_path: Path) -> None:
     owners = load_owners([_write(tmp_path, "owners.yaml", BASE)])
-    assert [o["id"] for o in owners] == ["greenland", "spxl"]
+    assert [o["id"] for o in owners] == ["example-rec", "spxl"]
 
-    greenland = owners[0]["organization"]
-    assert greenland["create"] is True
-    assert greenland["role"] == "rec"
+    example_rec = owners[0]["organization"]
+    assert example_rec["create"] is True
+    assert example_rec["role"] == "rec"
     # free-form attributes reach the KC org alongside the role
-    assert greenland["attributes"] == {"country": "IT"}
+    assert example_rec["attributes"] == {"country": "IT"}
 
 
 def test_later_files_shadow_earlier_entries_by_id(tmp_path: Path) -> None:
@@ -100,10 +100,10 @@ def test_later_files_shadow_earlier_entries_by_id(tmp_path: Path) -> None:
     )
     by_id = {o["id"]: o for o in owners}
 
-    assert set(by_id) == {"greenland", "spxl", "set-distribuzione"}
+    assert set(by_id) == {"example-rec", "spxl", "example-dso"}
     # replaced wholesale, not merged field-wise
-    assert by_id["greenland"]["name"] == "Greenland Soc. Coop. (staging)"
-    assert by_id["greenland"]["url"] == "https://staging.greenland.it"
+    assert by_id["example-rec"]["name"] == "Example REC Soc. Coop. (staging)"
+    assert by_id["example-rec"]["url"] == "https://staging.rec.example.org"
     # untouched by the overlay
     assert by_id["spxl"]["name"] == "Spindox Labs srl"
 
@@ -119,7 +119,7 @@ def test_an_overlay_can_withdraw_a_keycloak_organization(tmp_path: Path) -> None
     provisioned = {
         o["id"] for o in owners if (o.get("organization") or {}).get("create")
     }
-    assert provisioned == {"set-distribuzione"}
+    assert provisioned == {"example-dso"}
 
 
 def test_owners_without_an_organization_block_are_not_provisioned(
@@ -134,9 +134,9 @@ def test_role_is_accepted_alongside_the_keycloak_role(tmp_path: Path) -> None:
     body = textwrap.dedent(
         """
         owners:
-          - id: greenland
+          - id: example-rec
             type: schema:NGO
-            name: Greenland
+            name: Example REC
             role: controller
             organization:
               create: true

@@ -41,21 +41,21 @@ from celine.policies.cli.keycloak.commands._utils import (
 # is not harmless now that it names the account.
 REC_YAML = """
     community:
-      id: greenland
-      name: Greenland Energy Community
+      id: example-rec
+      name: Example Energy Community
       description: A REC in Trentino
       type: rec
       operators:
-        set-distribuzione:
-          name: SET Distribuzione S.p.A.
+        example-dso:
+          name: Example DSO S.p.A.
           country: IT
-          contact: info@setdistribuzione.it
+          contact: info@dso.example.org
     members:
-      gl-00001:
+      ex-00001:
         name: Mario Rossi
-        user_id: gl-00001
+        user_id: ex-00001
         status: active
-      gl-00002:
+      ex-00002:
         name: Anna Bianchi
         user_id: anna.bianchi@example.com
         status: active
@@ -92,8 +92,8 @@ class TestLoadRecParticipants:
     def test_it_reads_every_member(self, rec_doc: dict):
         participants = load_rec_participants(rec_doc)
 
-        assert [p["key"] for p in participants] == ["gl-00001", "gl-00002"]
-        assert participants[0]["user_id"] == "gl-00001"
+        assert [p["key"] for p in participants] == ["ex-00001", "ex-00002"]
+        assert participants[0]["user_id"] == "ex-00001"
         assert participants[0]["name"] == "Mario Rossi"
 
     def test_the_legacy_participants_key_still_works(self):
@@ -101,14 +101,14 @@ class TestLoadRecParticipants:
         doc = _doc(
             """
             community:
-              id: greenland
+              id: example-rec
             participants:
-              gl-00001:
+              ex-00001:
                 name: Mario Rossi
                 user_id: uid-1
             """
         )
-        assert [p["key"] for p in load_rec_participants(doc)] == ["gl-00001"]
+        assert [p["key"] for p in load_rec_participants(doc)] == ["ex-00001"]
 
     def test_members_wins_when_both_keys_are_present(self):
         """A file mid-migration must not provision the stale list."""
@@ -136,42 +136,42 @@ class TestLoadRecParticipants:
         doc = _doc(
             """
             members:
-              gl-00001:
+              ex-00001:
                 name: Has One
                 user_id: uid-1
-              gl-00002:
+              ex-00002:
                 name: Missing One
             """
         )
         participants = load_rec_participants(doc)
 
-        assert [p["key"] for p in participants] == ["gl-00001", "gl-00002"]
+        assert [p["key"] for p in participants] == ["ex-00001", "ex-00002"]
         assert participants[1]["user_id"] is None
 
     def test_an_empty_user_id_is_kept_too(self):
-        assert len(load_rec_participants(_doc("members:\n  gl-1:\n    user_id: ''\n"))) == 1
+        assert len(load_rec_participants(_doc("members:\n  ex-1:\n    user_id: ''\n"))) == 1
 
     def test_a_missing_user_id_is_logged_with_the_member_key(
         self, caplog: pytest.LogCaptureFixture
     ):
         """The key is the only way to find the row to fix in the source file."""
         with caplog.at_level("WARNING"):
-            load_rec_participants(_doc("members:\n  gl-00007:\n    name: No Id\n"))
+            load_rec_participants(_doc("members:\n  ex-00007:\n    name: No Id\n"))
 
-        assert "gl-00007" in caplog.text
+        assert "ex-00007" in caplog.text
 
     def test_a_missing_name_falls_back_to_the_key(self):
         """Only a display name — a nameless account is worse than a coded one."""
-        doc = _doc("members:\n  gl-00001:\n    user_id: uid-1\n")
-        assert load_rec_participants(doc)[0]["name"] == "gl-00001"
+        doc = _doc("members:\n  ex-00001:\n    user_id: uid-1\n")
+        assert load_rec_participants(doc)[0]["name"] == "ex-00001"
 
     def test_a_file_with_no_members_yields_nothing(self):
-        assert load_rec_participants(_doc("community:\n  id: greenland\n")) == []
+        assert load_rec_participants(_doc("community:\n  id: example-rec\n")) == []
 
     def test_a_member_with_no_body_at_all_does_not_crash(self):
-        """`gl-1:` with nothing under it parses as None, not as a dict."""
-        participants = load_rec_participants(_doc("members:\n  gl-1:\n"))
-        assert [p["key"] for p in participants] == ["gl-1"]
+        """`ex-1:` with nothing under it parses as None, not as a dict."""
+        participants = load_rec_participants(_doc("members:\n  ex-1:\n"))
+        assert [p["key"] for p in participants] == ["ex-1"]
 
 
 class TestOnlyActiveMembersAreProvisioned:
@@ -186,17 +186,17 @@ class TestOnlyActiveMembersAreProvisioned:
 
     @pytest.mark.parametrize("status", ["pending", "suspended", "inactive"])
     def test_a_non_active_member_is_skipped(self, status: str):
-        doc = _doc(f"members:\n  gl-1:\n    user_id: uid-1\n    status: {status}\n")
+        doc = _doc(f"members:\n  ex-1:\n    user_id: uid-1\n    status: {status}\n")
         assert load_rec_participants(doc) == []
 
     def test_an_active_member_is_provisioned(self):
-        doc = _doc("members:\n  gl-1:\n    user_id: uid-1\n    status: active\n")
-        assert [p["key"] for p in load_rec_participants(doc)] == ["gl-1"]
+        doc = _doc("members:\n  ex-1:\n    user_id: uid-1\n    status: active\n")
+        assert [p["key"] for p in load_rec_participants(doc)] == ["ex-1"]
 
     def test_a_member_with_no_status_is_treated_as_active(self):
-        doc = _doc("members:\n  gl-1:\n    user_id: uid-1\n")
+        doc = _doc("members:\n  ex-1:\n    user_id: uid-1\n")
         participants = load_rec_participants(doc)
-        assert [p["key"] for p in participants] == ["gl-1"]
+        assert [p["key"] for p in participants] == ["ex-1"]
         assert participants[0]["status"] == "active"
 
     def test_the_skip_is_logged_with_the_key_and_the_status(
@@ -204,10 +204,10 @@ class TestOnlyActiveMembersAreProvisioned:
     ):
         with caplog.at_level("INFO"):
             load_rec_participants(
-                _doc("members:\n  gl-00007:\n    user_id: uid-7\n    status: pending\n")
+                _doc("members:\n  ex-00007:\n    user_id: uid-7\n    status: pending\n")
             )
 
-        assert "gl-00007" in caplog.text
+        assert "ex-00007" in caplog.text
         assert "pending" in caplog.text
 
     def test_skipping_provisioning_is_not_disabling(self):
@@ -219,7 +219,7 @@ class TestOnlyActiveMembersAreProvisioned:
         whatever Keycloak account they have until something whose job that is
         takes it away.
         """
-        doc = _doc("members:\n  gl-1:\n    user_id: uid-1\n    status: suspended\n")
+        doc = _doc("members:\n  ex-1:\n    user_id: uid-1\n    status: suspended\n")
         assert load_rec_participants(doc) == []
 
 
@@ -234,22 +234,22 @@ class TestLoadRecOperators:
 
         assert len(operators) == 1
         assert operators[0] == {
-            "id": "set-distribuzione",
-            "name": "SET Distribuzione S.p.A.",
+            "id": "example-dso",
+            "name": "Example DSO S.p.A.",
             "country": "IT",
-            "contact": "info@setdistribuzione.it",
+            "contact": "info@dso.example.org",
         }
 
     def test_a_missing_name_falls_back_to_the_id(self):
         doc = _doc(
             """
             community:
-              id: greenland
+              id: example-rec
               operators:
-                set-distribuzione: {}
+                example-dso: {}
             """
         )
-        assert load_rec_operators(doc)[0]["name"] == "set-distribuzione"
+        assert load_rec_operators(doc)[0]["name"] == "example-dso"
 
     def test_optional_fields_come_back_as_none(self):
         """`ensure_organization` sends contact as the description; absent is fine."""
@@ -266,11 +266,11 @@ class TestLoadRecOperators:
         assert operator["contact"] is None
 
     def test_a_community_without_operators_yields_nothing(self):
-        assert load_rec_operators(_doc("community:\n  id: greenland\n")) == []
+        assert load_rec_operators(_doc("community:\n  id: example-rec\n")) == []
 
     def test_an_explicitly_empty_operators_block_yields_nothing(self):
         """`operators:` with nothing under it parses as None, not as a dict."""
-        assert load_rec_operators(_doc("community:\n  id: greenland\n  operators:\n")) == []
+        assert load_rec_operators(_doc("community:\n  id: example-rec\n  operators:\n")) == []
 
     def test_a_file_without_a_community_block_yields_nothing(self):
         assert load_rec_operators(_doc("members: {}\n")) == []
@@ -286,8 +286,8 @@ class TestLoadRecCommunityInfo:
         info = load_rec_community_info(rec_doc)
 
         assert info == {
-            "id": "greenland",
-            "name": "Greenland Energy Community",
+            "id": "example-rec",
+            "name": "Example Energy Community",
             "description": "A REC in Trentino",
             "type": "rec",
         }
@@ -311,17 +311,17 @@ class TestLoadRecCommunityInfo:
             load_rec_community_info(_doc("members: {}\n"), source="broken.rec.yaml")
 
     def test_the_name_falls_back_to_the_id(self):
-        assert load_rec_community_info(_doc("community:\n  id: greenland\n"))["name"] == "greenland"
+        assert load_rec_community_info(_doc("community:\n  id: example-rec\n"))["name"] == "example-rec"
 
     def test_the_description_defaults_to_empty(self):
-        assert load_rec_community_info(_doc("community:\n  id: greenland\n"))["description"] == ""
+        assert load_rec_community_info(_doc("community:\n  id: example-rec\n"))["description"] == ""
 
     def test_the_type_defaults_to_rec(self):
         """It lands in the KC organization's `type` attribute, which policies read."""
-        assert load_rec_community_info(_doc("community:\n  id: greenland\n"))["type"] == "rec"
+        assert load_rec_community_info(_doc("community:\n  id: example-rec\n"))["type"] == "rec"
 
     def test_an_explicit_type_is_kept(self):
-        doc = _doc("community:\n  id: greenland\n  type: cer\n")
+        doc = _doc("community:\n  id: example-rec\n  type: cer\n")
         assert load_rec_community_info(doc)["type"] == "cer"
 
 
@@ -339,14 +339,14 @@ class TestDeriveUsername:
     """
 
     def test_it_lowercases_the_participant_key(self):
-        assert derive_username("GL-00001") == "gl-00001"
+        assert derive_username("EX-00001") == "ex-00001"
 
     def test_an_already_lowercase_key_is_unchanged(self):
-        assert derive_username("gl-00001") == "gl-00001"
+        assert derive_username("ex-00001") == "ex-00001"
 
     def test_it_is_deterministic(self):
         """Re-running `sync-users` has to find the same user, not create a second."""
-        assert derive_username("gl-00001") == derive_username("gl-00001")
+        assert derive_username("ex-00001") == derive_username("ex-00001")
 
     def test_keys_differing_only_in_case_collide(self):
         """Two such keys in one REC file are the same account — worth knowing.
@@ -354,7 +354,7 @@ class TestDeriveUsername:
         Keycloak usernames are case-insensitive anyway, so this matches it
         rather than producing two records for one member.
         """
-        assert derive_username("GL-1") == derive_username("gl-1")
+        assert derive_username("EX-1") == derive_username("ex-1")
 
     def test_it_carries_no_personal_data(self, rec_doc: dict):
         for participant in load_rec_participants(rec_doc):
@@ -376,7 +376,7 @@ class TestParticipantUsername:
     """
 
     def test_it_prefers_the_user_id_the_row_holds(self):
-        assert participant_username({"key": "gl-00001", "user_id": "mrossi"}) == "mrossi"
+        assert participant_username({"key": "ex-00001", "user_id": "mrossi"}) == "mrossi"
 
     def test_the_onboarding_shape_is_named_after_the_user_id(self):
         """`../onboarding` writes `key = submission.ref` and `user_id` = the
@@ -391,13 +391,13 @@ class TestParticipantUsername:
 
     def test_a_row_with_no_user_id_falls_back_to_the_key(self):
         """The seed case, and the only one the fallback is for."""
-        assert participant_username({"key": "GL-00001", "user_id": None}) == "gl-00001"
+        assert participant_username({"key": "EX-00001", "user_id": None}) == "ex-00001"
 
     def test_an_empty_user_id_falls_back_too(self):
-        assert participant_username({"key": "gl-1", "user_id": ""}) == "gl-1"
+        assert participant_username({"key": "ex-1", "user_id": ""}) == "ex-1"
 
     def test_whitespace_is_not_a_user_id(self):
-        assert participant_username({"key": "gl-1", "user_id": "   "}) == "gl-1"
+        assert participant_username({"key": "ex-1", "user_id": "   "}) == "ex-1"
 
     def test_a_user_id_is_used_verbatim(self):
         """Not lowercased, not normalised, not validated.
@@ -410,18 +410,18 @@ class TestParticipantUsername:
         not.
         """
         uuid = "11111111-1111-1111-1111-111111111111"
-        assert participant_username({"key": "gl-1", "user_id": uuid}) == uuid
-        assert participant_username({"key": "gl-1", "user_id": "MRossi"}) == "MRossi"
+        assert participant_username({"key": "ex-1", "user_id": uuid}) == uuid
+        assert participant_username({"key": "ex-1", "user_id": "MRossi"}) == "MRossi"
 
     def test_it_is_deterministic(self):
         """A re-run has to find the same account, not create a second."""
-        participant = {"key": "gl-1", "user_id": "mrossi"}
+        participant = {"key": "ex-1", "user_id": "mrossi"}
         assert participant_username(participant) == participant_username(participant)
 
     def test_the_loaded_rows_carry_what_it_needs(self, rec_doc: dict):
         """The loader and the namer are used together; this pins the seam."""
         names = [participant_username(p) for p in load_rec_participants(rec_doc)]
-        assert names == ["gl-00001", "anna.bianchi@example.com"]
+        assert names == ["ex-00001", "anna.bianchi@example.com"]
 
 
 # ---------------------------------------------------------------------------
@@ -442,16 +442,16 @@ class TestReadRecDocuments:
         docs = read_rec_documents(path)
 
         assert len(docs) == 1
-        assert docs[0]["community"]["id"] == "greenland"
+        assert docs[0]["community"]["id"] == "example-rec"
 
     def test_a_multidocument_stream_yields_one_per_community(self, tmp_path: Path):
         path = _write(
             tmp_path,
             """
             community:
-              id: greenland
+              id: example-rec
             members:
-              gl-1:
+              ex-1:
                 user_id: uid-1
             ---
             community:
@@ -463,11 +463,11 @@ class TestReadRecDocuments:
         )
         docs = read_rec_documents(path)
 
-        assert [d["community"]["id"] for d in docs] == ["greenland", "blueland"]
+        assert [d["community"]["id"] for d in docs] == ["example-rec", "blueland"]
 
     def test_empty_documents_are_dropped(self, tmp_path: Path):
         """A trailing `---` is normal in a stream and is not a community."""
-        path = _write(tmp_path, "community:\n  id: greenland\n---\n")
+        path = _write(tmp_path, "community:\n  id: example-rec\n---\n")
         assert len(read_rec_documents(path)) == 1
 
     def test_a_file_with_no_document_at_all_is_refused(self, tmp_path: Path):

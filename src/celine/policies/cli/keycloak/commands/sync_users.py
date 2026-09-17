@@ -462,21 +462,21 @@ def sync_users(
         celine-policies keycloak sync-users
 
         # explicit YAML, dry run
-        celine-policies keycloak sync-users greenland.yaml --dry-run
+        celine-policies keycloak sync-users example-rec.yaml --dry-run
 
         # admin-user auth
-        celine-policies keycloak sync-users greenland.yaml \\
+        celine-policies keycloak sync-users example-rec.yaml \\
             --admin-user admin --admin-password admin
 
         # an explicit realm group, fixed password for a demo handout
-        celine-policies keycloak sync-users greenland.yaml \\
+        celine-policies keycloak sync-users example-rec.yaml \\
             --group /community-gl \\
             --temp-password "Demo@2025"
 
         # fully env-driven (CI/CD, docker-compose)
         CELINE_KEYCLOAK_BASE_URL=https://kc.example.com \\
         CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET=xxx \\
-        CELINE_SYNC_USERS_REC_YAML=greenland.yaml \\
+        CELINE_SYNC_USERS_REC_YAML=example-rec.yaml \\
         CELINE_SYNC_USERS_GROUPS="/community-gl" \\
         CELINE_SYNC_USERS_TEMP_PASSWORD="Demo@2025" \\
         celine-policies keycloak sync-users

@@ -352,25 +352,25 @@ class TestEnsureOrganization:
         kc.create_organization = AsyncMock(return_value="org-1")
 
         org_id, created = await kc.ensure_organization(
-            alias="greenland", name="Greenland", attributes={"type": ["rec"]}
+            alias="example-rec", name="Example REC", attributes={"type": ["rec"]}
         )
 
         assert (org_id, created) == ("org-1", True)
         kc.create_organization.assert_awaited_once_with(
-            "greenland", "Greenland", "", {"type": ["rec"]}
+            "example-rec", "Example REC", "", {"type": ["rec"]}
         )
 
     async def test_an_existing_organization_is_not_recreated(
         self, kc: KeycloakAdminClient
     ):
         kc.get_organization_by_alias = AsyncMock(
-            return_value={"id": "org-1", "alias": "greenland", "attributes": {"type": ["rec"]}}
+            return_value={"id": "org-1", "alias": "example-rec", "attributes": {"type": ["rec"]}}
         )
         kc.create_organization = AsyncMock()
         kc._put = AsyncMock()
 
         org_id, created = await kc.ensure_organization(
-            alias="greenland", name="Greenland", attributes={"type": ["rec"]}
+            alias="example-rec", name="Example REC", attributes={"type": ["rec"]}
         )
 
         assert (org_id, created) == ("org-1", False)
@@ -384,12 +384,12 @@ class TestEnsureOrganization:
         claim, so an existing org is corrected rather than left alone.
         """
         kc.get_organization_by_alias = AsyncMock(
-            return_value={"id": "org-1", "alias": "greenland", "attributes": {"type": ["dso"]}}
+            return_value={"id": "org-1", "alias": "example-rec", "attributes": {"type": ["dso"]}}
         )
         kc._put = AsyncMock()
 
         _, created = await kc.ensure_organization(
-            alias="greenland", name="Greenland", attributes={"type": ["rec"]}
+            alias="example-rec", name="Example REC", attributes={"type": ["rec"]}
         )
 
         assert created is False
@@ -402,7 +402,7 @@ class TestEnsureOrganization:
         )
         kc._put = AsyncMock()
 
-        await kc.ensure_organization(alias="greenland", name="Greenland")
+        await kc.ensure_organization(alias="example-rec", name="Example REC")
 
         kc._put.assert_not_awaited()
 
@@ -414,19 +414,19 @@ class TestEnsureOrganization:
         """
         kc.list_organizations = AsyncMock(
             return_value=[
-                {"id": "org-other", "alias": "other", "name": "Greenland"},
-                {"id": "org-1", "alias": "greenland", "name": "Something Else"},
+                {"id": "org-other", "alias": "other", "name": "Example REC"},
+                {"id": "org-1", "alias": "example-rec", "name": "Something Else"},
             ]
         )
 
-        org = await kc.get_organization_by_alias("greenland")
+        org = await kc.get_organization_by_alias("example-rec")
 
         assert org["id"] == "org-1"
 
     async def test_an_unknown_alias_yields_none(self, kc: KeycloakAdminClient):
         kc.list_organizations = AsyncMock(return_value=[{"id": "o", "alias": "other"}])
 
-        assert await kc.get_organization_by_alias("greenland") is None
+        assert await kc.get_organization_by_alias("example-rec") is None
 
 
 # ---------------------------------------------------------------------------

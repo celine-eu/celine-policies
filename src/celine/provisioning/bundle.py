@@ -122,7 +122,7 @@ def load_rec_community_info(rec_doc: dict, *, source: str = "REC bundle") -> dic
 
 
 def derive_username(participant_key: str) -> str:
-    """Stable Keycloak username from the participant key (e.g. 'gl-00001').
+    """Stable Keycloak username from the participant key (e.g. 'ex-00001').
 
     Unique within the community, no PII, safe to hand out during demos.
 
@@ -154,7 +154,7 @@ def participant_username(participant: dict) -> str:
     **The two conventions are not converged and do not need to be.** The
     username is a static handle the participant does not choose and does not
     change — it is what an account is *matched* by, with email as a fallback
-    where a lookup offers one. So its shape carries no meaning: `gl-00001` from
+    where a lookup offers one. So its shape carries no meaning: `ex-00001` from
     a seed and `a.person@example.org` from onboarding are equally correct, and
     the second is not "an email" — it is a string onboarding happened to take
     from one. Nothing may parse it, normalise it, or infer anything from it.

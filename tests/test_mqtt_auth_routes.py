@@ -150,7 +150,7 @@ class TestSubjectExtraction:
         subject = _extract_subject_from_token(
             mint_token(
                 "u-3",
-                organization={"greenland": {"groups": ["/pipelines.runs.read"]}},
+                organization={"example-rec": {"groups": ["/pipelines.runs.read"]}},
             ),
             settings,
         )

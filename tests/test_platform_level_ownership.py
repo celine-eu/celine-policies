@@ -116,10 +116,10 @@ def kc_settings() -> KeycloakSettings:
     return KeycloakSettings(base_url="http://kc.internal", realm="celine", admin_client_secret="s")
 
 
-OWNERS = [{"id": "set-distribuzione", "name": "SET", "organization": {"create": True, "role": "dso"}}]
+OWNERS = [{"id": "example-dso", "name": "Example DSO", "organization": {"create": True, "role": "dso"}}]
 COMMUNITY = CommunityPlan(
-    community={"id": "greenland", "name": "Greenland", "description": ""},
-    participants=[{"key": "gl-1", "user_id": "gl-1"}],
+    community={"id": "example-rec", "name": "Example REC", "description": ""},
+    participants=[{"key": "ex-1", "user_id": "ex-1"}],
     operators=[],
 )
 

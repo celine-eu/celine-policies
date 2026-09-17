@@ -638,8 +638,8 @@ here. Organization membership is not a health probe, so this is the probe:
 ```console
 $ celine-policies keycloak sync-users --from-registry \
     --registry-url http://api.celine.localhost/rec-registry --check
-gr-renewable-community:
-  ✗ gr-renewable-community/20260910-1a2b3c4d (a.person@example.org): not in the REC
+example-renewable-community:
+  ✗ example-renewable-community/20260910-1a2b3c4d (a.person@example.org): not in the REC
     organization — no `organization` claim, so no org-scoped policy resolves them
 ```
 

@@ -31,8 +31,8 @@ from celine.policies.cli.keycloak.commands.sync_users import (
 )
 from celine.policies.cli.keycloak.settings import KeycloakSettings, SyncUsersSettings
 
-COMMUNITY = {"id": "greenland", "name": "Greenland", "description": "", "type": "rec"}
-PARTICIPANTS = [{"key": "gl-0"}, {"key": "gl-1"}]
+COMMUNITY = {"id": "example-rec", "name": "Example REC", "description": "", "type": "rec"}
+PARTICIPANTS = [{"key": "ex-0"}, {"key": "ex-1"}]
 
 
 class FakeKeycloak:
@@ -141,10 +141,10 @@ class TestParticipantsLandInTheAdministeredGroup:
         )
 
         assert errors == []
-        assert created == ["gl-0", "gl-1"]
+        assert created == ["ex-0", "ex-1"]
         assert kc.group_adds == [
-            ("uuid-gl-0", "gid-participants"),
-            ("uuid-gl-1", "gid-participants"),
+            ("uuid-ex-0", "gid-participants"),
+            ("uuid-ex-1", "gid-participants"),
         ]
 
     @pytest.mark.asyncio
@@ -153,7 +153,7 @@ class TestParticipantsLandInTheAdministeredGroup:
     ):
         """The accounts already made by earlier runs, filed in no group."""
         kc = fake(
-            existing_users={"gl-0", "gl-1"},
+            existing_users={"ex-0", "ex-1"},
             groups={"/participants": {"id": "gid-participants"}},
         )
 
@@ -163,10 +163,10 @@ class TestParticipantsLandInTheAdministeredGroup:
 
         assert errors == []
         assert created == []
-        assert skipped == ["gl-0", "gl-1"]
+        assert skipped == ["ex-0", "ex-1"]
         assert kc.group_adds == [
-            ("uuid-gl-0", "gid-participants"),
-            ("uuid-gl-1", "gid-participants"),
+            ("uuid-ex-0", "gid-participants"),
+            ("uuid-ex-1", "gid-participants"),
         ]
 
     @pytest.mark.asyncio
@@ -187,10 +187,10 @@ class TestParticipantsLandInTheAdministeredGroup:
         )
 
         assert set(kc.group_adds) == {
-            ("uuid-gl-0", "gid-participants"),
-            ("uuid-gl-1", "gid-participants"),
-            ("uuid-gl-0", "gid-members"),
-            ("uuid-gl-1", "gid-members"),
+            ("uuid-ex-0", "gid-participants"),
+            ("uuid-ex-1", "gid-participants"),
+            ("uuid-ex-0", "gid-members"),
+            ("uuid-ex-1", "gid-members"),
         }
 
     @pytest.mark.asyncio
@@ -209,10 +209,10 @@ class TestParticipantsLandInTheAdministeredGroup:
         await run(kc_settings, settings, admin_group_paths=["/participants"])
 
         assert set(kc.group_adds) == {
-            ("uuid-gl-0", "gid-participants"),
-            ("uuid-gl-1", "gid-participants"),
-            ("uuid-gl-0", "gid-pilot"),
-            ("uuid-gl-1", "gid-pilot"),
+            ("uuid-ex-0", "gid-participants"),
+            ("uuid-ex-1", "gid-participants"),
+            ("uuid-ex-0", "gid-pilot"),
+            ("uuid-ex-1", "gid-pilot"),
         }
 
 
@@ -230,7 +230,7 @@ class TestInertWithoutADeclaration:
         )
 
         assert errors == []
-        assert created == ["gl-0", "gl-1"]
+        assert created == ["ex-0", "ex-1"]
         assert kc.resolved_paths == []
         assert kc.group_adds == []
 
@@ -351,10 +351,10 @@ class TestTheAccountIsNamedAfterTheRegistryRow:
         await run(
             kc_settings,
             sync_settings,
-            participants=[{"key": "GL-00001", "user_id": None}],
+            participants=[{"key": "EX-00001", "user_id": None}],
         )
 
-        assert kc.created_users == ["gl-00001"]
+        assert kc.created_users == ["ex-00001"]
 
     @pytest.mark.asyncio
     async def test_the_dry_run_looks_up_the_same_name_it_would_create(
@@ -413,11 +413,11 @@ class TestTheAccountIsNamedAfterTheRegistryRow:
         await run(
             kc_settings,
             sync_settings,
-            participants=[{"key": "gl-00001", "user_id": "gl-00001"}],
+            participants=[{"key": "ex-00001", "user_id": "ex-00001"}],
             mock=True,
         )
 
-        assert captured["gl-00001"]["email"] == "gl-00001@celine.localhost"
+        assert captured["ex-00001"]["email"] == "ex-00001@celine.localhost"
 
 
 class TestTheRealmScaffoldRunsOncePerRunNotOncePerCommunity:
@@ -432,8 +432,8 @@ class TestTheRealmScaffoldRunsOncePerRunNotOncePerCommunity:
 
     COMMUNITIES = [
         CommunityPlan(
-            community={"id": "greenland", "name": "Greenland", "description": ""},
-            participants=[{"key": "gl-1", "user_id": "gl-1"}],
+            community={"id": "example-rec", "name": "Example REC", "description": ""},
+            participants=[{"key": "ex-1", "user_id": "ex-1"}],
             operators=[],
         ),
         CommunityPlan(
@@ -463,7 +463,7 @@ class TestTheRealmScaffoldRunsOncePerRunNotOncePerCommunity:
         await run(kc_settings, sync_settings, communities=self.COMMUNITIES)
 
         aliases = [c.kwargs["alias"] for c in kc.ensure_organization.await_args_list]
-        assert aliases == ["greenland", "blueland"]
+        assert aliases == ["example-rec", "blueland"]
 
     @pytest.mark.asyncio
     async def test_every_community_s_members_are_provisioned(
@@ -476,8 +476,8 @@ class TestTheRealmScaffoldRunsOncePerRunNotOncePerCommunity:
         )
 
         assert errors == []
-        assert kc.created_users == ["gl-1", "bruno@example.com"]
-        assert created == ["gl-1", "bruno@example.com"]
+        assert kc.created_users == ["ex-1", "bruno@example.com"]
+        assert created == ["ex-1", "bruno@example.com"]
 
     @pytest.mark.asyncio
     async def test_the_declared_group_is_resolved_once_and_filled_for_everybody(
@@ -501,7 +501,7 @@ class TestTheRealmScaffoldRunsOncePerRunNotOncePerCommunity:
 
         assert kc.resolved_paths == ["/participants"]
         assert kc.group_adds == [
-            ("uuid-gl-1", "gid-participants"),
+            ("uuid-ex-1", "gid-participants"),
             ("uuid-bruno@example.com", "gid-participants"),
         ]
 
@@ -629,7 +629,7 @@ class TestInviteOnlyWhatThisRunCreated:
     in this run is invited — and it is created with no password at all.
     """
 
-    PARTICIPANTS = [{"key": "gl-0", "user_id": "new@example.org"}, {"key": "gl-1", "user_id": "old@example.org"}]
+    PARTICIPANTS = [{"key": "ex-0", "user_id": "new@example.org"}, {"key": "ex-1", "user_id": "old@example.org"}]
 
     @staticmethod
     def invitations(mode="deliver", recipients=""):
@@ -689,7 +689,7 @@ class TestInviteOnlyWhatThisRunCreated:
         assert [c.args[0] for c in kc.execute_actions_email.await_args_list] == [
             "uuid-old@example.org"
         ]
-        assert "greenland/gl-0" in caplog.text
+        assert "example-rec/ex-0" in caplog.text
 
     @pytest.mark.asyncio
     async def test_an_account_with_no_address_is_not_invited(self, fake, kc_settings):

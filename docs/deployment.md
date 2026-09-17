@@ -242,7 +242,7 @@ is a real case.
 
 ```bash
 # the file path, unchanged
-celine-policies keycloak sync-users greenland.yaml
+celine-policies keycloak sync-users example-rec.yaml
 
 # the live registry, every community it holds
 celine-policies keycloak sync-users --from-registry \
@@ -251,7 +251,7 @@ celine-policies keycloak sync-users --from-registry \
 # one community, and report divergence without writing anything
 celine-policies keycloak sync-users --from-registry \
   --registry-url http://api.celine.localhost/rec-registry \
-  --community gr-renewable-community --check
+  --community example-renewable-community --check
 ```
 
 Passing both a path and `--from-registry` is refused rather than resolved.

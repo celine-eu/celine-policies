@@ -314,7 +314,7 @@ Keycloak does not revoke earlier links: a reset email must not be a week-long cr
 ```json
 {
   "user_id": "3f1c…",
-  "username": "gl-00001",
+  "username": "ex-00001",
   "invitation": "sent",
   "actions": ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
   "lifespan": 604800
@@ -349,7 +349,7 @@ disabling is not deletion, and reversing it is one call.
 **Response (200):**
 
 ```json
-{"user_id": "3f1c…", "username": "gl-00001", "changed": true}
+{"user_id": "3f1c…", "username": "ex-00001", "changed": true}
 ```
 
 `changed: false` means the revocation was already in force, which must not read as one
@@ -367,7 +367,7 @@ disabled — skipping provisioning and revoking access are different acts.
 **Response (200):**
 
 ```json
-{"community": "greenland", "members": 45, "created": 2, "existing": 43, "divergences": []}
+{"community": "example-rec", "members": 45, "created": 2, "existing": 43, "divergences": []}
 ```
 
 **Response (500)** when the assertion finds anything: the same body, under `detail`, with
@@ -385,7 +385,7 @@ nothing here is a scheduler.
 Every error but `422` has one body:
 
 ```json
-{"detail": {"code": "member_not_found", "message": "greenland has no active member 'gl-00099'"}}
+{"detail": {"code": "member_not_found", "message": "example-rec has no active member 'ex-00099'"}}
 ```
 
 `code` is stable and machine-readable; branch on it. `message` is a sentence for a person

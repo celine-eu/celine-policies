@@ -43,16 +43,16 @@ from celine.provisioning.service import (
     SendFailed,
 )
 
-GREENLAND = {
-    "community": {"id": "greenland", "name": "Greenland", "type": "rec"},
+EXAMPLE_REC = {
+    "community": {"id": "example-rec", "name": "Example REC", "type": "rec"},
     "members": {
-        "gl-00001": {"user_id": "gl-00001", "name": "One", "status": "active"},
+        "ex-00001": {"user_id": "ex-00001", "name": "One", "status": "active"},
         "20260912-a3f9c2": {
             "user_id": "a.person@example.org",
             "name": "Two",
             "status": "active",
         },
-        "gl-00003": {"user_id": "gl-00003", "name": "Three", "status": "suspended"},
+        "ex-00003": {"user_id": "ex-00003", "name": "Three", "status": "suspended"},
     },
 }
 
@@ -220,7 +220,7 @@ def registry(monkeypatch: pytest.MonkeyPatch):
             calls.append(community_keys)
             if error:
                 raise error
-            return list(documents if documents is not None else [GREENLAND])
+            return list(documents if documents is not None else [EXAMPLE_REC])
 
         monkeypatch.setattr(service_module, "fetch_rec_documents", fake_fetch)
         return calls
@@ -267,7 +267,7 @@ async def test_a_new_participant_is_named_after_the_address(keycloak):
     kc = keycloak()
 
     result = await a_service().ensure_participant(
-        community="greenland", key="20260912-a3f9c2", email="A.Person@Example.org"
+        community="example-rec", key="20260912-a3f9c2", email="A.Person@Example.org"
     )
 
     assert result.created
@@ -278,20 +278,20 @@ async def test_an_account_that_already_exists_keeps_the_name_it_has(keycloak):
     """The reason `username` is in the response at all: a participant who signed
     up before either convention authenticates as something nobody here chose,
     and the caller has to store what the account *is* called."""
-    legacy = {"id": "uuid-legacy", "username": "gl-00002", "enabled": True}
+    legacy = {"id": "uuid-legacy", "username": "ex-00002", "enabled": True}
     kc = keycloak(
         users_by_email={"a.person@example.org": legacy},
-        users_by_username={"gl-00002": legacy},
+        users_by_username={"ex-00002": legacy},
     )
 
     result = await a_service().ensure_participant(
-        community="greenland", key="20260912-a3f9c2", email="a.person@example.org"
+        community="example-rec", key="20260912-a3f9c2", email="a.person@example.org"
     )
 
-    assert result.username == "gl-00002"
+    assert result.username == "ex-00002"
     assert result.keycloak_id == "uuid-legacy"
     assert not result.created
-    assert "gl-00002" in [c[1] for c in kc.calls if c[0] == "ensure_user"]
+    assert "ex-00002" in [c[1] for c in kc.calls if c[0] == "ensure_user"]
 
 
 async def test_the_upsert_reads_no_registry(keycloak, registry):
@@ -302,7 +302,7 @@ async def test_the_upsert_reads_no_registry(keycloak, registry):
     calls = registry()
 
     await a_service().ensure_participant(
-        community="greenland", key="20260912-a3f9c2", email="new@example.org"
+        community="example-rec", key="20260912-a3f9c2", email="new@example.org"
     )
 
     assert calls == []
@@ -313,10 +313,10 @@ async def test_a_retry_is_the_same_call_and_reports_created_false(keycloak):
     service = a_service()
 
     first = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org"
+        community="example-rec", key="k", email="p@example.org"
     )
     second = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org"
+        community="example-rec", key="k", email="p@example.org"
     )
 
     assert first.created and not second.created
@@ -327,14 +327,14 @@ async def test_the_participant_is_filed_in_the_rec_organization_and_its_group(ke
     kc = keycloak()
 
     await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org"
+        community="example-rec", key="k", email="p@example.org"
     )
 
-    assert ("ensure_user_in_organization", "org-greenland", "uuid-p@example.org") in kc.calls
+    assert ("ensure_user_in_organization", "org-example-rec", "uuid-p@example.org") in kc.calls
     assert (
         "ensure_user_in_org_group",
-        "org-greenland",
-        "grp-org-greenland-viewers",
+        "org-example-rec",
+        "grp-org-example-rec-viewers",
         "uuid-p@example.org",
     ) in kc.calls
 
@@ -356,7 +356,7 @@ async def test_the_upsert_writes_the_locale_on_creation(keycloak):
     kc = keycloak()
 
     await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org", locale="es"
+        community="example-rec", key="k", email="p@example.org", locale="es"
     )
 
     [call] = [c for c in kc.calls if c[0] == "ensure_user"]
@@ -380,10 +380,10 @@ async def test_an_existing_account_gets_a_locale_only_if_it_has_none(keycloak):
     service = a_service()
 
     await service.ensure_participant(
-        community="greenland", key="a", email="bare@example.org", locale="it"
+        community="example-rec", key="a", email="bare@example.org", locale="it"
     )
     await service.ensure_participant(
-        community="greenland", key="b", email="chosen@example.org", locale="it"
+        community="example-rec", key="b", email="chosen@example.org", locale="it"
     )
 
     assert kc.locales == [("u-bare", "it")]
@@ -396,7 +396,7 @@ async def test_without_invite_nothing_is_sent_and_nothing_is_checked(keycloak):
     kc = keycloak()
 
     result = await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org"
+        community="example-rec", key="k", email="p@example.org"
     )
 
     assert result.invitation == "not_requested"
@@ -408,7 +408,7 @@ async def test_an_account_created_by_the_upsert_is_invited(keycloak):
     kc = keycloak()
 
     result = await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.created
@@ -425,7 +425,7 @@ async def test_an_existing_account_without_a_password_is_invited(keycloak):
     kc = keycloak(users_by_email={"p@example.org": user}, users_by_username={"p@example.org": user})
 
     result = await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert not result.created
@@ -443,7 +443,7 @@ async def test_a_retry_on_an_account_that_has_a_password_sends_nothing(keycloak)
     )
 
     result = await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.invitation == "has_password"
@@ -458,7 +458,7 @@ async def test_a_disabled_account_answers_with_the_reason_and_is_not_emailed(key
     kc = keycloak(users_by_email={"p@example.org": user}, users_by_username={"p@example.org": user})
 
     result = await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.invitation == "account_disabled"
@@ -473,13 +473,13 @@ async def test_in_dev_mode_an_address_off_the_list_makes_no_keycloak_send(
 
     with caplog.at_level("WARNING"):
         result = await a_service(email_mode="dev").ensure_participant(
-            community="greenland", key="k", email="p@example.org", invite=True
+            community="example-rec", key="k", email="p@example.org", invite=True
         )
 
     assert result.invitation == "not_on_dev_list"
     assert result.invited is False
     assert kc.emails == []
-    assert "greenland/k" in caplog.text
+    assert "example-rec/k" in caplog.text
 
 
 async def test_in_dev_mode_an_address_on_the_list_is_invited(keycloak):
@@ -488,7 +488,7 @@ async def test_in_dev_mode_an_address_on_the_list_is_invited(keycloak):
     result = await a_service(
         email_mode="dev", email_dev_recipients=" Someone@Example.org, p@example.org "
     ).ensure_participant(
-        community="greenland", key="k", email="P@example.org", invite=True
+        community="example-rec", key="k", email="P@example.org", invite=True
     )
 
     assert result.invitation == "sent"
@@ -510,7 +510,7 @@ async def test_an_existing_account_with_no_address_is_no_email_whatever_the_mode
     kc = keycloak(users_by_username={"p@example.org": bare})
 
     result = await a_service(clock=Clock(), **mode).ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert not result.created
@@ -524,7 +524,7 @@ async def test_no_email_comes_before_the_dev_list(keycloak):
     kc = keycloak(users_by_username={"p@example.org": bare})
 
     result = await a_service(email_mode="dev").ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.invitation == "no_email"
@@ -537,7 +537,7 @@ async def test_an_account_with_a_password_and_no_address_is_has_password(keycloa
     kc = keycloak(users_by_username={"p@example.org": bare}, passwords_on={"u1"})
 
     result = await a_service().ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.invitation == "has_password"
@@ -568,11 +568,11 @@ async def test_a_repeated_upsert_within_the_cooldown_sends_once_and_says_cooldow
     service = a_service(clock=clock)
 
     first = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
     clock.now += 60
     second = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert first.invitation == "sent"
@@ -590,11 +590,11 @@ async def test_an_upsert_after_the_cooldown_sends_again(keycloak):
     service = a_service(clock=clock)
 
     await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
     clock.now += 300
     again = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert again.invitation == "sent"
@@ -607,16 +607,16 @@ async def test_a_route_send_puts_a_following_upsert_in_the_cooldown(keycloak, re
     registry(
         documents=[
             {
-                **GREENLAND,
+                **EXAMPLE_REC,
                 "members": {"k": {"user_id": "p@example.org", "name": "P", "status": "active"}},
             }
         ]
     )
     service = a_service(clock=Clock())
 
-    await service.send_invitation(community="greenland", key="k", intent="invitation")
+    await service.send_invitation(community="example-rec", key="k", intent="invitation")
     result = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.invitation == "cooldown"
@@ -632,16 +632,16 @@ async def test_an_account_with_a_password_is_has_password_even_within_the_cooldo
     registry(
         documents=[
             {
-                **GREENLAND,
+                **EXAMPLE_REC,
                 "members": {"k": {"user_id": "p@example.org", "name": "P", "status": "active"}},
             }
         ]
     )
     service = a_service(clock=Clock())
 
-    await service.send_invitation(community="greenland", key="k", intent="password_reset")
+    await service.send_invitation(community="example-rec", key="k", intent="password_reset")
     result = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.invitation == "has_password"
@@ -670,11 +670,11 @@ async def test_an_upsert_whose_send_failed_succeeds_with_send_failed_and_starts_
     service = a_service(clock=Clock())
 
     failed = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
     kc.send_error = None
     retried = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert failed.invitation == "send_failed"
@@ -687,7 +687,7 @@ async def test_a_new_account_whose_send_failed_is_still_created(keycloak):
     kc = keycloak(send_error=KeycloakError("Unexpected response 500", status_code=500))
 
     result = await a_service().ensure_participant(
-        community="greenland", key="k", email="new@example.org", invite=True
+        community="example-rec", key="k", email="new@example.org", invite=True
     )
 
     assert result.created
@@ -700,7 +700,7 @@ async def test_a_failed_route_send_lets_the_next_upsert_send(keycloak, registry)
     registry(
         documents=[
             {
-                **GREENLAND,
+                **EXAMPLE_REC,
                 "members": {"k": {"user_id": "p@example.org", "name": "P", "status": "active"}},
             }
         ]
@@ -708,10 +708,10 @@ async def test_a_failed_route_send_lets_the_next_upsert_send(keycloak, registry)
     service = a_service(clock=Clock())
 
     with pytest.raises(SendFailed):
-        await service.send_invitation(community="greenland", key="k", intent="invitation")
+        await service.send_invitation(community="example-rec", key="k", intent="invitation")
     kc.send_error = None
     result = await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
 
     assert result.invitation == "sent"
@@ -727,7 +727,7 @@ async def test_two_concurrent_upserts_for_one_account_send_one_email(keycloak):
     results = await asyncio.gather(
         *(
             service.ensure_participant(
-                community="greenland", key="k", email="p@example.org", invite=True
+                community="example-rec", key="k", email="p@example.org", invite=True
             )
             for _ in range(2)
         )
@@ -744,7 +744,7 @@ async def test_a_cooldown_of_zero_never_refuses(keycloak):
 
     for _ in range(2):
         result = await service.ensure_participant(
-            community="greenland", key="k", email="p@example.org", invite=True
+            community="example-rec", key="k", email="p@example.org", invite=True
         )
         assert result.invitation == "sent"
 
@@ -754,7 +754,7 @@ async def test_a_cooldown_of_zero_never_refuses(keycloak):
 # --- the lifecycle calls resolve through the registry --------------------
 
 
-def _member(uuid="u1", username="gl-00001", *, enabled=True, email="one@example.org"):
+def _member(uuid="u1", username="ex-00001", *, enabled=True, email="one@example.org"):
     user = {"id": uuid, "username": username, "enabled": enabled}
     if email is not None:
         user["email"] = email
@@ -772,7 +772,7 @@ async def test_an_invitation_finds_the_member_by_its_registry_row(keycloak, regi
     registry()
 
     result = await a_service().send_invitation(
-        community="greenland", key="20260912-a3f9c2", intent="invitation"
+        community="example-rec", key="20260912-a3f9c2", intent="invitation"
     )
 
     assert result.username == "a.person@example.org"
@@ -784,7 +784,7 @@ async def test_an_account_without_a_password_is_invited_for_seven_days(keycloak,
     kc = keycloak(users_by_username=_member())
     registry()
 
-    result = await a_service().send_invitation(community="greenland", key="gl-00001", intent="invitation")
+    result = await a_service().send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
     assert result.actions == ("UPDATE_PASSWORD", "VERIFY_EMAIL")
     assert result.lifespan == 604800
@@ -806,7 +806,7 @@ async def test_an_account_with_a_password_gets_a_one_hour_reset(keycloak, regist
     registry()
 
     result = await a_service().send_invitation(
-        community="greenland", key="gl-00001", intent="password_reset"
+        community="example-rec", key="ex-00001", intent="password_reset"
     )
 
     assert result.actions == ("UPDATE_PASSWORD",)
@@ -825,13 +825,13 @@ async def test_an_invitation_to_an_account_with_a_password_is_refused_before_any
     service = a_service(clock=Clock())
 
     with pytest.raises(HasPassword) as excinfo:
-        await service.send_invitation(community="greenland", key="gl-00001", intent="invitation")
+        await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
     assert excinfo.value.code == "has_password"
     assert kc.send_attempts == 0
 
     result = await service.send_invitation(
-        community="greenland", key="gl-00001", intent="password_reset"
+        community="example-rec", key="ex-00001", intent="password_reset"
     )
     assert result.actions == ("UPDATE_PASSWORD",)
     assert len(kc.emails) == 1
@@ -847,14 +847,14 @@ async def test_a_reset_of_an_account_without_a_password_is_refused_before_any_se
 
     with pytest.raises(NoPassword) as excinfo:
         await service.send_invitation(
-            community="greenland", key="gl-00001", intent="password_reset"
+            community="example-rec", key="ex-00001", intent="password_reset"
         )
 
     assert excinfo.value.code == "no_password"
     assert kc.send_attempts == 0
 
     result = await service.send_invitation(
-        community="greenland", key="gl-00001", intent="invitation"
+        community="example-rec", key="ex-00001", intent="invitation"
     )
     assert result.actions == ("UPDATE_PASSWORD", "VERIFY_EMAIL")
     assert len(kc.emails) == 1
@@ -867,9 +867,9 @@ async def test_a_mismatch_is_reported_as_such_even_within_the_cooldown(keycloak,
     registry()
     service = a_service(clock=Clock())
 
-    await service.send_invitation(community="greenland", key="gl-00001", intent="password_reset")
+    await service.send_invitation(community="example-rec", key="ex-00001", intent="password_reset")
     with pytest.raises(HasPassword):
-        await service.send_invitation(community="greenland", key="gl-00001", intent="invitation")
+        await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
     assert len(kc.emails) == 1
 
@@ -881,7 +881,7 @@ async def test_a_disabled_account_is_account_disabled_whatever_the_intent(keyclo
     for intent in ("invitation", "password_reset"):
         with pytest.raises(AccountDisabled):
             await a_service().send_invitation(
-                community="greenland", key="gl-00001", intent=intent
+                community="example-rec", key="ex-00001", intent=intent
             )
 
     assert kc.send_attempts == 0
@@ -903,7 +903,7 @@ async def test_an_account_with_no_address_is_no_email_whatever_the_mode(
 
     with pytest.raises(NoEmail) as excinfo:
         await a_service(clock=Clock(), **mode).send_invitation(
-            community="greenland", key="gl-00001", intent=intent
+            community="example-rec", key="ex-00001", intent=intent
         )
 
     assert excinfo.value.code == "no_email"
@@ -916,7 +916,7 @@ async def test_an_intent_mismatch_is_reported_before_a_missing_address(keycloak,
     registry()
 
     with pytest.raises(HasPassword):
-        await a_service().send_invitation(community="greenland", key="gl-00001", intent="invitation")
+        await a_service().send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
 
 async def test_an_unknown_intent_from_a_direct_caller_sends_nothing(keycloak, registry):
@@ -924,7 +924,7 @@ async def test_an_unknown_intent_from_a_direct_caller_sends_nothing(keycloak, re
     registry()
 
     with pytest.raises(ValueError):
-        await a_service().send_invitation(community="greenland", key="gl-00001", intent="reset")
+        await a_service().send_invitation(community="example-rec", key="ex-00001", intent="reset")
 
     assert kc.send_attempts == 0
 
@@ -933,7 +933,7 @@ async def test_no_password_is_generated_or_set_by_an_invitation(keycloak, regist
     kc = keycloak(users_by_username=_member())
     registry()
 
-    result = await a_service().send_invitation(community="greenland", key="gl-00001", intent="invitation")
+    result = await a_service().send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
     assert kc.passwords == []
     assert not hasattr(result, "password")
@@ -946,7 +946,7 @@ async def test_an_invitation_to_a_disabled_account_is_refused_before_keycloak_is
     registry()
 
     with pytest.raises(AccountDisabled):
-        await a_service().send_invitation(community="greenland", key="gl-00001", intent="invitation")
+        await a_service().send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
     assert kc.emails == []
 
@@ -957,16 +957,16 @@ async def test_a_second_invitation_within_the_cooldown_is_refused(keycloak, regi
     clock = Clock()
     service = a_service(clock=clock)
 
-    await service.send_invitation(community="greenland", key="gl-00001", intent="invitation")
+    await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
     clock.now += 60
     with pytest.raises(InvitationCooldown) as excinfo:
-        await service.send_invitation(community="greenland", key="gl-00001", intent="invitation")
+        await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
     assert excinfo.value.retry_after == 241
     assert len(kc.emails) == 1
 
     clock.now += 241
-    await service.send_invitation(community="greenland", key="gl-00001", intent="invitation")
+    await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
     assert len(kc.emails) == 2
 
 
@@ -975,7 +975,7 @@ async def test_an_upsert_invitation_starts_the_cooldown_too(keycloak, registry):
     registry(
         documents=[
             {
-                **GREENLAND,
+                **EXAMPLE_REC,
                 "members": {
                     "k": {"user_id": "p@example.org", "name": "P", "status": "active"}
                 },
@@ -985,10 +985,10 @@ async def test_an_upsert_invitation_starts_the_cooldown_too(keycloak, registry):
     service = a_service(clock=Clock())
 
     await service.ensure_participant(
-        community="greenland", key="k", email="p@example.org", invite=True
+        community="example-rec", key="k", email="p@example.org", invite=True
     )
     with pytest.raises(InvitationCooldown):
-        await service.send_invitation(community="greenland", key="k", intent="invitation")
+        await service.send_invitation(community="example-rec", key="k", intent="invitation")
 
     assert len(kc.emails) == 1
 
@@ -1002,11 +1002,11 @@ async def test_in_dev_mode_an_address_off_the_list_is_not_emailed_and_is_logged(
     with caplog.at_level("WARNING"):
         result = await a_service(
             email_mode="dev", email_dev_recipients="allowed@example.org"
-        ).send_invitation(community="greenland", key="gl-00001", intent="invitation")
+        ).send_invitation(community="example-rec", key="ex-00001", intent="invitation")
 
     assert result.invitation == "not_on_dev_list"
     assert kc.emails == []
-    assert "greenland/gl-00001" in caplog.text
+    assert "example-rec/ex-00001" in caplog.text
     assert "someone@example.org" not in caplog.text
 
 
@@ -1021,35 +1021,35 @@ async def test_a_keycloak_refusal_to_send_is_send_failed(keycloak, registry):
     service = a_service(clock=Clock())
 
     with pytest.raises(SendFailed) as excinfo:
-        await service.send_invitation(community="greenland", key="gl-00001", intent="invitation")
+        await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
     assert excinfo.value.code == "send_failed"
 
     kc.send_error = None
-    await service.send_invitation(community="greenland", key="gl-00001", intent="invitation")
+    await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
     assert len(kc.emails) == 1
 
 
 async def test_disabling_revokes_without_deleting(keycloak, registry):
     kc = keycloak(
-        users_by_username={"gl-00001": {"id": "u1", "username": "gl-00001", "enabled": True}}
+        users_by_username={"ex-00001": {"id": "u1", "username": "ex-00001", "enabled": True}}
     )
     registry()
 
-    result = await a_service().disable(community="greenland", key="gl-00001")
+    result = await a_service().disable(community="example-rec", key="ex-00001")
 
     assert result.changed
     assert kc.enabled_changes == [("u1", False)]
-    assert "gl-00001" in kc.users_by_username  # nothing was deleted
+    assert "ex-00001" in kc.users_by_username  # nothing was deleted
 
 
 async def test_disabling_twice_reports_no_change(keycloak, registry):
     """A revocation already in force must not read as one that just happened."""
     keycloak(
-        users_by_username={"gl-00001": {"id": "u1", "username": "gl-00001", "enabled": False}}
+        users_by_username={"ex-00001": {"id": "u1", "username": "ex-00001", "enabled": False}}
     )
     registry()
 
-    result = await a_service().disable(community="greenland", key="gl-00001")
+    result = await a_service().disable(community="example-rec", key="ex-00001")
 
     assert not result.changed
 
@@ -1062,7 +1062,7 @@ async def test_a_key_the_registry_does_not_hold_is_member_not_found(
     registry()
 
     with pytest.raises(MemberNotFound) as excinfo:
-        await getattr(a_service(), call)(community="greenland", key="nobody", **_intent(call))
+        await getattr(a_service(), call)(community="example-rec", key="nobody", **_intent(call))
 
     assert excinfo.value.code == "member_not_found"
     assert "nobody" in str(excinfo.value)
@@ -1070,11 +1070,11 @@ async def test_a_key_the_registry_does_not_hold_is_member_not_found(
 
 async def test_a_suspended_member_is_member_not_found(keycloak, registry):
     """The export carries every member; only `active` ones resolve."""
-    keycloak(users_by_username=_member("u3", "gl-00003"))
+    keycloak(users_by_username=_member("u3", "ex-00003"))
     registry()
 
     with pytest.raises(MemberNotFound):
-        await a_service().send_invitation(community="greenland", key="gl-00003", intent="invitation")
+        await a_service().send_invitation(community="example-rec", key="ex-00003", intent="invitation")
 
 
 @pytest.mark.parametrize("call", ["send_invitation", "disable"])
@@ -1087,11 +1087,11 @@ async def test_a_member_with_no_account_is_account_not_found_and_says_what_it_lo
     registry()
 
     with pytest.raises(AccountNotFound) as excinfo:
-        await getattr(a_service(), call)(community="greenland", key="gl-00001", **_intent(call))
+        await getattr(a_service(), call)(community="example-rec", key="ex-00001", **_intent(call))
 
     assert not isinstance(excinfo.value, MemberNotFound)
     assert excinfo.value.code == "account_not_found"
-    assert "gl-00001" in str(excinfo.value)
+    assert "ex-00001" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("call", ["send_invitation", "disable", "reconcile"])
@@ -1106,7 +1106,7 @@ async def test_a_community_the_registry_does_not_have_is_community_not_found(
         if call == "reconcile":
             await service.reconcile("nowhere")
         else:
-            await getattr(service, call)(community="nowhere", key="gl-00001", **_intent(call))
+            await getattr(service, call)(community="nowhere", key="ex-00001", **_intent(call))
 
     assert excinfo.value.code == "community_not_found"
     assert "nowhere" in str(excinfo.value)
@@ -1119,7 +1119,7 @@ async def test_a_registry_that_cannot_be_read_is_registry_unavailable(keycloak, 
     registry(error=RegistryError("Could not export: 401"))
 
     with pytest.raises(RegistryUnavailable) as excinfo:
-        await a_service().disable(community="greenland", key="gl-00001")
+        await a_service().disable(community="example-rec", key="ex-00001")
 
     assert excinfo.value.code == "registry_unavailable"
 
@@ -1129,7 +1129,7 @@ async def test_no_registry_configured_refuses_with_the_variable_named(keycloak):
 
     with pytest.raises(RegistryUnavailable) as excinfo:
         await a_service(registry_url=None).send_invitation(
-            community="greenland", key="gl-00001", intent="invitation"
+            community="example-rec", key="ex-00001", intent="invitation"
         )
 
     assert "CELINE_PROVISIONING_REGISTRY_URL" in str(excinfo.value)
@@ -1146,12 +1146,12 @@ async def test_the_sweep_provisions_every_active_member_and_skips_the_rest(
     kc = keycloak()
     registry()
 
-    result = await a_service().reconcile("greenland")
+    result = await a_service().reconcile("example-rec")
 
     assert result.members == 2
     assert result.created == 2
     provisioned = [c[1] for c in kc.calls if c[0] == "ensure_user"]
-    assert provisioned == ["gl-00001", "a.person@example.org"]
+    assert provisioned == ["ex-00001", "a.person@example.org"]
     assert kc.enabled_changes == []
 
 
@@ -1162,7 +1162,7 @@ async def test_the_sweep_names_the_member_after_its_registry_row(keycloak, regis
     kc = keycloak()
     registry()
 
-    await a_service().reconcile("greenland")
+    await a_service().reconcile("example-rec")
 
     assert "20260912-a3f9c2" not in [c[1] for c in kc.calls if c[0] == "ensure_user"]
 
@@ -1174,7 +1174,7 @@ async def test_the_sweep_creates_no_credential(keycloak, registry):
     kc = keycloak()
     registry()
 
-    await a_service().reconcile("greenland")
+    await a_service().reconcile("example-rec")
 
     assert all(
         call[2]["temporary_password"] is None
@@ -1188,7 +1188,7 @@ async def test_a_healthy_sweep_finds_no_divergence(keycloak, registry):
     keycloak()
     registry()
 
-    result = await a_service().reconcile("greenland")
+    result = await a_service().reconcile("example-rec")
 
     assert result.divergences == ()
 
@@ -1200,11 +1200,11 @@ async def test_the_sweep_reports_a_membership_that_did_not_stick(keycloak, regis
     keycloak(organization_blackhole=True)
     registry()
 
-    result = await a_service().reconcile("greenland")
+    result = await a_service().reconcile("example-rec")
 
     assert len(result.divergences) == 2
     assert {d.kind for d in result.divergences} == {"not in the REC organization"}
-    assert {d.key for d in result.divergences} == {"gl-00001", "20260912-a3f9c2"}
+    assert {d.key for d in result.divergences} == {"ex-00001", "20260912-a3f9c2"}
 
 
 async def test_the_sweep_narrows_the_export_to_the_community_it_was_asked_about(
@@ -1213,16 +1213,16 @@ async def test_the_sweep_narrows_the_export_to_the_community_it_was_asked_about(
     keycloak()
     calls = registry()
 
-    await a_service().reconcile("greenland")
+    await a_service().reconcile("example-rec")
 
-    assert calls == [["greenland"]]
+    assert calls == [["example-rec"]]
 
 
 async def test_more_than_one_document_for_one_community_is_refused(keycloak, registry):
     """The export was narrowed to one key, so anything else means the registry
     answered a question nobody asked."""
     keycloak()
-    registry(documents=[GREENLAND, GREENLAND])
+    registry(documents=[EXAMPLE_REC, EXAMPLE_REC])
 
     with pytest.raises(ProvisioningError):
-        await a_service().reconcile("greenland")
+        await a_service().reconcile("example-rec")

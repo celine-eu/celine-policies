@@ -30,10 +30,10 @@ from celine.policies.cli.keycloak.commands.sync_users import (
 )
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 
-GREENLAND = CommunityPlan(
-    community={"id": "greenland", "name": "Greenland", "description": ""},
+EXAMPLE_REC = CommunityPlan(
+    community={"id": "example-rec", "name": "Example REC", "description": ""},
     participants=[
-        {"key": "gl-00001", "user_id": "gl-00001"},
+        {"key": "ex-00001", "user_id": "ex-00001"},
         {"key": "20260912-a3f9c2", "user_id": "alice@example.com"},
     ],
     operators=[],
@@ -67,10 +67,10 @@ class FakeKeycloak:
         user_groups: dict | None = None,
     ):
         self.organizations = (
-            {"greenland": {"id": "org-green"}} if organizations is None else organizations
+            {"example-rec": {"id": "org-green"}} if organizations is None else organizations
         )
         self.users = (
-            {"gl-00001": "uuid-1", "alice@example.com": "uuid-2"}
+            {"ex-00001": "uuid-1", "alice@example.com": "uuid-2"}
             if users is None
             else users
         )
@@ -134,7 +134,7 @@ def fake(monkeypatch: pytest.MonkeyPatch):
 async def check(kc_settings, **kwargs):
     return await _async_check(
         kc_settings=kc_settings,
-        communities=kwargs.pop("communities", [GREENLAND]),
+        communities=kwargs.pop("communities", [EXAMPLE_REC]),
         **kwargs,
     )
 
@@ -172,7 +172,7 @@ class TestItWritesNothing:
 class TestWhatItReports:
     @pytest.mark.asyncio
     async def test_a_member_with_no_account_is_a_finding(self, fake, kc_settings):
-        fake(users={"gl-00001": "uuid-1"})
+        fake(users={"ex-00001": "uuid-1"})
 
         findings = await check(kc_settings)
 
@@ -190,7 +190,7 @@ class TestWhatItReports:
         participant who has one and logs in with it every day — a check that
         manufactures its own findings is worse than no check.
         """
-        fake(users={"gl-00001": "uuid-1", "alice@example.com": "uuid-2"})
+        fake(users={"ex-00001": "uuid-1", "alice@example.com": "uuid-2"})
 
         assert await check(kc_settings) == []
 
@@ -275,11 +275,11 @@ class TestWhatItReports:
             operators=[],
         )
         fake(
-            organizations={"greenland": {"id": "org-green"}},
-            users={"gl-00001": "uuid-1", "alice@example.com": "uuid-2"},
+            organizations={"example-rec": {"id": "org-green"}},
+            users={"ex-00001": "uuid-1", "alice@example.com": "uuid-2"},
         )
 
-        findings = await check(kc_settings, communities=[GREENLAND, blueland])
+        findings = await check(kc_settings, communities=[EXAMPLE_REC, blueland])
 
         assert [f.community for f in findings] == ["blueland"]
 
@@ -292,10 +292,10 @@ class TestWhatItReports:
         The community says which REC drifted, the key is what to look up in the
         registry, and the username is what to look up in Keycloak.
         """
-        fake(users={"gl-00001": "uuid-1"})
+        fake(users={"ex-00001": "uuid-1"})
 
         rendered = str(await check(kc_settings) and (await check(kc_settings))[0])
 
-        assert "greenland" in rendered
+        assert "example-rec" in rendered
         assert "20260912-a3f9c2" in rendered
         assert "alice@example.com" in rendered
