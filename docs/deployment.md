@@ -63,6 +63,7 @@ infra's `IGNORE_EXISTING` skip a realm that already exists).
 | token and session lifespans, `organizationsEnabled`, `adminPermissionsEnabled`, the role groups, brute-force tuning | `platform.yaml` | `sync-orgs` and `sync-users` refuse a realm without Organizations; `sync` refuses to grant `admin_permissions` without fine-grained admin permissions |
 | `bruteForceProtected` | `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` | Unset: on, and off when `ENV` is `dev`, `development`, `local`, `test` or `ci` |
 | `smtpServer` | `CELINE_KEYCLOAK_SMTP_*`, fed from the deployment's secret | Below. Unset `CELINE_KEYCLOAK_SMTP_HOST`: left alone |
+| the built-in `account-console` client's default client scopes (`web-origins acr profile roles basic email`) | `bootstrap` itself (`ACCOUNT_CONSOLE_DEFAULT_SCOPES`) | What Keycloak gives a realm it creates. A realm imported from `config/keycloak/import/realm-celine.json` gets none, and the account console answers `403`. Missing ones are added, none removed; no other client is touched |
 | `supportedLocales`, narrower | a deployment overlay, `bootstrap --overlay <file>` | The only key an overlay may change. It must keep `defaultLocale` (`it`) and name only `it`, `en`, `es` |
 | themes, languages, lifespans, `registrationAllowed`, `resetPasswordAllowed`, brute-force tuning | `CELINE_KEYCLOAK_PLATFORM_<KEY>` | Overrides `platform.yaml` and any overlay. Below |
 

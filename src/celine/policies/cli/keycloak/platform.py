@@ -34,6 +34,17 @@ ships no `rec` theme (spindoxlabs/ds#36). Each key in `ENV_OVERRIDABLE_SETTINGS`
 The value `null` drops the key from the declaration: `bootstrap` then leaves the realm's
 value alone, which on a new realm is Keycloak's default.
 
+## One built-in client: `account-console`
+
+A realm Keycloak creates itself gives its account console the default client scopes
+`web-origins acr profile roles basic email`. A realm imported from a file that declares its
+own client scopes gives it none, and the console's token then carries no
+`resource_access.account`: the Account API answers `403` and the console shows "Something
+went wrong" (measured on 26.7.3, plan participants-may-choose-a-passkey-or-a-one-time-code).
+The import cannot say otherwise without declaring the `account` client and its roles as
+well. So `bootstrap` adds the missing ones, to that client only, and never removes one.
+It is the one client this level touches: every other client is `sync`'s.
+
 ## Nested objects are replaced whole
 
 Keycloak does not merge a nested object on `PUT`: `smtpServer` with one field is a
@@ -457,6 +468,46 @@ def check_themes(desired: dict[str, Any], server_info: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The account console's default client scopes
+# ---------------------------------------------------------------------------
+
+ACCOUNT_CONSOLE_CLIENT_ID = "account-console"
+
+#: What Keycloak 26.7.3 gives `account-console` in a realm it creates itself
+#: (`POST /admin/realms` with no clients, then `GET .../default-client-scopes`).
+ACCOUNT_CONSOLE_DEFAULT_SCOPES = ("web-origins", "acr", "profile", "roles", "basic", "email")
+
+
+async def _plan_account_console(kc: "KeycloakAdminClient") -> tuple[str | None, dict[str, str]]:
+    """The account console's uuid and the missing default scopes, as name -> scope id.
+
+    Refuses, before any write, when a scope it needs does not exist in the realm.
+    A realm without the client (Keycloak always creates one) is left alone.
+    """
+    client = await kc.get_client_by_client_id(ACCOUNT_CONSOLE_CLIENT_ID)
+    if client is None:
+        logger.warning("realm has no %s client; its scopes are left alone", ACCOUNT_CONSOLE_CLIENT_ID)
+        return None, {}
+    have = {s.get("name") for s in await kc.get_client_default_scopes(client["id"])}
+    missing: dict[str, str] = {}
+    absent: list[str] = []
+    for name in ACCOUNT_CONSOLE_DEFAULT_SCOPES:
+        if name in have:
+            continue
+        scope = await kc.get_client_scope_by_name(name)
+        if scope is None:
+            absent.append(name)
+        else:
+            missing[name] = scope["id"]
+    if absent:
+        raise PlatformDeclarationError(
+            f"{ACCOUNT_CONSOLE_CLIENT_ID} needs the client scopes {absent}, which this realm "
+            f"does not have. Keycloak creates them with every realm; restore them before bootstrap."
+        )
+    return client["id"], missing
+
+
+# ---------------------------------------------------------------------------
 # SMTP (Phase 2b): from the environment, the password write-only
 # ---------------------------------------------------------------------------
 
@@ -546,6 +597,9 @@ class PlatformResult:
     realm_admin_created: str | None = None
     realm_admin_group_added: tuple[str, str] | None = None
 
+    #: Default client scopes added to the built-in `account-console` client.
+    account_console_scopes_added: list[str] = field(default_factory=list)
+
     @property
     def destructive(self) -> list[SettingChange]:
         return [c for c in self.settings if destructive(c)]
@@ -561,6 +615,7 @@ class PlatformResult:
             or self.groups_created
             or self.role_mappings_added
             or self.smtp
+            or self.account_console_scopes_added
         )
 
 
@@ -619,6 +674,9 @@ async def converge_platform(
         elif rg.realm_role not in await kc.get_group_realm_role_names(group_id):
             result.role_mappings_added.append((rg.path, rg.realm_role))
 
+    console_id, console_missing = await _plan_account_console(kc)
+    result.account_console_scopes_added = list(console_missing)
+
     admin_id: str | None = None
     if realm_admin is not None and realm_admin.configured:
         admin_id = await _plan_realm_admin(kc, declaration, realm_admin, groups, result)
@@ -661,6 +719,15 @@ async def converge_platform(
         if group_id is None:
             group_id = await kc.create_group(rg.path.lstrip("/"))
         await kc.add_group_realm_role(group_id, rg.realm_role)
+
+    if console_id is not None and console_missing:
+        for scope_id in console_missing.values():
+            await kc.add_client_default_scope(console_id, scope_id)
+        _, unstuck = await _plan_account_console(kc)
+        if unstuck:
+            raise PlatformDeclarationError(
+                f"Keycloak accepted the {ACCOUNT_CONSOLE_CLIENT_ID} scopes but these did not take: {sorted(unstuck)}"
+            )
 
     if result.realm_admin_created or result.realm_admin_group_added:
         await _apply_realm_admin(kc, realm_admin, admin_id, result)

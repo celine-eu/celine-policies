@@ -36,6 +36,8 @@ Key behaviours:
 - **Footer links** — rendered only when `TERMS_URL` / `PRIVACY_URL` are provided. Values are injected via Keycloak's `${env.VAR:default}` substitution in `theme.properties`.
 - **Internationalisation** — Italian, English and Spanish (`it`, `en`, `es`), in both themes. `test_keycloak_theme_messages.py` fails when a key a template uses is missing from a bundle.
 - **`info.ftl` resolves its header through `msg()`** — `messageHeader` is a message key. Printed raw, the page every invitation and reset ends on showed `accountUpdatedTitle` as its title.
+- **Passkeys** — when the realm enables them, `login.ftl` shows "Sign in with Passkey" and the browser offers a passkey from the username field (`autocomplete="username webauthn"`). `template.ftl` carries the import map Keycloak's WebAuthn scripts need (`rfc4648`); without it, passkey registration and sign-in silently do nothing.
+- **Pages inherited from Keycloak** — passkey registration, TOTP set-up, recovery codes and the "try another way" list come from the parent theme. `login.css` restyles their PatternFly buttons, the recovery-code list and warning, and keeps a card taller than the screen from overflowing above the top. `test_keycloak_theme_passkeys.py` checks these; `tests/integration/test_imported_realm_login.py` checks the rendered login page.
 
 ### Email theme
 

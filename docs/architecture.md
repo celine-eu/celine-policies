@@ -59,7 +59,8 @@ run instead of writing them:
 **Commands:**
 - `bootstrap` — converge the platform level from `platform.yaml` (only the keys it declares;
   a deployment overlay may narrow `supportedLocales` and nothing else), brute force from
-  `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `smtpServer` from `CELINE_KEYCLOAK_SMTP_*`; then
+  `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `smtpServer` from `CELINE_KEYCLOAK_SMTP_*`, the
+  built-in `account-console` client's missing default client scopes; then
   create or refresh the `celine-admin-cli` service account with realm-management roles.
   It refuses a theme the server does not list. With `CELINE_KEYCLOAK_REALM_ADMIN_USERNAME` set
   it creates the operator realm admin once and keeps it in `/admins`. With the admin CLI

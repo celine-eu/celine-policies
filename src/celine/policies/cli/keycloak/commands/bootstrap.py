@@ -11,6 +11,8 @@ The platform level of the realm, and nothing else (plan each-cli-command-owns-on
    features, sign-in settings, languages, themes, lifespans, brute force and the role
    groups. Only the declared keys are written. A deployment overrides a listed key with
    `CELINE_KEYCLOAK_PLATFORM_<KEY>`, or stops declaring it with the value `null`.
+   Also the built-in `account-console` client's default client scopes, added when missing
+   (an imported realm has none, and the account console answers 403).
 2. **The admin CLI client** — the service account every other command authenticates as.
    Created or refreshed only with master admin credentials, because a service account
    cannot create the client it is.
@@ -284,6 +286,8 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
         typer.secho(f"  + group {path}", fg=typer.colors.GREEN)
     for path, role in result.role_mappings_added:
         typer.secho(f"  + {path} -> realm role {role}", fg=typer.colors.GREEN)
+    for scope in result.account_console_scopes_added:
+        typer.secho(f"  + account-console default scope {scope}", fg=typer.colors.GREEN)
     if result.realm_admin_created:
         typer.secho(f"  + realm admin {result.realm_admin_created}", fg=typer.colors.GREEN)
     if result.realm_admin_group_added:

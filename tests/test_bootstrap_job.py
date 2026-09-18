@@ -67,7 +67,8 @@ class JobRealm(FakeRealm):
         await super().update_realm_settings(settings)
 
     async def get_client_by_client_id(self, client_id):
-        return None
+        # the admin CLI client does not exist yet; account-console is FakeRealm's
+        return await super().get_client_by_client_id(client_id) if client_id == "account-console" else None
 
     # The admin CLI client step, recorded and otherwise inert.
     async def create_client(self, **kwargs):

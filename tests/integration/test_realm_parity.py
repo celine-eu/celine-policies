@@ -15,7 +15,11 @@ Realm A is the import converged by `bootstrap`. Realm B is created and converged
 `bruteForceProtected`, and the role groups with their realm roles, read from a partial
 export as the master admin. A second `bootstrap --check` on each must find nothing.
 
-What this does not compare, on purpose: clients, client scopes and users. They are not
+One client is compared: the built-in `account-console`, whose default client scopes
+`bootstrap` converges (an imported realm has none, and the account console answers 403).
+Both realms must end with Keycloak's own set, and its token must carry the `account` roles.
+
+What this does not compare, on purpose: other clients, client scopes and users. They are not
 platform level, and the import carries some of them (`oauth2_proxy`, the realm admin
 user) that nothing else declares yet — which is why passing here is necessary for dropping
 the import and not sufficient.
@@ -34,6 +38,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from celine.policies.cli.keycloak.platform import ACCOUNT_CONSOLE_DEFAULT_SCOPES
 from celine.policies.cli.main import app
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -127,3 +132,32 @@ def test_a_second_run_finds_nothing_to_change(converged, which):
     (converged / f"{which}-check").mkdir()
     result = bootstrap(base, converged / f"{which}-check", "--check")
     assert result.exit_code == 0, result.output
+
+
+def account_console(base: str) -> tuple[httpx.Client, str]:
+    kc = master(base)
+    client = kc.get("/clients", params={"clientId": "account-console"}).json()[0]
+    return kc, client["id"]
+
+
+@pytest.mark.parametrize("which", ["imported", "empty"])
+def test_the_account_console_has_keycloaks_default_scopes(converged, which):
+    kc, uuid = account_console(IMPORTED if which == "imported" else EMPTY)
+    names = {s["name"] for s in kc.get(f"/clients/{uuid}/default-client-scopes").json()}
+    assert set(ACCOUNT_CONSOLE_DEFAULT_SCOPES) <= names
+
+
+def test_the_account_console_token_carries_the_account_roles(converged):
+    """What the Account API checks. Without `roles` in the defaults it is absent: 403."""
+    kc, uuid = account_console(IMPORTED)
+    # A person, not a service account: default roles are what grant `manage-account`.
+    users = kc.get("/users", params={"username": "parity-console", "exact": "true"}).json()
+    if not users:
+        kc.post("/users", json={"username": "parity-console", "enabled": True, "email": "parity@example.org",
+                                "firstName": "Parity", "lastName": "Console"}).raise_for_status()
+        users = kc.get("/users", params={"username": "parity-console", "exact": "true"}).json()
+    token = kc.get(
+        f"/clients/{uuid}/evaluate-scopes/generate-example-access-token",
+        params={"scope": "openid", "userId": users[0]["id"]},
+    ).json()
+    assert "manage-account" in token["resource_access"]["account"]["roles"]

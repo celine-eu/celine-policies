@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from celine.policies.cli.keycloak.platform import (
+    ACCOUNT_CONSOLE_DEFAULT_SCOPES,
     OVERLAY_REALM_SETTINGS,
     REFUSED_REALM_SETTINGS,
     THEME_LOCALES,
@@ -327,8 +328,18 @@ class FakeRealm:
         groups: dict[str, set[str]] | None = None,
         themes: dict[str, list[str]] | None = None,
         sticky: bool = True,
+        console_scopes: set[str] | None = None,
+        realm_scopes: set[str] | None = None,
+        has_console: bool = True,
     ):
         self.realm = dict(realm or {})
+        # The built-in account-console's default scopes. By default what a realm Keycloak
+        # creates itself has; `set()` is a realm imported from the committed file.
+        self.console_scopes = (
+            set(ACCOUNT_CONSOLE_DEFAULT_SCOPES) if console_scopes is None else set(console_scopes)
+        )
+        self.realm_scopes = set(ACCOUNT_CONSOLE_DEFAULT_SCOPES) if realm_scopes is None else set(realm_scopes)
+        self.has_console = has_console
         self.roles = set(roles or ())
         # path -> realm roles mapped onto it
         self.groups = {path: set(r) for path, r in (groups or {}).items()}
@@ -377,6 +388,23 @@ class FakeRealm:
     async def add_group_realm_role(self, group_id, role):
         self.writes.append(("mapping", group_id.removeprefix("id"), role))
         self.groups[group_id.removeprefix("id")].add(role)
+
+    async def get_client_by_client_id(self, client_id):
+        if client_id == "account-console" and self.has_console:
+            return {"id": "uuid-account-console", "clientId": client_id}
+        return None
+
+    async def get_client_default_scopes(self, client_uuid):
+        assert client_uuid == "uuid-account-console"
+        return [{"id": f"scope-{n}", "name": n} for n in sorted(self.console_scopes)]
+
+    async def get_client_scope_by_name(self, name):
+        return {"id": f"scope-{name}", "name": name} if name in self.realm_scopes else None
+
+    async def add_client_default_scope(self, client_uuid, scope_id):
+        self.writes.append(("client-default-scope", client_uuid, scope_id))
+        if self.sticky:
+            self.console_scopes.add(scope_id.removeprefix("scope-"))
 
 
 def a_declaration(tmp_path: Path, settings: str = "", groups: str = ""):
@@ -779,3 +807,89 @@ class TestTheEnvironmentOverridesListedKeys:
         with pytest.raises(PlatformDeclarationError, match="custom"):
             await converge(kc, declaration)
         assert kc.writes == []
+
+
+class TestTheAccountConsoleGetsItsDefaultScopes:
+    """A realm imported from the committed file gives the built-in `account-console` no
+    default client scopes, and the account console answers 403 (measured on 26.7.3, plan
+    participants-may-choose-a-passkey-or-a-one-time-code). `bootstrap` adds what a realm
+    Keycloak creates itself has, to that client only."""
+
+    def test_the_scopes_are_those_of_a_realm_keycloak_created(self):
+        assert set(ACCOUNT_CONSOLE_DEFAULT_SCOPES) == {"web-origins", "acr", "profile", "roles", "basic", "email"}
+
+    @pytest.mark.asyncio
+    async def test_an_imported_realm_gets_them_all(self, tmp_path):
+        kc = FakeRealm(console_scopes=set())
+
+        result = await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
+
+        assert result.changed
+        assert sorted(result.account_console_scopes_added) == sorted(ACCOUNT_CONSOLE_DEFAULT_SCOPES)
+        assert kc.console_scopes == set(ACCOUNT_CONSOLE_DEFAULT_SCOPES)
+        assert all(w[1] == "uuid-account-console" for w in kc.writes if w[0] == "client-default-scope")
+
+    @pytest.mark.asyncio
+    async def test_only_the_missing_ones_are_added_and_none_is_removed(self, tmp_path):
+        kc = FakeRealm(console_scopes={"roles", "profile", "organization"})
+
+        result = await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
+
+        assert sorted(result.account_console_scopes_added) == ["acr", "basic", "email", "web-origins"]
+        assert "organization" in kc.console_scopes
+
+    @pytest.mark.asyncio
+    async def test_a_realm_that_has_them_is_not_touched(self, tmp_path):
+        kc = FakeRealm({"resetPasswordAllowed": True, "bruteForceProtected": False})
+
+        result = await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
+
+        assert not result.changed
+        assert kc.writes == []
+
+    @pytest.mark.asyncio
+    async def test_a_dry_run_reports_them_and_writes_nothing(self, tmp_path):
+        kc = FakeRealm({"resetPasswordAllowed": True, "bruteForceProtected": False}, console_scopes={"roles"})
+
+        result = await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"), dry_run=True)
+
+        assert result.changed
+        assert "roles" not in result.account_console_scopes_added
+        assert kc.writes == []
+
+    @pytest.mark.asyncio
+    async def test_a_second_run_finds_nothing(self, tmp_path):
+        kc = FakeRealm(console_scopes=set())
+        declaration = a_declaration(tmp_path, "resetPasswordAllowed: true")
+
+        await converge(kc, declaration)
+        second = await converge(kc, declaration)
+
+        assert second.account_console_scopes_added == []
+        assert not second.changed
+
+    @pytest.mark.asyncio
+    async def test_a_missing_realm_scope_refuses_before_any_write(self, tmp_path):
+        kc = FakeRealm(console_scopes=set(), realm_scopes={"roles", "profile"})
+
+        with pytest.raises(PlatformDeclarationError, match="account-console needs the client scopes"):
+            await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
+
+        assert kc.writes == []
+
+    @pytest.mark.asyncio
+    async def test_a_scope_that_does_not_take_is_an_error(self, tmp_path):
+        kc = FakeRealm({"resetPasswordAllowed": True, "bruteForceProtected": False},
+                       console_scopes=set(), sticky=False)
+
+        with pytest.raises(PlatformDeclarationError, match="did not take"):
+            await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
+
+    @pytest.mark.asyncio
+    async def test_a_realm_without_the_client_is_left_alone(self, tmp_path):
+        kc = FakeRealm({"resetPasswordAllowed": True, "bruteForceProtected": False}, has_console=False)
+
+        result = await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
+
+        assert result.account_console_scopes_added == []
+        assert not result.changed

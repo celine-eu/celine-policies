@@ -40,6 +40,17 @@
         </#list>
     </#if>
 
+    <#-- Keycloak's WebAuthn scripts (passkey registration and sign-in) import "rfc4648"
+         by bare name, as in the base template. Without this map they fail to load and
+         the passkey buttons do nothing. -->
+    <script type="importmap">
+        {
+            "imports": {
+                "rfc4648": "${url.resourcesCommonPath}/vendor/rfc4648/rfc4648.js"
+            }
+        }
+    </script>
+
     <#if scripts??>
         <#list scripts as script>
             <script src="${script}" type="text/javascript"></script>

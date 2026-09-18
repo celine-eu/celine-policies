@@ -174,7 +174,9 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* Centred by the card's auto margins, not `justify-content: center`: a card taller than
+     the screen (TOTP set-up, recovery codes) would overflow above the top, out of reach. */
+  justify-content: flex-start;
   min-height: 100vh;
   min-height: 100dvh;
   padding: var(--space-md);
@@ -184,6 +186,8 @@ body {
 #kc-content {
   width: 100%;
   max-width: 420px;
+  margin-top: auto;
+  margin-bottom: auto;
 }
 
 #kc-content-wrapper {
@@ -797,8 +801,128 @@ input[aria-invalid="true"],
 }
 
 /* ============================================
+   PAGES INHERITED FROM KEYCLOAK (passkeys, TOTP, recovery codes)
+   Their buttons carry PatternFly's own classes, whose two-class selectors
+   out-rank the single-class rules above and paint them blue.
+   ============================================ */
+.pf-c-button.pf-m-primary,
+input[type="submit"].pf-c-button.pf-m-primary {
+  color: var(--color-primary-text);
+  background: var(--color-primary);
+  border: none;
+}
+
+.pf-c-button.pf-m-primary:hover,
+input[type="submit"].pf-c-button.pf-m-primary:hover {
+  color: var(--color-primary-text);
+  background: var(--color-primary-hover);
+}
+
+.pf-c-button.pf-m-primary:disabled,
+input[type="submit"].pf-c-button.pf-m-primary:disabled {
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-sunken);
+  transform: none;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* "Cancel" and other secondary actions */
+.pf-c-button.btn-default,
+button[type="submit"].btn-default,
+input[type="submit"].btn-default {
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-border);
+}
+
+.pf-c-button.btn-default:hover,
+button[type="submit"].btn-default:hover,
+input[type="submit"].btn-default:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-primary);
+}
+
+/* "Sign in with Passkey": a full-width secondary button, not a bare link */
+#authenticateWebAuthnButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: var(--space-md);
+  padding: 0.875rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+
+#authenticateWebAuthnButton:hover {
+  background: var(--color-primary-light);
+}
+
+/* Recovery codes: the warning is PatternFly's grid alert, squeezed into columns
+   by the card's width; lay it out as one column. */
+.kc-recovery-codes-warning.pf-c-alert {
+  display: block;
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-md);
+}
+
+.kc-recovery-codes-warning .pf-c-alert__icon {
+  display: none;
+}
+
+.kc-recovery-codes-warning .pf-c-alert__title {
+  margin-bottom: var(--space-xs);
+}
+
+/* The template numbers each code itself ("1: …"): drop the list's own numbers. */
+#kc-recovery-codes-list {
+  list-style: none;
+  margin: 0 0 var(--space-md);
+  padding: var(--space-md);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--color-bg-sunken);
+  border-radius: var(--radius-md);
+  columns: 2;
+}
+
+#kc-recovery-codes-list li {
+  padding: 2px 0;
+}
+
+.kc-recovery-codes-actions .pf-c-button {
+  margin-top: var(--space-sm);
+}
+
+/* ============================================
    RESPONSIVE - MOBILE FIRST
    ============================================ */
+
+/* Phones: the language picker takes its own row instead of floating over the
+   first lines of a tall page (the TOTP set-up page). */
+@media (max-width: 767px) {
+  #kc-locale {
+    position: static;
+    display: flex;
+    justify-content: flex-end;
+    width: 100%;
+    max-width: 420px;
+    margin-bottom: var(--space-md);
+  }
+
+  #kc-locale-dropdown {
+    position: relative;
+    top: auto;
+    margin-top: 0;
+  }
+}
 
 /* Small mobile */
 @media (max-width: 375px) {
