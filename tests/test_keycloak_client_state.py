@@ -464,7 +464,7 @@ class TestClaimMapperWrites:
         kc._post = AsyncMock(return_value={"id": "c-new"})
 
         mapper_id = await kc.create_hardcoded_claim_mapper(
-            "uuid-1", "sub", "did:web:greenland"
+            "uuid-1", "sub", "did:web:example-rec"
         )
 
         assert mapper_id == "c-new"
@@ -473,7 +473,7 @@ class TestClaimMapperWrites:
         assert payload["protocol"] == "openid-connect"
         assert payload["config"] == {
             "claim.name": "sub",
-            "claim.value": "did:web:greenland",
+            "claim.value": "did:web:example-rec",
             "jsonType.label": "String",
             "access.token.claim": "true",
             "id.token.claim": "false",

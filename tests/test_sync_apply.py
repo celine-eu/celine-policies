@@ -610,7 +610,7 @@ class TestClaimMapperApplication:
                 ClaimMapperAction(
                     client_id="svc-x",
                     claim_name="sub",
-                    claim_value="did:web:greenland",
+                    claim_value="did:web:example-rec",
                     action="add",
                 )
             ]
@@ -619,7 +619,7 @@ class TestClaimMapperApplication:
         await apply_sync_plan(kc, plan, KeycloakConfig(), state)
 
         kc.create_hardcoded_claim_mapper.assert_awaited_once_with(
-            client_uuid="uuid-x", claim_name="sub", claim_value="did:web:greenland"
+            client_uuid="uuid-x", claim_name="sub", claim_value="did:web:example-rec"
         )
 
     async def test_a_client_created_by_this_run_gets_its_claims(self, kc: MagicMock):

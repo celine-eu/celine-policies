@@ -612,8 +612,8 @@ class TestClaimMappers:
         config = KeycloakConfig(
             clients=[
                 ClientConfig(
-                    client_id="svc-ds-greenland",
-                    hardcoded_claims={"sub": "did:web:greenland"},
+                    client_id="svc-ds-example-rec",
+                    hardcoded_claims={"sub": "did:web:example-rec"},
                 )
             ]
         )
@@ -621,9 +621,9 @@ class TestClaimMappers:
 
         assert len(plan.claim_mappers_to_add) == 1
         action = plan.claim_mappers_to_add[0]
-        assert action.client_id == "svc-ds-greenland"
+        assert action.client_id == "svc-ds-example-rec"
         assert action.claim_name == "sub"
-        assert action.claim_value == "did:web:greenland"
+        assert action.claim_value == "did:web:example-rec"
 
     def test_a_client_declaring_nothing_plans_nothing(self):
         """The field is inert: no declaration, no action, on any client."""
@@ -640,15 +640,15 @@ class TestClaimMappers:
         config = KeycloakConfig(
             clients=[
                 ClientConfig(
-                    client_id="svc-ds-greenland",
-                    hardcoded_claims={"sub": "did:web:greenland"},
+                    client_id="svc-ds-example-rec",
+                    hardcoded_claims={"sub": "did:web:example-rec"},
                 )
             ]
         )
         current = CurrentState(
             client_claim_mappers={
-                "svc-ds-greenland": {
-                    "sub": ClaimMapperState(mapper_id="c-1", value="did:web:greenland")
+                "svc-ds-example-rec": {
+                    "sub": ClaimMapperState(mapper_id="c-1", value="did:web:example-rec")
                 }
             }
         )
@@ -663,14 +663,14 @@ class TestClaimMappers:
         config = KeycloakConfig(
             clients=[
                 ClientConfig(
-                    client_id="svc-ds-greenland",
+                    client_id="svc-ds-example-rec",
                     hardcoded_claims={"sub": "did:web:new"},
                 )
             ]
         )
         current = CurrentState(
             client_claim_mappers={
-                "svc-ds-greenland": {
+                "svc-ds-example-rec": {
                     "sub": ClaimMapperState(mapper_id="c-1", value="did:web:old")
                 }
             }
@@ -686,10 +686,10 @@ class TestClaimMappers:
         assert action.claim_value == "did:web:new"
 
     def test_a_claim_no_longer_declared_is_removed_with_its_id(self):
-        config = KeycloakConfig(clients=[ClientConfig(client_id="svc-ds-greenland")])
+        config = KeycloakConfig(clients=[ClientConfig(client_id="svc-ds-example-rec")])
         current = CurrentState(
             client_claim_mappers={
-                "svc-ds-greenland": {
+                "svc-ds-example-rec": {
                     "sub": ClaimMapperState(mapper_id="c-1", value="did:web:old")
                 }
             }
@@ -721,13 +721,13 @@ class TestClaimMappers:
         config = KeycloakConfig(
             clients=[
                 ClientConfig(
-                    client_id="svc-ds-greenland",
-                    hardcoded_claims={"sub": "did:web:greenland"},
+                    client_id="svc-ds-example-rec",
+                    hardcoded_claims={"sub": "did:web:example-rec"},
                 )
             ]
         )
         current = CurrentState(
-            clients={"svc-ds-greenland": kc_client("svc-ds-greenland")}
+            clients={"svc-ds-example-rec": kc_client("svc-ds-example-rec")}
         )
         plan = compute_sync_plan(config, current)
 

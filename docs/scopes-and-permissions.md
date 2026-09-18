@@ -442,9 +442,9 @@ who is signed in.
 
 ```yaml
 clients:
-  - client_id: svc-ds-greenland
+  - client_id: svc-ds-example-rec
     hardcoded_claims:
-      sub: ${GREENLAND_DID:-did:web:greenland.localhost}
+      sub: ${EXAMPLE_REC_DID:-did:web:example-rec.localhost}
 ```
 
 **It exists for `sub`.** Eclipse EDC's management API takes the participant context

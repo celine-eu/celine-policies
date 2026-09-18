@@ -146,23 +146,23 @@ class TestFromYaml:
         document once, so a value nested under `hardcoded_claims` is reached by
         the same walk that reaches a secret.
         """
-        monkeypatch.setenv("GREENLAND_DID", "did:web:greenland.example.org")
+        monkeypatch.setenv("EXAMPLE_REC_DID", "did:web:example-rec.example.org")
         path = _write(
             tmp_path,
             """
             clients:
               - client_id: svc-x
                 hardcoded_claims:
-                  sub: ${GREENLAND_DID}
+                  sub: ${EXAMPLE_REC_DID}
               - client_id: svc-y
                 hardcoded_claims:
-                  sub: ${SET_NOWHERE:-did:web:localhost}
+                  sub: ${UNSET_DID:-did:web:localhost}
             """,
         )
         clients = {c.client_id: c for c in KeycloakConfig.from_yaml(path).clients}
 
         assert clients["svc-x"].hardcoded_claims == {
-            "sub": "did:web:greenland.example.org"
+            "sub": "did:web:example-rec.example.org"
         }
         assert clients["svc-y"].hardcoded_claims == {"sub": "did:web:localhost"}
 
