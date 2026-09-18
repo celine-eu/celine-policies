@@ -137,6 +137,40 @@ class TestFromYaml:
         assert clients["svc-x"].secret == "from-env"
         assert clients["svc-y"].secret == "dev-default"
 
+    def test_hardcoded_claims_are_interpolated_on_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A DID differs per deployment, so it is written as a placeholder too.
+
+        Nothing field-specific makes this work: `_from_raw` resolves the merged
+        document once, so a value nested under `hardcoded_claims` is reached by
+        the same walk that reaches a secret.
+        """
+        monkeypatch.setenv("GREENLAND_DID", "did:web:greenland.example.org")
+        path = _write(
+            tmp_path,
+            """
+            clients:
+              - client_id: svc-x
+                hardcoded_claims:
+                  sub: ${GREENLAND_DID}
+              - client_id: svc-y
+                hardcoded_claims:
+                  sub: ${SET_NOWHERE:-did:web:localhost}
+            """,
+        )
+        clients = {c.client_id: c for c in KeycloakConfig.from_yaml(path).clients}
+
+        assert clients["svc-x"].hardcoded_claims == {
+            "sub": "did:web:greenland.example.org"
+        }
+        assert clients["svc-y"].hardcoded_claims == {"sub": "did:web:localhost"}
+
+    def test_a_client_declares_no_hardcoded_claims_by_default(self, tmp_path: Path):
+        path = _write(tmp_path, "clients:\n  - client_id: svc-x\n")
+
+        assert KeycloakConfig.from_yaml(path).clients[0].hardcoded_claims == {}
+
     def test_a_missing_file_is_reported_as_such(self, tmp_path: Path):
         with pytest.raises(FileNotFoundError):
             KeycloakConfig.from_yaml(tmp_path / "nope.yaml")

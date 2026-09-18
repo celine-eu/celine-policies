@@ -19,7 +19,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from celine.policies.cli.keycloak.client import CurrentState, GroupAdminGrantState
+from celine.policies.cli.keycloak.client import (
+    ClaimMapperState,
+    CurrentState,
+    GroupAdminGrantState,
+)
 from celine.policies.cli.keycloak.models import (
     ClientConfig,
     KeycloakConfig,
@@ -591,6 +595,146 @@ class TestOauth2ProxyMappers:
 
 
 # ---------------------------------------------------------------------------
+# Hardcoded claim mappers
+# ---------------------------------------------------------------------------
+
+
+class TestClaimMappers:
+    """`hardcoded_claims` pins a claim, and the plan has to converge on it.
+
+    The claim that matters is `sub`: EDC takes the participant context from it,
+    and Keycloak would otherwise emit the service account's UUID. A value left to
+    drift is a connector authenticating as the wrong participant; a mapper
+    removed by accident is one authenticating as nobody.
+    """
+
+    def test_a_declared_claim_with_no_mapper_is_planned(self):
+        config = KeycloakConfig(
+            clients=[
+                ClientConfig(
+                    client_id="svc-ds-greenland",
+                    hardcoded_claims={"sub": "did:web:greenland"},
+                )
+            ]
+        )
+        plan = compute_sync_plan(config, CurrentState())
+
+        assert len(plan.claim_mappers_to_add) == 1
+        action = plan.claim_mappers_to_add[0]
+        assert action.client_id == "svc-ds-greenland"
+        assert action.claim_name == "sub"
+        assert action.claim_value == "did:web:greenland"
+
+    def test_a_client_declaring_nothing_plans_nothing(self):
+        """The field is inert: no declaration, no action, on any client."""
+        config = KeycloakConfig(
+            clients=[ClientConfig(client_id="svc-forecast", scopes_prefix="forecast")]
+        )
+        plan = compute_sync_plan(config, CurrentState())
+
+        assert plan.claim_mappers_to_add == []
+        assert plan.claim_mappers_to_update == []
+        assert plan.claim_mappers_to_remove == []
+
+    def test_a_matching_mapper_is_left_alone(self):
+        config = KeycloakConfig(
+            clients=[
+                ClientConfig(
+                    client_id="svc-ds-greenland",
+                    hardcoded_claims={"sub": "did:web:greenland"},
+                )
+            ]
+        )
+        current = CurrentState(
+            client_claim_mappers={
+                "svc-ds-greenland": {
+                    "sub": ClaimMapperState(mapper_id="c-1", value="did:web:greenland")
+                }
+            }
+        )
+        plan = compute_sync_plan(config, current)
+
+        assert plan.claim_mappers_to_add == []
+        assert plan.claim_mappers_to_update == []
+        assert plan.claim_mappers_to_remove == []
+
+    def test_a_changed_value_is_an_update_carrying_the_mapper_id(self):
+        """An update, not a remove and an add — the gap would emit the UUID."""
+        config = KeycloakConfig(
+            clients=[
+                ClientConfig(
+                    client_id="svc-ds-greenland",
+                    hardcoded_claims={"sub": "did:web:new"},
+                )
+            ]
+        )
+        current = CurrentState(
+            client_claim_mappers={
+                "svc-ds-greenland": {
+                    "sub": ClaimMapperState(mapper_id="c-1", value="did:web:old")
+                }
+            }
+        )
+        plan = compute_sync_plan(config, current)
+
+        assert plan.claim_mappers_to_add == []
+        assert plan.claim_mappers_to_remove == []
+        assert len(plan.claim_mappers_to_update) == 1
+        action = plan.claim_mappers_to_update[0]
+        assert action.mapper_id == "c-1"
+        assert action.current_value == "did:web:old"
+        assert action.claim_value == "did:web:new"
+
+    def test_a_claim_no_longer_declared_is_removed_with_its_id(self):
+        config = KeycloakConfig(clients=[ClientConfig(client_id="svc-ds-greenland")])
+        current = CurrentState(
+            client_claim_mappers={
+                "svc-ds-greenland": {
+                    "sub": ClaimMapperState(mapper_id="c-1", value="did:web:old")
+                }
+            }
+        )
+        plan = compute_sync_plan(config, current)
+
+        assert len(plan.claim_mappers_to_remove) == 1
+        removal = plan.claim_mappers_to_remove[0]
+        assert removal.claim_name == "sub"
+        assert removal.mapper_id == "c-1"
+
+    def test_the_proxy_client_may_still_declare_a_claim(self):
+        """Its audiences are planned elsewhere; its claims are planned here."""
+        config = KeycloakConfig(
+            oauth2_proxy_client="oauth2_proxy",
+            clients=[
+                ClientConfig(
+                    client_id="oauth2_proxy",
+                    hardcoded_claims={"tenant": "celine"},
+                )
+            ],
+        )
+        plan = compute_sync_plan(config, CurrentState())
+
+        assert [a.claim_name for a in plan.claim_mappers_to_add] == ["tenant"]
+
+    def test_a_claim_mapper_alone_counts_as_a_change(self):
+        """Otherwise `sync` would report nothing to do and then go and do it."""
+        config = KeycloakConfig(
+            clients=[
+                ClientConfig(
+                    client_id="svc-ds-greenland",
+                    hardcoded_claims={"sub": "did:web:greenland"},
+                )
+            ]
+        )
+        current = CurrentState(
+            clients={"svc-ds-greenland": kc_client("svc-ds-greenland")}
+        )
+        plan = compute_sync_plan(config, current)
+
+        assert plan.has_changes is True
+
+
+# ---------------------------------------------------------------------------
 # The shipped config against a realm that already matches it
 # ---------------------------------------------------------------------------
 
@@ -725,13 +869,18 @@ class TestPlanSummary:
             oauth2_proxy_client="oauth2_proxy",
             scopes=[ScopeConfig(name="dataset.query", description="d")],
             clients=[
-                ClientConfig(client_id="svc-dataset-api", scopes_prefix="dataset"),
+                ClientConfig(
+                    client_id="svc-dataset-api",
+                    scopes_prefix="dataset",
+                    hardcoded_claims={"sub": "did:web:new"},
+                ),
                 ClientConfig(
                     client_id="svc-forecast",
                     name="Renamed",
                     scopes_prefix="forecast",
                     default_scopes=["dataset.query"],
                     optional_scopes=["forecast.admin"],
+                    hardcoded_claims={"sub": "did:web:forecast"},
                 ),
             ],
         )
@@ -746,6 +895,12 @@ class TestPlanSummary:
             },
             client_default_scopes={"svc-forecast": {"dropped.scope"}},
             client_audience_mappers={"svc-forecast": {"svc-gone": "m1"}},
+            client_claim_mappers={
+                "svc-forecast": {"stale": ClaimMapperState(mapper_id="c1", value="x")},
+                "svc-dataset-api": {
+                    "sub": ClaimMapperState(mapper_id="c2", value="did:web:old")
+                },
+            },
         )
         summary = compute_sync_plan(config, current).summary()
 
@@ -756,6 +911,9 @@ class TestPlanSummary:
         assert "Scope assignments to remove:" in summary
         assert "Audience mappers to add:" in summary
         assert "Audience mappers to remove:" in summary
+        assert "Claim mappers to add:" in summary
+        assert "Claim mappers to change:" in summary
+        assert "Claim mappers to remove:" in summary
         assert "Orphan scopes" in summary and "stale.scope" in summary
         assert "Orphan clients" in summary and "svc-stale" in summary
 

@@ -432,6 +432,35 @@ Clients without `scopes_prefix` (like `celine-cli`) can declare `extra_audiences
 
 ---
 
+## Hardcoded Claims
+
+`hardcoded_claims` pins a claim in this client's tokens to a fixed string, overriding
+whatever Keycloak would otherwise emit. Each entry becomes one
+`oidc-hardcoded-claim-mapper` named `claim-<claim>`, on the access token and on
+introspection — never on the id token or userinfo, where a pinned `sub` would misreport
+who is signed in.
+
+```yaml
+clients:
+  - client_id: svc-ds-greenland
+    hardcoded_claims:
+      sub: ${GREENLAND_DID:-did:web:greenland.localhost}
+```
+
+**It exists for `sub`.** Eclipse EDC's management API takes the participant context
+straight from the access token's `sub`, and Keycloak's `sub` for a service account is that
+account's UUID — so without this the connector resolves a participant nobody declared.
+
+`sync` converges on the declaration: a changed value is rewritten in place, and a claim
+dropped from the file has its mapper removed. Only mappers named `claim-*` *and* of type
+`oidc-hardcoded-claim-mapper` are ever read or written, so one added by hand in the admin
+console is left alone.
+
+Like `secret` and `scopes_prefix`, it is part of a client's **identity**: the one file
+that declares the client declares this, and an overlay carrying it is refused.
+
+---
+
 ## MQTT Authorization Model
 
 For MQTT specifically, topic access is controlled by Rego policies (see [MQTT Integration](mqtt-integration.md)). The policies check:
@@ -674,6 +703,10 @@ clients:
       groups:
         - path: /some-group
           scopes: [manage-members, manage-membership, view]
+    # Optional — claims pinned into this client's tokens.
+    hardcoded_claims:
+      sub: ${PARTICIPANT_DID:-did:web:example.localhost}
 ```
 
-Client secrets support environment variable substitution with `${VAR:-default}` syntax.
+Client secrets support environment variable substitution with `${VAR:-default}` syntax,
+and so does every other string in the file — `hardcoded_claims` values included.

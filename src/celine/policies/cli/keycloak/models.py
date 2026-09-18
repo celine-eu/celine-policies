@@ -307,6 +307,27 @@ class ClientConfig(BaseModel):
         ),
     )
 
+    # Claims this client's tokens must carry verbatim, as {claim name: value}.
+    # Each entry becomes one `oidc-hardcoded-claim-mapper` named `claim-<name>`.
+    #
+    # This exists for `sub`. Eclipse EDC's management API takes the participant
+    # context straight from the access token's `sub`, and Keycloak's `sub` for a
+    # service account is that account's UUID — so the connector resolves a
+    # participant nobody declared unless the realm is told the DID here.
+    #
+    # Not a grant key: a file saying what a client's tokens *assert* describes
+    # the client's identity, and identity has exactly one owner. See GRANT_KEYS.
+    # Values interpolate `${VAR:-default}` like every other string in the
+    # document — `_from_raw` resolves the whole of it once.
+    hardcoded_claims: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Claims hardcoded into this client's tokens (e.g. sub: did:web:...), "
+            "overriding what Keycloak would otherwise emit. One protocol mapper "
+            "per entry."
+        ),
+    )
+
     # Scope assignments
     default_scopes: list[str] = Field(
         default_factory=list,

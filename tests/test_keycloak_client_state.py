@@ -24,6 +24,8 @@ import pytest
 
 from celine.policies.cli.keycloak.client import (
     AUDIENCE_MAPPER_PREFIX,
+    CLAIM_MAPPER_PREFIX,
+    ClaimMapperState,
     KeycloakAdminClient,
 )
 from celine.policies.cli.keycloak.settings import KeycloakSettings
@@ -57,6 +59,23 @@ def aud_mapper(audience: str, mapper_id: str = "m-1") -> dict:
             "included.client.audience": audience,
             "id.token.claim": "false",
             "access.token.claim": "true",
+        },
+    }
+
+
+def claim_mapper(name: str, value: str, mapper_id: str = "c-1") -> dict:
+    """A hardcoded claim mapper as this CLI creates it."""
+    return {
+        "id": mapper_id,
+        "name": f"{CLAIM_MAPPER_PREFIX}{name}",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-hardcoded-claim-mapper",
+        "config": {
+            "claim.name": name,
+            "claim.value": value,
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
         },
     }
 
@@ -337,6 +356,213 @@ class TestAudienceMapperCreation:
         kc.create_audience_mapper = AsyncMock(return_value="m-new")
 
         assert await kc.ensure_audience_mapper("uuid-1", "svc-dataset-api") is True
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded claim mappers
+# ---------------------------------------------------------------------------
+
+
+class TestFetchCurrentStateClaimMappers:
+    """The `claim-` sentinel, and the value the plan diffs against."""
+
+    async def test_a_managed_mapper_is_reported_with_its_value(
+        self, kc: KeycloakAdminClient
+    ):
+        _stub_state(
+            kc,
+            clients=[{"id": "uuid-1", "clientId": "svc-x"}],
+            mappers=[claim_mapper("sub", "did:web:x", "c-1")],
+        )
+
+        state = await kc.fetch_current_state()
+
+        assert state.client_claim_mappers["svc-x"] == {
+            "sub": ClaimMapperState(mapper_id="c-1", value="did:web:x")
+        }
+
+    async def test_a_hand_made_mapper_is_ignored(self, kc: KeycloakAdminClient):
+        """Same type, different name — somebody pinned that claim on purpose."""
+        mapper = claim_mapper("sub", "did:web:theirs")
+        mapper["name"] = "their-own-sub"
+        _stub_state(
+            kc, clients=[{"id": "uuid-1", "clientId": "svc-x"}], mappers=[mapper]
+        )
+
+        state = await kc.fetch_current_state()
+
+        assert state.client_claim_mappers["svc-x"] == {}
+
+    async def test_mappers_of_other_types_are_ignored(self, kc: KeycloakAdminClient):
+        """A `claim-` name on another mapper type is not this tool's to remove."""
+        _stub_state(
+            kc,
+            clients=[{"id": "uuid-1", "clientId": "svc-x"}],
+            mappers=[
+                {
+                    "id": "c-2",
+                    "name": f"{CLAIM_MAPPER_PREFIX}looks-like-one",
+                    "protocolMapper": "oidc-usermodel-attribute-mapper",
+                    "config": {"claim.name": "sub"},
+                }
+            ],
+        )
+
+        state = await kc.fetch_current_state()
+
+        assert state.client_claim_mappers["svc-x"] == {}
+
+    async def test_an_audience_mapper_is_not_read_as_a_claim(
+        self, kc: KeycloakAdminClient
+    ):
+        """The two families share a client and must not see each other's mappers."""
+        _stub_state(
+            kc,
+            clients=[{"id": "uuid-1", "clientId": "svc-x"}],
+            mappers=[aud_mapper("svc-dataset-api", "m-1")],
+        )
+
+        state = await kc.fetch_current_state()
+
+        assert state.client_claim_mappers["svc-x"] == {}
+        assert state.client_audience_mappers["svc-x"] == {"svc-dataset-api": "m-1"}
+
+    async def test_a_mapper_without_a_claim_name_is_ignored(
+        self, kc: KeycloakAdminClient
+    ):
+        """Otherwise the dict comprehension would key on a missing value."""
+        broken = claim_mapper("sub", "did:web:x")
+        broken["config"] = {}
+        _stub_state(
+            kc, clients=[{"id": "uuid-1", "clientId": "svc-x"}], mappers=[broken]
+        )
+
+        state = await kc.fetch_current_state()
+
+        assert state.client_claim_mappers["svc-x"] == {}
+
+    async def test_the_reported_claim_is_the_config_not_the_name(
+        self, kc: KeycloakAdminClient
+    ):
+        """`claim.name` is what lands in the token; the mapper name is cosmetic."""
+        mapper = claim_mapper("sub", "did:web:x", "c-4")
+        mapper["name"] = f"{CLAIM_MAPPER_PREFIX}stale-name"
+        _stub_state(
+            kc, clients=[{"id": "uuid-1", "clientId": "svc-x"}], mappers=[mapper]
+        )
+
+        state = await kc.fetch_current_state()
+
+        assert set(state.client_claim_mappers["svc-x"]) == {"sub"}
+
+
+class TestClaimMapperWrites:
+    async def test_the_payload_overrides_the_claim_in_the_access_token(
+        self, kc: KeycloakAdminClient
+    ):
+        """EDC reads `sub` off the access token, and off introspection."""
+        kc._post = AsyncMock(return_value={"id": "c-new"})
+
+        mapper_id = await kc.create_hardcoded_claim_mapper(
+            "uuid-1", "sub", "did:web:greenland"
+        )
+
+        assert mapper_id == "c-new"
+        payload = kc._post.call_args.kwargs["json"]
+        assert payload["protocolMapper"] == "oidc-hardcoded-claim-mapper"
+        assert payload["protocol"] == "openid-connect"
+        assert payload["config"] == {
+            "claim.name": "sub",
+            "claim.value": "did:web:greenland",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true",
+            "access.tokenResponse.claim": "false",
+        }
+
+    async def test_the_mapper_name_carries_the_managed_prefix(
+        self, kc: KeycloakAdminClient
+    ):
+        """This name is the sentinel `fetch_current_state` filters on."""
+        kc._post = AsyncMock(return_value={"id": "c-new"})
+
+        await kc.create_hardcoded_claim_mapper("uuid-1", "sub", "did:web:x")
+
+        assert kc._post.call_args.kwargs["json"]["name"] == f"{CLAIM_MAPPER_PREFIX}sub"
+
+    async def test_the_id_is_looked_up_when_the_post_returns_nothing(
+        self, kc: KeycloakAdminClient
+    ):
+        """Keycloak answers 201 with an empty body; the plan still needs the id."""
+        kc._post = AsyncMock(return_value=None)
+        kc.get_client_protocol_mappers = AsyncMock(
+            return_value=[claim_mapper("sub", "did:web:x", "c-found")]
+        )
+
+        created = await kc.create_hardcoded_claim_mapper("uuid-1", "sub", "did:web:x")
+
+        assert created == "c-found"
+
+    async def test_an_update_puts_the_whole_representation_with_its_id(
+        self, kc: KeycloakAdminClient
+    ):
+        """A PUT that omits a config key is a PUT that drops it."""
+        kc._put = AsyncMock(return_value=None)
+
+        await kc.update_hardcoded_claim_mapper("uuid-1", "c-1", "sub", "did:web:new")
+
+        path = kc._put.call_args.args[0]
+        payload = kc._put.call_args.kwargs["json"]
+        assert path == "/clients/uuid-1/protocol-mappers/models/c-1"
+        assert payload["id"] == "c-1"
+        assert payload["config"]["claim.value"] == "did:web:new"
+        assert payload["config"]["jsonType.label"] == "String"
+
+    async def test_ensure_is_a_no_op_when_the_value_already_matches(
+        self, kc: KeycloakAdminClient
+    ):
+        kc.get_client_protocol_mappers = AsyncMock(
+            return_value=[claim_mapper("sub", "did:web:x")]
+        )
+        kc.create_hardcoded_claim_mapper = AsyncMock()
+        kc.update_hardcoded_claim_mapper = AsyncMock()
+
+        written = await kc.ensure_hardcoded_claim_mapper("uuid-1", "sub", "did:web:x")
+
+        assert written is False
+        kc.create_hardcoded_claim_mapper.assert_not_awaited()
+        kc.update_hardcoded_claim_mapper.assert_not_awaited()
+
+    async def test_ensure_creates_the_mapper_when_absent(self, kc: KeycloakAdminClient):
+        kc.get_client_protocol_mappers = AsyncMock(return_value=[])
+        kc.create_hardcoded_claim_mapper = AsyncMock(return_value="c-new")
+
+        written = await kc.ensure_hardcoded_claim_mapper("uuid-1", "sub", "did:web:x")
+
+        assert written is True
+        kc.create_hardcoded_claim_mapper.assert_awaited_once_with(
+            "uuid-1", "sub", "did:web:x"
+        )
+
+    async def test_ensure_rewrites_a_different_value_in_place(
+        self, kc: KeycloakAdminClient
+    ):
+        """Never a delete and a create: the gap emits Keycloak's own `sub`."""
+        kc.get_client_protocol_mappers = AsyncMock(
+            return_value=[claim_mapper("sub", "did:web:old", "c-1")]
+        )
+        kc.create_hardcoded_claim_mapper = AsyncMock()
+        kc.update_hardcoded_claim_mapper = AsyncMock()
+
+        written = await kc.ensure_hardcoded_claim_mapper("uuid-1", "sub", "did:web:new")
+
+        assert written is True
+        kc.create_hardcoded_claim_mapper.assert_not_awaited()
+        kc.update_hardcoded_claim_mapper.assert_awaited_once_with(
+            "uuid-1", "c-1", "sub", "did:web:new"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ from celine.policies.cli.keycloak.models import (
 )
 from celine.policies.cli.keycloak.sync import (
     AudienceMapperAction,
+    ClaimMapperAction,
     ClientAction,
     ScopeAction,
     ScopeAssignmentAction,
@@ -58,6 +59,8 @@ WRITE_METHODS = [
     "remove_client_default_scope",
     "remove_client_optional_scope",
     "create_audience_mapper",
+    "create_hardcoded_claim_mapper",
+    "update_hardcoded_claim_mapper",
     "delete_protocol_mapper",
 ]
 
@@ -81,6 +84,8 @@ def kc() -> MagicMock:
     client.remove_client_default_scope = AsyncMock()
     client.remove_client_optional_scope = AsyncMock()
     client.create_audience_mapper = AsyncMock(return_value="mapper-new")
+    client.create_hardcoded_claim_mapper = AsyncMock(return_value="claim-new")
+    client.update_hardcoded_claim_mapper = AsyncMock()
     client.delete_protocol_mapper = AsyncMock()
     return client
 
@@ -133,6 +138,33 @@ def full_plan() -> SyncPlan:
                 audience_client_id="svc-gone",
                 action="remove",
                 mapper_id="mapper-1",
+            )
+        ],
+        claim_mappers_to_add=[
+            ClaimMapperAction(
+                client_id="svc-old",
+                claim_name="sub",
+                claim_value="did:web:old",
+                action="add",
+            )
+        ],
+        claim_mappers_to_update=[
+            ClaimMapperAction(
+                client_id="svc-old",
+                claim_name="tenant",
+                claim_value="celine",
+                action="update",
+                mapper_id="claim-1",
+                current_value="was",
+            )
+        ],
+        claim_mappers_to_remove=[
+            ClaimMapperAction(
+                client_id="svc-old",
+                claim_name="dropped",
+                claim_value="",
+                action="remove",
+                mapper_id="claim-2",
             )
         ],
         orphan_scopes=["orphan.scope"],
@@ -189,6 +221,9 @@ class TestDryRun:
         ]
         assert result.audience_mappers_added == [("svc-old", "svc-dataset-api")]
         assert result.audience_mappers_removed == [("svc-old", "svc-gone")]
+        assert result.claim_mappers_added == [("svc-old", "sub")]
+        assert result.claim_mappers_updated == [("svc-old", "tenant")]
+        assert result.claim_mappers_removed == [("svc-old", "dropped")]
 
     async def test_orphans_are_reported_only_with_prune(self, kc: MagicMock):
         without = await apply_sync_plan(
@@ -560,6 +595,165 @@ class TestAudienceMapperApplication:
         result = await apply_sync_plan(kc, plan, KeycloakConfig(), state)
 
         assert result.errors == []
+
+
+class TestClaimMapperApplication:
+    @pytest.fixture
+    def state(self) -> CurrentState:
+        return CurrentState(clients={"svc-x": {"id": "uuid-x"}})
+
+    async def test_a_mapper_is_created_on_the_declaring_client(
+        self, kc: MagicMock, state: CurrentState
+    ):
+        plan = SyncPlan(
+            claim_mappers_to_add=[
+                ClaimMapperAction(
+                    client_id="svc-x",
+                    claim_name="sub",
+                    claim_value="did:web:greenland",
+                    action="add",
+                )
+            ]
+        )
+
+        await apply_sync_plan(kc, plan, KeycloakConfig(), state)
+
+        kc.create_hardcoded_claim_mapper.assert_awaited_once_with(
+            client_uuid="uuid-x", claim_name="sub", claim_value="did:web:greenland"
+        )
+
+    async def test_a_client_created_by_this_run_gets_its_claims(self, kc: MagicMock):
+        """Its uuid exists only in `client_uuids`, not in the state fetched first."""
+        plan = SyncPlan(
+            clients_to_create=[
+                ClientAction(client=ClientConfig(client_id="svc-new"), action="create")
+            ],
+            claim_mappers_to_add=[
+                ClaimMapperAction(
+                    client_id="svc-new",
+                    claim_name="sub",
+                    claim_value="did:web:new",
+                    action="add",
+                )
+            ],
+        )
+
+        await apply_sync_plan(kc, plan, KeycloakConfig(), CurrentState())
+
+        kc.create_hardcoded_claim_mapper.assert_awaited_once_with(
+            client_uuid="uuid-new", claim_name="sub", claim_value="did:web:new"
+        )
+
+    async def test_a_changed_value_is_written_in_place(
+        self, kc: MagicMock, state: CurrentState
+    ):
+        """Never a delete and a create: between them the client emits its UUID."""
+        plan = SyncPlan(
+            claim_mappers_to_update=[
+                ClaimMapperAction(
+                    client_id="svc-x",
+                    claim_name="sub",
+                    claim_value="did:web:new",
+                    action="update",
+                    mapper_id="claim-7",
+                    current_value="did:web:old",
+                )
+            ]
+        )
+
+        await apply_sync_plan(kc, plan, KeycloakConfig(), state)
+
+        kc.update_hardcoded_claim_mapper.assert_awaited_once_with(
+            client_uuid="uuid-x",
+            mapper_id="claim-7",
+            claim_name="sub",
+            claim_value="did:web:new",
+        )
+        kc.delete_protocol_mapper.assert_not_awaited()
+        kc.create_hardcoded_claim_mapper.assert_not_awaited()
+
+    async def test_a_removal_uses_the_mapper_id_from_the_plan(
+        self, kc: MagicMock, state: CurrentState
+    ):
+        plan = SyncPlan(
+            claim_mappers_to_remove=[
+                ClaimMapperAction(
+                    client_id="svc-x",
+                    claim_name="sub",
+                    claim_value="",
+                    action="remove",
+                    mapper_id="claim-7",
+                )
+            ]
+        )
+
+        await apply_sync_plan(kc, plan, KeycloakConfig(), state)
+
+        kc.delete_protocol_mapper.assert_awaited_once_with(
+            client_uuid="uuid-x", mapper_id="claim-7"
+        )
+
+    async def test_a_removal_without_an_id_deletes_nothing(
+        self, kc: MagicMock, state: CurrentState
+    ):
+        """Guessing which mapper was meant could delete an unrelated one."""
+        plan = SyncPlan(
+            claim_mappers_to_remove=[
+                ClaimMapperAction(
+                    client_id="svc-x",
+                    claim_name="sub",
+                    claim_value="",
+                    action="remove",
+                    mapper_id=None,
+                )
+            ]
+        )
+
+        result = await apply_sync_plan(kc, plan, KeycloakConfig(), state)
+
+        kc.delete_protocol_mapper.assert_not_awaited()
+        assert result.claim_mappers_removed == []
+
+    async def test_a_mapper_already_gone_is_not_an_error(
+        self, kc: MagicMock, state: CurrentState
+    ):
+        kc.delete_protocol_mapper = AsyncMock(side_effect=KeycloakNotFoundError("404"))
+        plan = SyncPlan(
+            claim_mappers_to_remove=[
+                ClaimMapperAction(
+                    client_id="svc-x",
+                    claim_name="sub",
+                    claim_value="",
+                    action="remove",
+                    mapper_id="claim-7",
+                )
+            ]
+        )
+
+        result = await apply_sync_plan(kc, plan, KeycloakConfig(), state)
+
+        assert result.errors == []
+
+    async def test_a_failure_is_collected_and_the_run_continues(
+        self, kc: MagicMock, state: CurrentState
+    ):
+        kc.create_hardcoded_claim_mapper = AsyncMock(side_effect=RuntimeError("403"))
+        plan = SyncPlan(
+            claim_mappers_to_add=[
+                ClaimMapperAction(
+                    client_id="svc-x",
+                    claim_name="sub",
+                    claim_value="did:web:x",
+                    action="add",
+                )
+            ]
+        )
+
+        result = await apply_sync_plan(kc, plan, KeycloakConfig(), state)
+
+        assert result.claim_mappers_added == []
+        assert len(result.errors) == 1
+        assert "sub" in result.errors[0]
 
 
 class TestPruning:

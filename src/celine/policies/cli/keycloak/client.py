@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 # This lets us reliably identify and diff our mappers vs. manually created ones.
 AUDIENCE_MAPPER_PREFIX = "aud-"
 
+# The same discipline for hardcoded claim mappers, under a prefix of its own so
+# the two families can never be mistaken for each other: a `claim-` name is read
+# and written by this CLI, anything else on the client is somebody's own.
+CLAIM_MAPPER_PREFIX = "claim-"
+
 #: The realm claim scopes `ensure_realm_claim_scopes` provisions.
 REALM_CLAIM_SCOPES: tuple[str, ...] = ("organization", "groups", "dataspace")
 
@@ -117,6 +122,20 @@ class TokenInfo:
         return time.time() < (self.expires_at - leeway)
 
 
+@dataclass(frozen=True)
+class ClaimMapperState:
+    """One hardcoded claim mapper as the realm holds it now.
+
+    The value is carried alongside the id because a claim mapper can drift in a
+    way an audience mapper cannot: the claim is still declared, but the string it
+    pins has changed. Without the value the plan could only tell present from
+    absent, and a stale DID would survive every sync.
+    """
+
+    mapper_id: str
+    value: str
+
+
 @dataclass
 class CurrentState:
     """Current state of Keycloak resources."""
@@ -131,6 +150,13 @@ class CurrentState:
     # Only includes mappers whose name starts with AUDIENCE_MAPPER_PREFIX,
     # so manually created mappers are never touched.
     client_audience_mappers: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # Hardcoded claim mappers currently on each client.
+    # Maps client_id -> {claim_name -> ClaimMapperState}.
+    # Filtered on CLAIM_MAPPER_PREFIX for the same reason as the audiences above.
+    client_claim_mappers: dict[str, dict[str, ClaimMapperState]] = field(
+        default_factory=dict
+    )
 
     # --- Fine-grained admin permissions -------------------------------------
     #
@@ -1148,6 +1174,133 @@ class KeycloakAdminClient:
         await self.create_audience_mapper(client_uuid, audience_client_id)
         return True
 
+    @staticmethod
+    def _claim_mapper_payload(claim_name: str, claim_value: str) -> dict[str, Any]:
+        """The representation of one hardcoded claim mapper.
+
+        Shared by the create and the update so the two can never disagree: an
+        update sends the whole representation, and a key left out of it is a key
+        Keycloak drops.
+
+        `access.token.claim` and `introspection.token.claim` are what make this
+        do anything — the access token is what a resource server reads, and
+        introspection is how an opaque one is read back. The id token and the
+        userinfo response are deliberately left alone: a hardcoded `sub` there
+        would lie to a browser client about who is signed in.
+        """
+        return {
+            "name": f"{CLAIM_MAPPER_PREFIX}{claim_name}",
+            "protocol": "openid-connect",
+            "protocolMapper": "oidc-hardcoded-claim-mapper",
+            "config": {
+                "claim.name": claim_name,
+                "claim.value": claim_value,
+                "jsonType.label": "String",
+                "access.token.claim": "true",
+                "id.token.claim": "false",
+                "userinfo.token.claim": "false",
+                "introspection.token.claim": "true",
+                "access.tokenResponse.claim": "false",
+            },
+        }
+
+    async def create_hardcoded_claim_mapper(
+        self,
+        client_uuid: str,
+        claim_name: str,
+        claim_value: str,
+    ) -> str:
+        """Add a hardcoded claim mapper to a client.
+
+        The mapper name follows the CLAIM_MAPPER_PREFIX convention so the CLI can
+        distinguish its own mappers from manually created ones.
+
+        Returns the mapper ID.
+        """
+        payload = self._claim_mapper_payload(claim_name, claim_value)
+        mapper_name = payload["name"]
+
+        logger.debug("Adding claim mapper '%s' to client %s", mapper_name, client_uuid)
+        result = await self._post(
+            f"/clients/{client_uuid}/protocol-mappers/models", json=payload
+        )
+
+        if result and isinstance(result, dict):
+            mapper_id = result.get("id", "")
+        else:
+            mappers = await self.get_client_protocol_mappers(client_uuid)
+            mapper_id = next(
+                (m["id"] for m in mappers if m.get("name") == mapper_name), ""
+            )
+
+        logger.info(
+            "Created claim mapper '%s' on client %s (id=%s)",
+            mapper_name,
+            client_uuid,
+            mapper_id,
+        )
+        return mapper_id
+
+    async def update_hardcoded_claim_mapper(
+        self,
+        client_uuid: str,
+        mapper_id: str,
+        claim_name: str,
+        claim_value: str,
+    ) -> None:
+        """Rewrite the value a hardcoded claim mapper pins.
+
+        In place, rather than a delete and a create. Between those two writes the
+        client would go back to emitting Keycloak's own claim, and any token
+        minted in that window carries it — for `sub`, that is a token naming the
+        wrong participant to whoever validates it.
+        """
+        payload = self._claim_mapper_payload(claim_name, claim_value)
+        payload["id"] = mapper_id
+
+        logger.debug(
+            "Updating claim mapper '%s' on client %s", payload["name"], client_uuid
+        )
+        await self._put(
+            f"/clients/{client_uuid}/protocol-mappers/models/{mapper_id}",
+            json=payload,
+        )
+        logger.info(
+            "Updated claim mapper '%s' on client %s to '%s'",
+            payload["name"],
+            client_uuid,
+            claim_value,
+        )
+
+    async def ensure_hardcoded_claim_mapper(
+        self, client_uuid: str, claim_name: str, claim_value: str
+    ) -> bool:
+        """Ensure a hardcoded claim mapper pins `claim_name` to `claim_value`.
+
+        Idempotent — no-op when the mapper is already there with that value, an
+        update when it is there with another one.
+
+        Returns True if anything was written.
+        """
+        mapper_name = f"{CLAIM_MAPPER_PREFIX}{claim_name}"
+        mappers = await self.get_client_protocol_mappers(client_uuid)
+        existing = next((m for m in mappers if m.get("name") == mapper_name), None)
+
+        if existing is None:
+            await self.create_hardcoded_claim_mapper(
+                client_uuid, claim_name, claim_value
+            )
+            return True
+
+        if existing.get("config", {}).get("claim.value") == claim_value:
+            logger.info("Claim mapper '%s' already current — skipping", mapper_name)
+            return False
+
+        await self.update_hardcoded_claim_mapper(
+            client_uuid, existing["id"], claim_name, claim_value
+        )
+        return True
+
     async def delete_protocol_mapper(self, client_uuid: str, mapper_id: str) -> None:
         """Delete a protocol mapper from a client."""
         logger.debug(
@@ -1668,6 +1821,17 @@ class KeycloakAdminClient:
                     if m.get("name", "").startswith(AUDIENCE_MAPPER_PREFIX)
                     and m.get("protocolMapper") == "oidc-audience-mapper"
                     and m.get("config", {}).get("included.client.audience")
+                }
+
+                state.client_claim_mappers[client_id] = {
+                    m["config"]["claim.name"]: ClaimMapperState(
+                        mapper_id=m["id"],
+                        value=m["config"].get("claim.value", ""),
+                    )
+                    for m in mappers
+                    if m.get("name", "").startswith(CLAIM_MAPPER_PREFIX)
+                    and m.get("protocolMapper") == "oidc-hardcoded-claim-mapper"
+                    and m.get("config", {}).get("claim.name")
                 }
 
         return state

@@ -95,6 +95,31 @@ class AudienceMapperAction:
 
 
 @dataclass
+class ClaimMapperAction:
+    """Action on one hardcoded claim mapper of a client.
+
+    Unlike an audience mapper this one has an "update": the claim is still
+    declared, but pins a different string than the realm holds.
+
+    Attributes:
+        client_id:     The client whose tokens carry the claim.
+        claim_name:    The claim to pin, e.g. `sub`.
+        claim_value:   What it must say; empty for a "remove".
+        action:        "add", "update" or "remove".
+        mapper_id:     Keycloak mapper UUID — set for "update" and "remove".
+        current_value: What the realm pins today, so the summary shows the
+                       change rather than only the result.
+    """
+
+    client_id: str
+    claim_name: str
+    claim_value: str
+    action: str  # "add", "update", "remove"
+    mapper_id: str | None = None
+    current_value: str | None = None
+
+
+@dataclass
 class AdminPermissionAction:
     """Action on a client's fine-grained administration rights over one group.
 
@@ -159,6 +184,14 @@ class SyncPlan:
     audience_mappers_to_add: list[AudienceMapperAction] = field(default_factory=list)
     audience_mappers_to_remove: list[AudienceMapperAction] = field(default_factory=list)
 
+    # Hardcoded claim mapper actions. These converge like the audience mappers
+    # and gain an update: a declared claim whose value changed is rewritten in
+    # place, because deleting and recreating leaves a window where the client
+    # emits Keycloak's own claim instead.
+    claim_mappers_to_add: list[ClaimMapperAction] = field(default_factory=list)
+    claim_mappers_to_update: list[ClaimMapperAction] = field(default_factory=list)
+    claim_mappers_to_remove: list[ClaimMapperAction] = field(default_factory=list)
+
     # Fine-grained admin permission actions.
     #
     # These converge like scope assignments and not like orphan clients: a group
@@ -202,6 +235,9 @@ class SyncPlan:
             or self.scope_assignments_to_remove
             or self.audience_mappers_to_add
             or self.audience_mappers_to_remove
+            or self.claim_mappers_to_add
+            or self.claim_mappers_to_update
+            or self.claim_mappers_to_remove
             or self.admin_permissions_to_add
             or self.admin_permissions_to_update
             or self.admin_permissions_to_remove
@@ -272,6 +308,30 @@ class SyncPlan:
                 lines.append(
                     f"  - {action.client_id} -> aud:{action.audience_client_id}"
                 )
+
+        if self.claim_mappers_to_add:
+            lines.append(f"Claim mappers to add: {len(self.claim_mappers_to_add)}")
+            for action in self.claim_mappers_to_add:
+                lines.append(
+                    f"  + {action.client_id} -> {action.claim_name}={action.claim_value}"
+                )
+
+        if self.claim_mappers_to_update:
+            lines.append(
+                f"Claim mappers to change: {len(self.claim_mappers_to_update)}"
+            )
+            for action in self.claim_mappers_to_update:
+                lines.append(
+                    f"  ~ {action.client_id} -> {action.claim_name}: "
+                    f"{action.current_value} -> {action.claim_value}"
+                )
+
+        if self.claim_mappers_to_remove:
+            lines.append(
+                f"Claim mappers to remove: {len(self.claim_mappers_to_remove)}"
+            )
+            for action in self.claim_mappers_to_remove:
+                lines.append(f"  - {action.client_id} -> {action.claim_name}")
 
         if self.admin_permissions_off:
             lines.append(
@@ -361,6 +421,11 @@ class SyncResult:
         default_factory=list
     )  # (client_id, audience)
 
+    # Hardcoded claim mappers, as (client_id, claim_name) pairs.
+    claim_mappers_added: list[tuple[str, str]] = field(default_factory=list)
+    claim_mappers_updated: list[tuple[str, str]] = field(default_factory=list)
+    claim_mappers_removed: list[tuple[str, str]] = field(default_factory=list)
+
     # Client secrets (client_id -> secret)
     client_secrets: dict[str, str] = field(default_factory=dict)
 
@@ -426,6 +491,19 @@ class SyncResult:
             )
             for client_id, aud in self.audience_mappers_removed:
                 lines.append(f"  - {client_id} -> aud:{aud}")
+
+        if self.claim_mappers_added:
+            lines.append(f"Added {len(self.claim_mappers_added)} claim mappers")
+            for client_id, claim in self.claim_mappers_added:
+                lines.append(f"  + {client_id} -> {claim}")
+        if self.claim_mappers_updated:
+            lines.append(f"Changed {len(self.claim_mappers_updated)} claim mappers")
+            for client_id, claim in self.claim_mappers_updated:
+                lines.append(f"  ~ {client_id} -> {claim}")
+        if self.claim_mappers_removed:
+            lines.append(f"Removed {len(self.claim_mappers_removed)} claim mappers")
+            for client_id, claim in self.claim_mappers_removed:
+                lines.append(f"  - {client_id} -> {claim}")
 
         if self.admin_permissions_granted:
             lines.append(
@@ -714,6 +792,61 @@ def compute_sync_plan(
                     mapper_id=current_audience_map[audience],
                 )
             )
+
+    # -------------------------------------------------------------------------
+    # Hardcoded claim mappers
+    # -------------------------------------------------------------------------
+    # `hardcoded_claims` pins a claim to a fixed string, overriding whatever
+    # Keycloak would otherwise emit — `sub` above all, which EDC reads as the
+    # participant identity and Keycloak fills with the service account's UUID.
+    #
+    # Its own loop rather than the one above, because that one skips
+    # oauth2_proxy_client: a skip about audiences, which are planned for that
+    # client further down. Extending it to claims would quietly refuse a
+    # declaration on the one client it applies to.
+
+    for client_config in config.clients:
+        client_id = client_config.client_id
+        desired_claims = client_config.hardcoded_claims
+        current_claims = current.client_claim_mappers.get(client_id, {})
+
+        for claim_name, claim_value in desired_claims.items():
+            held = current_claims.get(claim_name)
+            if held is None:
+                plan.claim_mappers_to_add.append(
+                    ClaimMapperAction(
+                        client_id=client_id,
+                        claim_name=claim_name,
+                        claim_value=claim_value,
+                        action="add",
+                    )
+                )
+            elif held.value != claim_value:
+                plan.claim_mappers_to_update.append(
+                    ClaimMapperAction(
+                        client_id=client_id,
+                        claim_name=claim_name,
+                        claim_value=claim_value,
+                        action="update",
+                        mapper_id=held.mapper_id,
+                        current_value=held.value,
+                    )
+                )
+
+        # A claim no longer declared. `current` reports only this tool's own
+        # mappers, so there is nothing else here to remove.
+        for claim_name, held in current_claims.items():
+            if claim_name not in desired_claims:
+                plan.claim_mappers_to_remove.append(
+                    ClaimMapperAction(
+                        client_id=client_id,
+                        claim_name=claim_name,
+                        claim_value="",
+                        action="remove",
+                        mapper_id=held.mapper_id,
+                        current_value=held.value,
+                    )
+                )
 
     # -------------------------------------------------------------------------
     # Fine-grained admin permissions
@@ -1292,7 +1425,119 @@ async def apply_sync_plan(
             )
 
     # -------------------------------------------------------------------------
-    # 9. Fine-grained admin permissions
+    # 9. Reconcile hardcoded claim mappers
+    # -------------------------------------------------------------------------
+    # After the clients exist, so a client created moments ago in step 3 has its
+    # uuid in `client_uuids` and gets the claims it was declared with.
+
+    for action in plan.claim_mappers_to_add:
+        client_uuid = client_uuids.get(action.client_id)
+
+        if not client_uuid:
+            logger.warning("Client not found for claim mapper: %s", action.client_id)
+            continue
+
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Would add claim mapper %s -> %s=%s",
+                action.client_id,
+                action.claim_name,
+                action.claim_value,
+            )
+            result.claim_mappers_added.append((action.client_id, action.claim_name))
+            continue
+
+        try:
+            await client.create_hardcoded_claim_mapper(
+                client_uuid=client_uuid,
+                claim_name=action.claim_name,
+                claim_value=action.claim_value,
+            )
+            result.claim_mappers_added.append((action.client_id, action.claim_name))
+        except Exception as e:
+            result.errors.append(
+                f"Failed to add claim mapper {action.claim_name} "
+                f"to {action.client_id}: {e}"
+            )
+
+    for action in plan.claim_mappers_to_update:
+        client_uuid = client_uuids.get(action.client_id)
+
+        if not client_uuid or not action.mapper_id:
+            logger.warning(
+                "Cannot update claim mapper %s on %s — no client or mapper id",
+                action.claim_name,
+                action.client_id,
+            )
+            continue
+
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Would change claim mapper %s -> %s: %s -> %s",
+                action.client_id,
+                action.claim_name,
+                action.current_value,
+                action.claim_value,
+            )
+            result.claim_mappers_updated.append((action.client_id, action.claim_name))
+            continue
+
+        try:
+            await client.update_hardcoded_claim_mapper(
+                client_uuid=client_uuid,
+                mapper_id=action.mapper_id,
+                claim_name=action.claim_name,
+                claim_value=action.claim_value,
+            )
+            result.claim_mappers_updated.append((action.client_id, action.claim_name))
+        except Exception as e:
+            result.errors.append(
+                f"Failed to change claim mapper {action.claim_name} "
+                f"on {action.client_id}: {e}"
+            )
+
+    for action in plan.claim_mappers_to_remove:
+        client_uuid = client_uuids.get(action.client_id)
+
+        if not client_uuid:
+            logger.warning(
+                "Client not found for claim mapper removal: %s", action.client_id
+            )
+            continue
+
+        if not action.mapper_id:
+            logger.warning(
+                "No mapper_id for removal of claim %s on %s — skipping",
+                action.claim_name,
+                action.client_id,
+            )
+            continue
+
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Would remove claim mapper %s -> %s",
+                action.client_id,
+                action.claim_name,
+            )
+            result.claim_mappers_removed.append((action.client_id, action.claim_name))
+            continue
+
+        try:
+            await client.delete_protocol_mapper(
+                client_uuid=client_uuid,
+                mapper_id=action.mapper_id,
+            )
+            result.claim_mappers_removed.append((action.client_id, action.claim_name))
+        except KeycloakNotFoundError:
+            pass  # Already gone
+        except Exception as e:
+            result.errors.append(
+                f"Failed to remove claim mapper {action.claim_name} "
+                f"from {action.client_id}: {e}"
+            )
+
+    # -------------------------------------------------------------------------
+    # 10. Fine-grained admin permissions
     # -------------------------------------------------------------------------
     # After the clients exist, because a permission names the client's service
     # account through a policy that needs its uuid — and before pruning, so a
@@ -1356,7 +1601,7 @@ async def apply_sync_plan(
             )
 
     # -------------------------------------------------------------------------
-    # 10. Delete orphans (if --prune)
+    # 11. Delete orphans (if --prune)
     # -------------------------------------------------------------------------
 
     if prune:

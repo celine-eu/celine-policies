@@ -157,7 +157,7 @@ last-wins:
 
 | | |
 |---|---|
-| a client's identity | declared by **exactly one** file: `name`, `description`, `secret`, `scopes_prefix`, `service_account_enabled` |
+| a client's identity | declared by **exactly one** file: `name`, `description`, `secret`, `scopes_prefix`, `service_account_enabled`, `hardcoded_claims` |
 | a client's grants | added by **any** file, with `client_id` plus `default_scopes` / `optional_scopes` / `extra_audiences` and nothing else |
 | a scope | declared once, or identically more than once; a conflicting redefinition is an error |
 | `realm`, `oauth2_proxy_client` | stated by any file; two files disagreeing is an error |

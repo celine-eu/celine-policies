@@ -307,6 +307,29 @@ class TestIdentityHasOneOwner:
         with pytest.raises(MergeError, match=key):
             KeycloakConfig.from_yaml_files([base, overlay])
 
+    def test_hardcoded_claims_are_owned_and_not_granted(
+        self, tmp_path: Path, base: Path
+    ):
+        """What a client's tokens assert is its identity, `sub` most of all.
+
+        A grant widens what a client may ask for. An overlay able to pin the
+        `sub` of a client it does not own would instead be choosing who that
+        client *is*, to everyone who validates its tokens.
+        """
+        overlay = _write(
+            tmp_path,
+            "clients.ds.yaml",
+            """
+            clients:
+              - client_id: svc-dataset-api
+                hardcoded_claims:
+                  sub: did:web:someone-else
+            """,
+        )
+
+        with pytest.raises(MergeError, match="hardcoded_claims"):
+            KeycloakConfig.from_yaml_files([base, overlay])
+
     def test_one_file_declaring_a_client_twice_is_refused(self, tmp_path: Path):
         path = _write(
             tmp_path,
