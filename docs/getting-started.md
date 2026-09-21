@@ -62,7 +62,9 @@ This reads `clients.yaml` and ensures Keycloak matches the desired state:
 - Assigns default scopes to clients
 - Adds audience mappers for cross-service JWT validation
 
-Use `--dry-run` to preview changes without applying them.
+Use `--dry-run` to preview changes without applying them. Use `--additive` to apply
+creates and updates only: every removal is held back and listed instead (see the README,
+"Adding without removing").
 
 ### Step 4: Sync Users (optional)
 

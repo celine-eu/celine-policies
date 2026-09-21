@@ -21,7 +21,10 @@ The `docker-compose.yaml` defines the full development stack:
 ### Startup Order
 
 1. **keycloak** starts first (health check on port 9000)
-2. **keycloak-sync** runs bootstrap (the platform level, from the mounted `platform.yaml`) + sync, then exits
+2. **keycloak-sync** runs bootstrap (the platform level, from the mounted `platform.yaml`) + sync, then exits.
+   A sync that runs on every start and may be handed an incomplete file set can pass
+   `--additive`: it adds and updates, removes nothing, and lists what it held back
+   (README, "Adding without removing"). A declared removal then needs a plain `sync`.
 3. **sync-users** imports example users, then exits
 4. **mqtt_auth** starts after keycloak-sync and sync-users complete
 5. **provisioning** starts after keycloak-sync completes — it authenticates as

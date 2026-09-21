@@ -26,7 +26,7 @@ mappers created manually outside this tool.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,7 @@ from celine.policies.cli.keycloak.client import (
 )
 from celine.policies.cli.keycloak.models import (
     GROUP_MEMBER_ADMIN_SCOPES,
+    NO_BROWSER_LOGIN,
     ClientConfig,
     KeycloakConfig,
     ScopeConfig,
@@ -65,6 +66,10 @@ class ClientAction:
     client: ClientConfig
     action: str  # "create", "update"
     current: dict[str, Any] | None = None
+    # The login keys to write instead of `client.login_representation()`. Set
+    # only by `hold_back_removals`, to keep a login flow the realm has on for a
+    # client that declares none; None writes the declaration as always.
+    login: dict[str, Any] | None = None
 
 
 @dataclass
@@ -163,6 +168,81 @@ class RealmManagementRoleAction:
 
 
 @dataclass
+class HeldBack:
+    """What an additive run (`keycloak sync --additive`) did not take away.
+
+    Every entry is a removal a full run would have made. None of them is applied,
+    and each one is reported, so the operator reads what the realm still holds
+    that the files no longer declare. See `hold_back_removals`.
+    """
+
+    # Assignments of a scope no file grants the client any more.
+    scope_assignments: list[ScopeAssignmentAction] = field(default_factory=list)
+    # A default<->optional move, as (remove, add): both halves are held back,
+    # because the remove narrows what the client's tokens carry by default.
+    scope_moves: list[tuple[ScopeAssignmentAction, ScopeAssignmentAction]] = field(
+        default_factory=list
+    )
+    # Tool-made `aud-` mappers no longer derived, the oauth2-proxy client's included.
+    audience_mappers: list[AudienceMapperAction] = field(default_factory=list)
+    # Tool-made `claim-` mappers no longer declared.
+    claim_mappers: list[ClaimMapperAction] = field(default_factory=list)
+    # Managed admin permissions for groups no longer named.
+    admin_permissions: list[AdminPermissionAction] = field(default_factory=list)
+    # Admin scopes a declared grant no longer lists, as (action, dropped scopes).
+    # The grant itself is kept, and widened when the declaration adds a scope.
+    admin_scopes: list[tuple[AdminPermissionAction, list[str]]] = field(
+        default_factory=list
+    )
+    # Login flows a client update would have switched off on a client that
+    # declares no browser login, as (client_id, flags left on).
+    login_flows: list[tuple[str, list[str]]] = field(default_factory=list)
+    # Realm claim scopes left on the realm default/optional lists. Filled by the
+    # command, from `ensure_realm_claim_scopes(remove_realm_defaults=False)`.
+    realm_claim_scopes: list[str] = field(default_factory=list)
+
+    def lines(self) -> list[str]:
+        """One line per held-back removal, each marked `=` (left as it is)."""
+        out: list[str] = []
+        for a in self.scope_assignments:
+            out.append(f"  = {a.client_id} <- {a.scope_name} ({a.assignment_type})")
+        for remove, add in self.scope_moves:
+            out.append(
+                f"  = {remove.client_id} <- {remove.scope_name} "
+                f"({remove.assignment_type}, a full run moves it to {add.assignment_type})"
+            )
+        for a in self.audience_mappers:
+            out.append(f"  = {a.client_id} -> aud:{a.audience_client_id}")
+        for a in self.claim_mappers:
+            out.append(f"  = {a.client_id} -> {a.claim_name}={a.current_value}")
+        for a in self.admin_permissions:
+            was = ", ".join(sorted(a.current_scopes or set())) or "nothing"
+            out.append(f"  = {a.client_id} -> {a.group_path} ({was})")
+        for a, dropped in self.admin_scopes:
+            out.append(
+                f"  = {a.client_id} -> {a.group_path} keeps {', '.join(dropped)}"
+            )
+        for client_id, flags in self.login_flows:
+            out.append(f"  = {client_id} keeps {', '.join(flags)} on")
+        for name in self.realm_claim_scopes:
+            out.append(f"  = {name}")
+        return out
+
+    @property
+    def count(self) -> int:
+        return len(self.lines())
+
+    def summary(self) -> str:
+        """The block both the plan and the result print; empty when nothing was held."""
+        lines = self.lines()
+        if not lines:
+            return ""
+        return "\n".join(
+            [f"Held back by --additive (a full sync would remove): {len(lines)}", *lines]
+        )
+
+
+@dataclass
 class SyncPlan:
     """Plan of actions to sync Keycloak to desired state."""
 
@@ -222,6 +302,10 @@ class SyncPlan:
     # Orphans (exist in Keycloak but not in config)
     orphan_scopes: list[str] = field(default_factory=list)
     orphan_clients: list[str] = field(default_factory=list)
+
+    # Set by `hold_back_removals` only: the removals this plan no longer holds.
+    # Not a change — `has_changes` ignores it.
+    held_back: HeldBack | None = None
 
     @property
     def has_changes(self) -> bool:
@@ -393,6 +477,9 @@ class SyncPlan:
             for client_id in self.orphan_clients:
                 lines.append(f"  ? {client_id}")
 
+        if self.held_back is not None and self.held_back.count:
+            lines.append(self.held_back.summary())
+
         if not lines:
             lines.append("No changes needed - Keycloak is in sync")
 
@@ -436,6 +523,9 @@ class SyncResult:
 
     # Realm-wide administration, as (client_id, role) pairs.
     realm_management_roles_granted: list[tuple[str, str]] = field(default_factory=list)
+
+    # What an additive run left in place: `HeldBack.lines()`, one per removal.
+    held_back: list[str] = field(default_factory=list)
 
     errors: list[str] = field(default_factory=list)
 
@@ -531,6 +621,13 @@ class SyncResult:
             )
             for client_id, role in self.realm_management_roles_granted:
                 lines.append(f"  ! {client_id} -> realm-management:{role}")
+
+        if self.held_back:
+            lines.append(
+                f"Held back {len(self.held_back)} removal(s) (--additive; "
+                "a full sync applies them)"
+            )
+            lines.extend(self.held_back)
 
         if self.errors:
             lines.append(f"Errors: {len(self.errors)}")
@@ -1078,6 +1175,96 @@ def _client_needs_update(config: ClientConfig, current: dict[str, Any]) -> bool:
     return False
 
 
+#: The login switches a client update forces off on a client that declares no
+#: browser login (`KeycloakAdminClient.update_client`). `publicClient` is forced
+#: off too, and turning it off takes a public client's login away just the same.
+FORCED_OFF_LOGIN_FLAGS: tuple[str, ...] = (*NO_BROWSER_LOGIN, "publicClient")
+
+
+def hold_back_removals(plan: SyncPlan) -> tuple[SyncPlan, HeldBack]:
+    """The additive half of a plan, and every removal it leaves out.
+
+    `keycloak sync --additive` runs this once, between `compute_sync_plan` and
+    the summary, so every applier downstream — `_apply_admin_permissions`
+    included, which walks the plan's lists itself — sees a plan with nothing to
+    take away. Guarding each applier instead is how one gets missed.
+
+    Creates and updates stay as they are, with three exceptions, each of which is
+    a removal hidden inside an update:
+
+    - a default<->optional move is a remove and an add of the same scope; both
+      halves are held back, so the next additive run plans the same pair again
+      and writes nothing (the add alone would be re-attempted every run);
+    - an admin permission whose declaration drops a scope is written with the
+      union of what it grants and what is declared, and not at all when the
+      union is what it already grants;
+    - a client update on a client that declares no browser login keeps each
+      login switch the realm has on, instead of forcing it off.
+
+    The input plan is not modified.
+    """
+    held = HeldBack()
+
+    adds = {
+        (a.client_id, a.scope_name): a for a in plan.scope_assignments_to_add
+    }
+    moved: set[tuple[str, str]] = set()
+    for remove in plan.scope_assignments_to_remove:
+        add = adds.get((remove.client_id, remove.scope_name))
+        if add is not None and add.assignment_type != remove.assignment_type:
+            held.scope_moves.append((remove, add))
+            moved.add((remove.client_id, remove.scope_name))
+        else:
+            held.scope_assignments.append(remove)
+    assignments_to_add = [
+        a for a in plan.scope_assignments_to_add
+        if (a.client_id, a.scope_name) not in moved
+    ]
+
+    held.audience_mappers = list(plan.audience_mappers_to_remove)
+    held.claim_mappers = list(plan.claim_mappers_to_remove)
+    held.admin_permissions = list(plan.admin_permissions_to_remove)
+
+    admin_updates: list[AdminPermissionAction] = []
+    for action in plan.admin_permissions_to_update:
+        granted = set(action.current_scopes or set())
+        dropped = sorted(granted - set(action.scopes))
+        if not dropped:
+            admin_updates.append(action)
+            continue
+        held.admin_scopes.append((action, dropped))
+        union = granted | set(action.scopes)
+        if union != granted:
+            admin_updates.append(replace(action, scopes=sorted(union)))
+
+    clients_to_update: list[ClientAction] = []
+    for action in plan.clients_to_update:
+        if action.client.browser is None:
+            current = action.current or {}
+            on = [flag for flag in FORCED_OFF_LOGIN_FLAGS if current.get(flag) is True]
+            if on:
+                held.login_flows.append((action.client.client_id, on))
+                login = {
+                    **action.client.login_representation(),
+                    **{flag: True for flag in on},
+                }
+                action = replace(action, login=login)
+        clients_to_update.append(action)
+
+    filtered = replace(
+        plan,
+        clients_to_update=clients_to_update,
+        scope_assignments_to_add=assignments_to_add,
+        scope_assignments_to_remove=[],
+        audience_mappers_to_remove=[],
+        claim_mappers_to_remove=[],
+        admin_permissions_to_update=admin_updates,
+        admin_permissions_to_remove=[],
+        held_back=held,
+    )
+    return filtered, held
+
+
 async def apply_sync_plan(
     client: KeycloakAdminClient,
     plan: SyncPlan,
@@ -1223,7 +1410,11 @@ async def apply_sync_plan(
                 description=client_config.description,
                 service_account_enabled=client_config.service_account_enabled,
                 secret=client_config.secret,
-                login=client_config.login_representation(),
+                login=(
+                    action.login
+                    if action.login is not None
+                    else client_config.login_representation()
+                ),
             )
 
             result.clients_updated.append(client_config.client_id)

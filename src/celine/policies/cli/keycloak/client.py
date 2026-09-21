@@ -705,23 +705,57 @@ class KeycloakAdminClient:
     async def _get_realm_optional_client_scopes(self) -> list[dict[str, Any]]:
         return await self._get("/default-optional-client-scopes") or []
 
-    async def _ensure_scope_not_realm_default(self, scope_id: str, name: str) -> bool:
+    async def _ensure_scope_not_realm_default(
+        self,
+        scope_id: str,
+        name: str,
+        remove: bool = True,
+        kept: list[str] | None = None,
+    ) -> bool:
         """Remove scope from realm default/optional lists (Assigned type → None).
+
+        With `remove=False` (`keycloak sync --additive`) nothing is deleted: each
+        list the scope sits on is appended to `kept` instead, as
+        "<name> (realm default)" or "<name> (realm optional)", so the caller can
+        report what a full run would have taken away.
 
         Returns True if anything was removed.
         """
         changed = False
         defaults = await self._get_realm_default_client_scopes()
         if any(s.get("id") == scope_id for s in defaults):
-            await self._delete(f"/default-default-client-scopes/{scope_id}")
-            logger.info("Removed '%s' from realm-level default client scopes", name)
-            changed = True
+            if remove:
+                await self._delete(f"/default-default-client-scopes/{scope_id}")
+                logger.info("Removed '%s' from realm-level default client scopes", name)
+                changed = True
+            elif kept is not None:
+                kept.append(f"{name} (realm default)")
         optionals = await self._get_realm_optional_client_scopes()
         if any(s.get("id") == scope_id for s in optionals):
-            await self._delete(f"/default-optional-client-scopes/{scope_id}")
-            logger.info("Removed '%s' from realm-level optional client scopes", name)
-            changed = True
+            if remove:
+                await self._delete(f"/default-optional-client-scopes/{scope_id}")
+                logger.info("Removed '%s' from realm-level optional client scopes", name)
+                changed = True
+            elif kept is not None:
+                kept.append(f"{name} (realm optional)")
         return changed
+
+    async def realm_claim_scopes_on_realm_lists(self) -> list[str]:
+        """Which realm claim scopes sit on the realm's default or optional lists.
+
+        Read only. `ensure_realm_claim_scopes` takes them off those lists on every
+        full run, and a dry run never calls it, so this is how a dry run can say
+        what that step would remove. Same wording as `kept` above.
+        """
+        defaults = {s.get("name") for s in await self._get_realm_default_client_scopes()}
+        optionals = {s.get("name") for s in await self._get_realm_optional_client_scopes()}
+        found: list[str] = []
+        for name in REALM_CLAIM_SCOPES:
+            if name in defaults:
+                found.append(f"{name} (realm default)")
+            if name in optionals:
+                found.append(f"{name} (realm optional)")
+        return found
 
     async def _ensure_scope_default_on_client(
         self, client_uuid: str, scope_name: str
@@ -858,7 +892,10 @@ class KeycloakAdminClient:
         return scope_id, changed
 
     async def ensure_realm_claim_scopes(
-        self, oauth2_proxy_client_id: str | None = None
+        self,
+        oauth2_proxy_client_id: str | None = None,
+        remove_realm_defaults: bool = True,
+        kept: list[str] | None = None,
     ) -> bool:
         """Idempotently provision realm-level claim scopes (organization, groups, dataspace).
 
@@ -866,6 +903,10 @@ class KeycloakAdminClient:
           1. Ensure the scope + protocol mapper exist (create/update on drift)
           2. Set realm Assigned type = None (remove from realm defaults/optionals)
           3. Assign as Default on the oauth2_proxy client (if provided and found)
+
+        `remove_realm_defaults=False` skips the removal in step 2 and records in
+        `kept` what it left (`keycloak sync --additive`). Steps 1 and 3 add or
+        update, and run either way.
 
         Safe to call from any command (sync, sync-users, etc.) — all paths
         converge to the same desired state.
@@ -877,19 +918,25 @@ class KeycloakAdminClient:
         # --- organization scope ---
         org_id, c = await self.ensure_org_client_scope()
         changed = changed or c
-        c = await self._ensure_scope_not_realm_default(org_id, "organization")
+        c = await self._ensure_scope_not_realm_default(
+            org_id, "organization", remove=remove_realm_defaults, kept=kept
+        )
         changed = changed or c
 
         # --- groups scope ---
         groups_id, c = await self._ensure_groups_client_scope()
         changed = changed or c
-        c = await self._ensure_scope_not_realm_default(groups_id, "groups")
+        c = await self._ensure_scope_not_realm_default(
+            groups_id, "groups", remove=remove_realm_defaults, kept=kept
+        )
         changed = changed or c
 
         # --- dataspace scope ---
         ds_id, c = await self._ensure_dataspace_claim_scope()
         changed = changed or c
-        c = await self._ensure_scope_not_realm_default(ds_id, "dataspace")
+        c = await self._ensure_scope_not_realm_default(
+            ds_id, "dataspace", remove=remove_realm_defaults, kept=kept
+        )
         changed = changed or c
 
         # --- assign all three as Default on oauth2_proxy ---

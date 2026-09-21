@@ -25,6 +25,7 @@ from celine.policies.cli.keycloak.sync import (
     SyncResult,
     apply_sync_plan,
     compute_sync_plan,
+    hold_back_removals,
     write_secrets_file,
 )
 from celine.policies.cli.keycloak.commands._utils import (
@@ -95,6 +96,19 @@ def sync(
         bool,
         typer.Option("--prune", help="Delete orphaned resources not in config"),
     ] = False,
+    additive: Annotated[
+        bool,
+        typer.Option(
+            "--additive",
+            help=(
+                "Add and update only; remove nothing. Every removal a full run "
+                "would make (scope assignments, stale aud-/claim- mappers, admin "
+                "permissions or scopes, login flows a client update would switch "
+                "off, realm-default claim scopes) is held back and listed. "
+                "Refused together with --prune."
+            ),
+        ),
+    ] = False,
     secrets_file: Annotated[
         Optional[Path],
         typer.Option("--secrets-file", "-s", help="Output file for client secrets"),
@@ -124,12 +138,32 @@ def sync(
     is declared by exactly one file; any file may add grants to a client another
     file declares.
 
+    `--additive` applies every create and update and no removal. Each removal a
+    full run would have made is held back and listed under "Held back by
+    --additive", in the plan and in the result, so nothing disappears from the
+    output. A grant dropped from the files is therefore not taken away until a
+    run without the flag: a deployment that only ever runs additive syncs never
+    narrows a client, including when it means to. It cannot be combined with
+    `--prune`, which exists to delete.
+
     Example:
         celine-policies keycloak sync config/keycloak.yaml --dry-run
+        celine-policies keycloak sync clients.yaml --additive
         celine-policies keycloak sync config/keycloak.yaml --admin-user admin --admin-password admin
         celine-policies keycloak sync clients.yaml --overlay clients.ds.yaml
     """
     configure_logging(verbose)
+
+    # An additive run exists to delete nothing, and --prune exists to delete.
+    # Refused before anything is loaded or authenticated, like a usage error.
+    if additive and prune:
+        typer.secho(
+            "Refusing to sync: --additive and --prune contradict each other "
+            "(--additive removes nothing, --prune deletes orphans). Pass one.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
 
     # Build settings
     settings = build_settings(
@@ -193,6 +227,7 @@ def sync(
                 config=config,
                 dry_run=dry_run,
                 prune=prune,
+                additive=additive,
             )
         )
     except KeycloakAuthError as e:
@@ -311,6 +346,7 @@ async def _async_sync(
     config: KeycloakConfig,
     dry_run: bool,
     prune: bool,
+    additive: bool = False,
 ) -> "SyncResult":
     """Run the async sync operation."""
     async with KeycloakAdminClient(settings) as client:
@@ -322,11 +358,27 @@ async def _async_sync(
         if config.clients_with_admin_permissions():
             await require_platform(client, admin_permissions=True)
 
-        # Provision realm claim scopes (organization, groups, dataspace) — idempotent
+        # Provision realm claim scopes (organization, groups, dataspace) — idempotent.
+        # An additive run leaves them on the realm default/optional lists and
+        # reports it; a dry run only reads, and only an additive one reports.
+        kept_realm_claim_scopes: list[str] = []
         if not dry_run:
-            claim_changed = await client.ensure_realm_claim_scopes(config.oauth2_proxy_client)
+            if additive:
+                claim_changed = await client.ensure_realm_claim_scopes(
+                    config.oauth2_proxy_client,
+                    remove_realm_defaults=False,
+                    kept=kept_realm_claim_scopes,
+                )
+            else:
+                # Called exactly as before the flag existed: a run without it
+                # is unchanged, down to the arguments.
+                claim_changed = await client.ensure_realm_claim_scopes(
+                    config.oauth2_proxy_client
+                )
             if claim_changed:
                 typer.echo("  ! realm claim scopes (organization, groups, dataspace) provisioned")
+        elif additive:
+            kept_realm_claim_scopes = await client.realm_claim_scopes_on_realm_lists()
 
         # Fetch current state
         typer.echo("Fetching current state...")
@@ -360,15 +412,22 @@ async def _async_sync(
         # Compute sync plan
         plan = compute_sync_plan(config, current)
 
+        # Filtered once, here, so every applier sees a plan with no removal.
+        held_lines: list[str] = []
+        if additive:
+            plan, held = hold_back_removals(plan)
+            held.realm_claim_scopes = kept_realm_claim_scopes
+            held_lines = held.lines()
+
         # Show plan
         typer.echo("\n" + plan.summary())
 
         if not plan.has_changes and not (prune and plan.has_orphans):
-            return SyncResult()
+            return SyncResult(held_back=held_lines)
 
         if dry_run:
             typer.secho("\n[DRY RUN] No changes applied", fg=typer.colors.YELLOW)
-            result = SyncResult()
+            result = SyncResult(held_back=held_lines)
             result.scopes_created = [a.scope.name for a in plan.scopes_to_create]
             result.scopes_updated = [a.scope.name for a in plan.scopes_to_update]
             result.clients_created = [
@@ -398,14 +457,23 @@ async def _async_sync(
             prune=prune,
             dry_run=False,
         )
+        result.held_back = held_lines
 
         # The claim scopes were ensured before the plan, and their assignment to the
         # oauth2-proxy client skipped if it did not exist yet. On a realm without the
         # import this run is what created it (it is declared since 2026-09-14), and
         # without this its tokens would carry no organization or groups claim until
         # the next sync. Measured on a fresh 26.7.3.
+        # An additive run passes the flag here too: this second call would
+        # otherwise take the claim scopes off the realm lists the first one kept.
         if config.oauth2_proxy_client and config.oauth2_proxy_client in result.clients_created:
-            if await client.ensure_realm_claim_scopes(config.oauth2_proxy_client):
+            if additive:
+                assigned = await client.ensure_realm_claim_scopes(
+                    config.oauth2_proxy_client, remove_realm_defaults=False
+                )
+            else:
+                assigned = await client.ensure_realm_claim_scopes(config.oauth2_proxy_client)
+            if assigned:
                 typer.echo(f"  ! realm claim scopes assigned to {config.oauth2_proxy_client}")
 
         return result

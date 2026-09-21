@@ -123,6 +123,10 @@ class TestSyncOptions:
         """Deletion is opt-in; the flag must stay explicit rather than implied."""
         assert "--prune" in help_text
 
+    def test_additive_is_offered(self, help_text: str):
+        """The init-container mode: add and update, remove nothing."""
+        assert "--additive" in help_text
+
     def test_connection_overrides_are_offered(self, help_text: str):
         for flag in ("--base-url", "--realm"):
             assert flag in help_text, flag

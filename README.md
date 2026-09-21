@@ -163,6 +163,38 @@ last-wins:
 | `realm`, `oauth2_proxy_client` | stated by any file; two files disagreeing is an error |
 | a `scopes_prefix` | claimed by one client only — it decides where every audience mapper for those scopes points |
 
+### Adding without removing: `--additive`
+
+A run that is not handed the complete file set narrows the clients it declares. Where
+that risk cannot be ruled out — an init container that runs `sync` on every pod start,
+with overlays that may be missing or stale — pass `--additive`:
+
+```bash
+celine-policies keycloak sync clients.yaml --overlay clients.ds-host.yaml --additive
+```
+
+It applies every create and update and **no removal**. Each removal a full run would
+have made is **held back** and listed under `Held back by --additive`, marked `=`, in the
+plan and in the result:
+
+| a full run would | under `--additive` |
+|---|---|
+| remove a scope assignment no file grants | kept |
+| move a scope between default and optional | both halves kept; reported as one move |
+| delete a stale `aud-` mapper (the oauth2-proxy client's included) or `claim-` mapper | kept |
+| revoke an admin permission for a group no longer named | kept |
+| drop a scope from an admin permission | the scope is kept; scopes the file adds are still granted |
+| switch off a login flow (or `publicClient`) on a client that declares no `browser` block, while updating it | the flow is left on |
+| take `organization`, `groups`, `dataspace` off the realm default/optional scope lists | left on the lists; the scopes are still created and assigned to the oauth2-proxy client |
+
+`--additive --dry-run` lists the same held-back items without writing anything.
+`--additive` cannot be combined with `--prune`, and the pair exits 2 before connecting.
+
+The trade is real: **a grant dropped from the files is not taken away until a run without
+the flag.** A deployment that only ever runs additive syncs never narrows a client,
+including when it means to. Run a plain `sync` (after a `--dry-run`) to apply a declared
+removal.
+
 ### Which files this repository ships
 
 | file | declares | mounted |
