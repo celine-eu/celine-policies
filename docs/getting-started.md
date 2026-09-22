@@ -64,7 +64,8 @@ This reads `clients.yaml` and ensures Keycloak matches the desired state:
 
 Use `--dry-run` to preview changes without applying them. Use `--additive` to apply
 creates and updates only: every removal is held back and listed instead (see the README,
-"Adding without removing").
+"Adding without removing"). `CELINE_KEYCLOAK_SYNC_ADDITIVE=true` does the same from the
+environment; `--additive` / `--no-additive` override it.
 
 ### Step 4: Sync Users (optional)
 

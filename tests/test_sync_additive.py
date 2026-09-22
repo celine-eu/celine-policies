@@ -741,3 +741,91 @@ class TestTheCommand:
         assert result.exit_code == 2, result.output
         assert "--additive" in result.output and "--prune" in result.output
         assert fake.authenticated is False
+
+
+# ---------------------------------------------------------------------------
+# CELINE_KEYCLOAK_SYNC_ADDITIVE — the same switch from the environment (Q6)
+# ---------------------------------------------------------------------------
+
+
+class TestTheEnvironmentSwitch:
+    """An init container may not be able to pass an argument, so the switch is
+    also read from `CELINE_KEYCLOAK_SYNC_ADDITIVE`. The flag overrides it both
+    ways (`--additive` / `--no-additive`), and `--prune` is refused with it as
+    it is with the flag."""
+
+    ENV_VAR = "CELINE_KEYCLOAK_SYNC_ADDITIVE"
+
+    @pytest.fixture
+    def invoke(self, monkeypatch, tmp_path: Path):
+        """Run the command with `_async_sync` replaced; returns the result and
+        the `additive` value the command settled on (None: never reached)."""
+        import celine.policies.cli.keycloak.commands.sync as sync_command
+
+        seen: dict[str, object] = {}
+
+        async def fake_sync(**kwargs):
+            seen["additive"] = kwargs["additive"]
+            return SyncResult()
+
+        monkeypatch.setattr(sync_command, "_async_sync", fake_sync)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ENV", "dev")
+        monkeypatch.delenv(self.ENV_VAR, raising=False)
+        config_file = tmp_path / "clients.yaml"
+        config_file.write_text("realm: celine\nscopes: []\nclients: []\n")
+
+        def _invoke(*args: str, env: str | None = None):
+            if env is not None:
+                monkeypatch.setenv(self.ENV_VAR, env)
+            result = CliRunner().invoke(
+                app, ["keycloak", "sync", str(config_file), *args]
+            )
+            return result, seen.get("additive")
+
+        return _invoke
+
+    @pytest.mark.parametrize("value", ["true", "1", "TRUE"])
+    def test_the_variable_alone_enables_additive(self, invoke, value):
+        """*Red:* the command reads only the flag."""
+        result, additive = invoke(env=value)
+        assert result.exit_code == 0, result.output
+        assert additive is True
+        assert self.ENV_VAR in result.output  # the banner names the source
+
+    def test_no_additive_overrides_a_true_variable(self, invoke):
+        """*Red:* no `--no-additive`, or the variable read over the flag."""
+        result, additive = invoke("--no-additive", env="true")
+        assert result.exit_code == 0, result.output
+        assert additive is False
+
+    def test_additive_overrides_a_false_variable(self, invoke):
+        """*Red:* the variable read over the flag."""
+        result, additive = invoke("--additive", env="false")
+        assert result.exit_code == 0, result.output
+        assert additive is True
+
+    def test_the_variable_with_prune_exits_2_before_syncing(self, invoke):
+        """*Red:* check the pair against the flag only."""
+        result, additive = invoke("--prune", env="true")
+        assert result.exit_code == 2, result.output
+        assert self.ENV_VAR in result.output and "--prune" in result.output
+        assert additive is None  # never reached the sync
+
+    def test_no_additive_with_prune_is_allowed_over_a_true_variable(self, invoke):
+        """The flag says this run is not additive, so --prune does not contradict it."""
+        result, additive = invoke("--no-additive", "--prune", env="true")
+        assert result.exit_code == 0, result.output
+        assert additive is False
+
+    @pytest.mark.parametrize("value", [None, "", "false", "0"])
+    def test_unset_empty_or_false_leaves_the_run_unchanged(self, invoke, value):
+        """*Red:* default an unset variable to on."""
+        result, additive = invoke(env=value)
+        assert result.exit_code == 0, result.output
+        assert additive is False
+        assert self.ENV_VAR not in result.output
+
+    def test_an_unset_variable_reads_as_none(self, monkeypatch):
+        monkeypatch.delenv(self.ENV_VAR, raising=False)
+        assert KeycloakSettings().sync_additive is None

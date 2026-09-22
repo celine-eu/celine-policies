@@ -127,6 +127,10 @@ class TestSyncOptions:
         """The init-container mode: add and update, remove nothing."""
         assert "--additive" in help_text
 
+    def test_no_additive_is_offered(self, help_text: str):
+        """The override for a run whose environment sets CELINE_KEYCLOAK_SYNC_ADDITIVE."""
+        assert "--no-additive" in help_text
+
     def test_connection_overrides_are_offered(self, help_text: str):
         for flag in ("--base-url", "--realm"):
             assert flag in help_text, flag

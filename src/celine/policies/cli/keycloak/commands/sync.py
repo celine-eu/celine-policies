@@ -36,6 +36,9 @@ from celine.policies.cli.keycloak.commands._utils import (
 
 logger = logging.getLogger(__name__)
 
+#: `--additive` from the environment: `KeycloakSettings.sync_additive`.
+ADDITIVE_ENV_VAR = "CELINE_KEYCLOAK_SYNC_ADDITIVE"
+
 
 def sync(
     config_path: Path = typer.Argument(
@@ -97,18 +100,20 @@ def sync(
         typer.Option("--prune", help="Delete orphaned resources not in config"),
     ] = False,
     additive: Annotated[
-        bool,
+        Optional[bool],
         typer.Option(
-            "--additive",
+            "--additive/--no-additive",
             help=(
                 "Add and update only; remove nothing. Every removal a full run "
                 "would make (scope assignments, stale aud-/claim- mappers, admin "
                 "permissions or scopes, login flows a client update would switch "
                 "off, realm-default claim scopes) is held back and listed. "
-                "Refused together with --prune."
+                f"Unset: {ADDITIVE_ENV_VAR} decides (true/false; unset is false). "
+                "Either flag overrides the variable. Refused together with --prune."
             ),
+            show_default=False,
         ),
-    ] = False,
+    ] = None,
     secrets_file: Annotated[
         Optional[Path],
         typer.Option("--secrets-file", "-s", help="Output file for client secrets"),
@@ -146,6 +151,10 @@ def sync(
     narrows a client, including when it means to. It cannot be combined with
     `--prune`, which exists to delete.
 
+    `CELINE_KEYCLOAK_SYNC_ADDITIVE=true` does the same, for a run that cannot be
+    handed an argument (an init container); `false`, empty or unset leaves it
+    off. `--additive` and `--no-additive` override the variable either way.
+
     Example:
         celine-policies keycloak sync config/keycloak.yaml --dry-run
         celine-policies keycloak sync clients.yaml --additive
@@ -153,17 +162,6 @@ def sync(
         celine-policies keycloak sync clients.yaml --overlay clients.ds.yaml
     """
     configure_logging(verbose)
-
-    # An additive run exists to delete nothing, and --prune exists to delete.
-    # Refused before anything is loaded or authenticated, like a usage error.
-    if additive and prune:
-        typer.secho(
-            "Refusing to sync: --additive and --prune contradict each other "
-            "(--additive removes nothing, --prune deletes orphans). Pass one.",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(2)
 
     # Build settings
     settings = build_settings(
@@ -175,6 +173,21 @@ def sync(
         admin_client_secret=admin_client_secret,
         secrets_file=secrets_file,
     )
+
+    # The flag wins over the environment, both ways.
+    additive, additive_source = _resolve_additive(additive, settings)
+
+    # An additive run exists to delete nothing, and --prune exists to delete.
+    # Refused before anything is loaded or authenticated, like a usage error.
+    if additive and prune:
+        typer.secho(
+            f"Refusing to sync: {_additive_named(additive_source)} and --prune "
+            "contradict each other (an additive run removes nothing, --prune "
+            "deletes orphans). Pass one.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2)
 
     # Load configuration. Every file is merged into one declaration first, so
     # the placeholder-secret guard and the scope-reference check below see the
@@ -207,6 +220,8 @@ def sync(
         )
     typer.echo(f"Config: {len(config.scopes)} scopes, {len(config.clients)} clients")
     typer.echo(f"Environment: {settings.env}")
+    if additive:
+        typer.echo(f"Additive: removals are held back (from {additive_source})")
 
     # Refuse to write dev placeholder secrets into a production realm. Checked
     # before authenticating so a misconfigured deployment fails on its own
@@ -255,6 +270,27 @@ def sync(
 
     if not result.success:
         raise typer.Exit(1)
+
+
+def _resolve_additive(
+    flag: bool | None, settings: KeycloakSettings
+) -> tuple[bool, str]:
+    """Whether this run is additive, and the input that said so.
+
+    `--additive` / `--no-additive` when given, else `CELINE_KEYCLOAK_SYNC_ADDITIVE`,
+    else off. The source is named in the banner and in the `--prune` refusal: a
+    run refused for a flag nobody typed has to say where the flag came from.
+    """
+    if flag is not None:
+        return flag, "--additive" if flag else "--no-additive"
+    if settings.sync_additive is not None:
+        return settings.sync_additive, ADDITIVE_ENV_VAR
+    return False, "the default"
+
+
+def _additive_named(source: str) -> str:
+    """The input that made this run additive, as the operator would write it."""
+    return "--additive" if source == "--additive" else f"{ADDITIVE_ENV_VAR}=true"
 
 
 def _fail_on_placeholder_secrets(config: KeycloakConfig) -> None:

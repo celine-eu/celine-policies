@@ -187,8 +187,26 @@ plan and in the result:
 | switch off a login flow (or `publicClient`) on a client that declares no `browser` block, while updating it | the flow is left on |
 | take `organization`, `groups`, `dataspace` off the realm default/optional scope lists | left on the lists; the scopes are still created and assigned to the oauth2-proxy client |
 
+A client's declared `browser` block is an update, not a removal: its `redirectUris` and
+`webOrigins` are written as declared, so a URI dropped from the file is dropped from the
+client under `--additive` too.
+
 `--additive --dry-run` lists the same held-back items without writing anything.
 `--additive` cannot be combined with `--prune`, and the pair exits 2 before connecting.
+
+Where the command cannot be handed an argument, set the environment instead:
+
+| input | effect |
+|---|---|
+| `CELINE_KEYCLOAK_SYNC_ADDITIVE=true` (or `1`, `yes`, `on`) | the run is additive |
+| `CELINE_KEYCLOAK_SYNC_ADDITIVE=false` (or `0`, `no`, `off`), empty, or unset | the run is not additive (the default) |
+| `--additive` | additive, whatever the variable says |
+| `--no-additive` | not additive, whatever the variable says |
+
+The flag overrides the variable either way. `--prune` is refused with an additive run
+from either source (exit 2); `--no-additive --prune` is allowed. An additive run says
+where it came from in its banner (`Additive: removals are held back (from …)`). Any
+other value of the variable is an error before the command starts.
 
 The trade is real: **a grant dropped from the files is not taken away until a run without
 the flag.** A deployment that only ever runs additive syncs never narrows a client,

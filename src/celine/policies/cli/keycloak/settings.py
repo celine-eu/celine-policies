@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 import secrets as _secrets
@@ -140,6 +140,27 @@ class KeycloakSettings(BaseSettings):
         description="Realm brute-force protection: on unless ENV is non-production",
     )
 
+    # `keycloak sync --additive` from the environment, for a run that cannot be
+    # handed an argument (an init container). Unset means off. The flag wins
+    # over it either way: `--additive` / `--no-additive`.
+    sync_additive: bool | None = Field(
+        default=None,
+        description="keycloak sync adds and updates only: true or false; unset is false",
+    )
+
+    @field_validator("sync_additive", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, value: Any) -> Any:
+        """An empty value is unset, not an error.
+
+        A chart that templates the variable from an empty value still sets it,
+        and every command reads these settings: failing them all on `""` would
+        turn an optional switch into a crash of `bootstrap` too.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @property
     def brute_force_protected(self) -> bool:
         """`bruteForceProtected` for this run (requester, 2026-09-14).
@@ -203,6 +224,7 @@ class KeycloakSettings(BaseSettings):
         return KeycloakSettings(
             env=self.env,
             brute_force_enabled=self.brute_force_enabled,
+            sync_additive=self.sync_additive,
             base_url=base_url or self.base_url,
             realm=realm or self.realm,
             timeout=self.timeout,
