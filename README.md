@@ -101,7 +101,7 @@ celine-policies/
 ```bash
 celine-policies keycloak bootstrap       # Converge platform.yaml; create the admin-cli service account
 celine-policies keycloak sync            # Sync clients.yaml scopes/clients to Keycloak
-celine-policies keycloak sync-users      # Import users from REC registry YAML
+celine-policies keycloak sync-users      # Import users from REC registry YAML (ENV=dev only; see ADR-0010)
 celine-policies keycloak sync-orgs       # Import organizations from owners YAML
 celine-policies keycloak set-password    # Set a user's password (development realms only)
 celine-policies keycloak seed-dev-users  # Create admin, manager, editor, viewer (development realms only)

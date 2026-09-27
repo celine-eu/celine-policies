@@ -1,7 +1,11 @@
 """keycloak sync-users command.
 
 Usage:
-    celine-policies keycloak sync-users [rec_yaml]
+    ENV=dev celine-policies keycloak sync-users [rec_yaml]
+
+Local development only (ADR-0010): it refuses unless ENV names a non-production
+environment, like seed-dev-users. On a deployed realm members arrive through
+onboarding and a community's organization through the provisioning reconcile.
 """
 
 from __future__ import annotations
@@ -443,6 +447,8 @@ def sync_users(
 ) -> None:
     """Ensure Keycloak users exist for every participant in a REC registry YAML.
 
+    Local development only: refuses unless ENV=dev (or local, test, ci).
+
     Reads the REC YAML, checks each participant's user_id against Keycloak,
     and creates any missing users with a temporary password (forced reset on
     first login), in their REC organization and its `viewers` org group. No
@@ -459,7 +465,7 @@ def sync_users(
 
     Examples:
         # zero-flag run if env vars are already set
-        celine-policies keycloak sync-users
+        ENV=dev celine-policies keycloak sync-users
 
         # explicit YAML, dry run
         celine-policies keycloak sync-users example-rec.yaml --dry-run
@@ -473,7 +479,8 @@ def sync_users(
             --group /community-gl \\
             --temp-password "Demo@2025"
 
-        # fully env-driven (CI/CD, docker-compose)
+        # fully env-driven (a local docker-compose stack)
+        ENV=dev \\
         CELINE_KEYCLOAK_BASE_URL=https://kc.example.com \\
         CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET=xxx \\
         CELINE_SYNC_USERS_REC_YAML=example-rec.yaml \\
@@ -496,6 +503,20 @@ def sync_users(
     )
 
     configure_logging(sync_settings.verbose)
+
+    # Local development only (ADR-0010): on a deployed realm members arrive
+    # through onboarding. The same guard seed-dev-users uses, checked before any
+    # source is read or Keycloak is asked anything, --dry-run and --check
+    # included, so a refused run has touched nothing.
+    if KeycloakSettings().is_production:
+        typer.secho(
+            "Error: sync-users runs only on a development realm: on a deployed "
+            "realm members arrive through onboarding (ADR-0010). Set ENV=dev "
+            "(or local, test, ci) if this is one.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
 
     if invite and (sync_settings.temp_password or reset_password):
         # An invitation exists so that nobody is handed a password. Creating one

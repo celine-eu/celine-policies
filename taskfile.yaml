@@ -58,9 +58,14 @@ tasks:
     cmds:
       - uv run celine-policies keycloak seed-dev-users
 
+  # sync-users refuses unless ENV=dev (ADR-0010: local development only). The
+  # file-level ENV above already sets it; each sync-users task says so again so
+  # the task keeps working if that default ever moves.
   keycloak:sync-users:
     deps: [keycloak:bootstrap]
-    desc: "Sync Keycloak users from REC registry YAML"
+    desc: "Sync Keycloak users from REC registry YAML (local development, ENV=dev)"
+    env:
+      ENV: dev
     vars:
       REC_YAML: '{{.CLI_ARGS | default "../rec-registry/recs/rec-example.yaml"}}'
     cmds:
@@ -68,7 +73,9 @@ tasks:
 
   keycloak:sync-users:registry:
     deps: [keycloak:bootstrap]
-    desc: "Sync Keycloak users from the live rec-registry (every community)"
+    desc: "Sync Keycloak users from the live rec-registry (every community; ENV=dev)"
+    env:
+      ENV: dev
     # The file-driven task above reconciles a snapshot, so it leaves out
     # everybody onboarding has approved since the export. This one reads the
     # registry. `celine-cli`'s secret is the clients.yaml placeholder in dev —
@@ -81,7 +88,9 @@ tasks:
         --password "demo" --mock
 
   keycloak:sync-users:check:
-    desc: "Report members whose Keycloak state does not match the registry"
+    desc: "Report members whose Keycloak state does not match the registry (ENV=dev)"
+    env:
+      ENV: dev
     vars:
       REGISTRY_URL: '{{.CLI_ARGS | default "http://api.celine.localhost/rec-registry"}}'
     cmds:

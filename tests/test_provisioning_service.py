@@ -66,6 +66,7 @@ class FakeKeycloak:
         users_by_email: dict[str, dict] | None = None,
         users_by_username: dict[str, dict] | None = None,
         organization_members: set[tuple[str, str]] | None = None,
+        org_group_members: set[tuple[str, str, str]] | None = None,
         organization_blackhole: bool = False,
         passwords_on: set[str] | None = None,
         send_error: Exception | None = None,
@@ -74,6 +75,9 @@ class FakeKeycloak:
         self.users_by_email = users_by_email or {}
         self.users_by_username = users_by_username or {}
         self.org_members = organization_members or set()
+        #: (org_id, group_id, user_id). The fake has no call that removes one:
+        #: a service that tried would fail on the missing method.
+        self.org_group_members = org_group_members or set()
         #: when set, `ensure_user_in_organization` reports success and the
         #: membership does not stick — the failure the sweep's assertion exists
         #: to catch.
@@ -151,6 +155,7 @@ class FakeKeycloak:
 
     async def ensure_user_in_org_group(self, org_id, group_id, user_id):
         self.calls.append(("ensure_user_in_org_group", org_id, group_id, user_id))
+        self.org_group_members.add((org_id, group_id, user_id))
 
     async def add_user_to_group_with_retry(self, user_id, group_id):
         pass
@@ -337,6 +342,49 @@ async def test_the_participant_is_filed_in_the_rec_organization_and_its_group(ke
         "grp-org-example-rec-viewers",
         "uuid-p@example.org",
     ) in kc.calls
+
+
+async def test_filing_a_manager_as_a_participant_keeps_their_managers_membership(
+    keycloak,
+):
+    """A manager who is also a participant onboards with the address their
+    manager account carries; approval adopts that account and adds `viewers`.
+    Losing `managers` would lock them out of their own dashboard.
+
+    @verifies REQ-0003
+    """
+    manager = {
+        "id": "uuid-manager",
+        "username": "manager@example.org",
+        "email": "manager@example.org",
+        "enabled": True,
+    }
+    managers = ("org-example-rec", "grp-org-example-rec-managers", "uuid-manager")
+    admins_elsewhere = ("org-example-dso", "grp-org-example-dso-admins", "uuid-manager")
+    kc = keycloak(
+        users_by_email={"manager@example.org": manager},
+        users_by_username={"manager@example.org": manager},
+        organization_members={("org-example-rec", "uuid-manager")},
+        org_group_members={managers, admins_elsewhere},
+    )
+
+    result = await a_service().ensure_participant(
+        community="example-rec", key="ex-00001", email="manager@example.org"
+    )
+
+    assert not result.created
+    assert result.keycloak_id == "uuid-manager"
+    assert kc.org_group_members == {
+        managers,
+        admins_elsewhere,
+        ("org-example-rec", "grp-org-example-rec-viewers", "uuid-manager"),
+    }
+    # Only additive calls were made: nothing that leaves, removes or deletes.
+    assert not [
+        c
+        for c in kc.calls
+        if any(word in c[0] for word in ("remove", "leave", "delete"))
+    ]
 
 
 async def test_the_organization_is_ensured_rather_than_required(keycloak):

@@ -251,7 +251,7 @@ the operator who approved, and `invited` is true only for `sent`:
 | `not_requested` | `invite` was false |
 | `sent` | Keycloak was asked to email an invitation: `UPDATE_PASSWORD` + `VERIFY_EMAIL`, valid `CELINE_PROVISIONING_INVITE_LIFESPAN` (7 days) |
 | `has_password` | The account already has a password; nothing was sent. A retry after the person set their password lands here |
-| `no_email` | The account has no email address, in every email mode; nothing was sent. Keycloak sends to the account's own address, so the body's `email` does not stand in for it. Typically an account `sync-users` made from the registry |
+| `no_email` | The account has no email address, in every email mode; nothing was sent. Keycloak sends to the account's own address, so the body's `email` does not stand in for it. Typically an account `sync-users` made from the registry, in local development |
 | `not_on_dev_list` | `CELINE_PROVISIONING_EMAIL_MODE=dev` and the address is not on `EMAIL_DEV_RECIPIENTS`; a `WARNING` names the member |
 | `account_disabled` | The account is disabled; nothing was sent, and it is not re-enabled |
 | `cooldown` | The account was emailed within `CELINE_PROVISIONING_INVITE_COOLDOWN`, by an upsert or by `…/invitation`; nothing was sent. Ask again after the cooldown |
@@ -282,7 +282,7 @@ updated" page with a link back to `CELINE_PROVISIONING_INVITE_REDIRECT_URI`, and
 in once with the password they chose.
 
 **The registry is not written from here.** The caller writes the member row, with the
-username this call returned — which keeps the registry single-writer and the step order
+username this call returned — which keeps member creation single-writer and the step order
 fail-closed: the login exists before the row that keys on it.
 
 ## POST /participants/{community}/{key}/invitation

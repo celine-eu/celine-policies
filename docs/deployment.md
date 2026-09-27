@@ -10,7 +10,7 @@ The `docker-compose.yaml` defines the full development stack:
 |---------|-------|------|-------------|
 | `keycloak` | Custom (from `keycloak/Dockerfile`) | 8080 | Identity provider with `rec` login and email themes |
 | `keycloak-sync` | Same as `mqtt_auth` | — | Runs `bootstrap` + `sync` on startup, then exits |
-| `sync-users` | Same as `mqtt_auth` | — | Imports example REC users, then exits |
+| `sync-users` | Same as `mqtt_auth` | — | Imports example REC users with `ENV=dev`, then exits |
 | `mqtt_auth` | From `./Dockerfile` | 8009 | MQTT auth HTTP backend |
 | `provisioning` | Same as `mqtt_auth` | 8010, **not published** | The only writer of participant accounts |
 | `mosquitto` | `ghcr.io/lhns/mosquitto-go-auth:3.3.0-mosquitto_2.0.22` | 1883, 1884 | MQTT broker (TCP + WebSocket) |
@@ -242,20 +242,33 @@ Environment variables with `CELINE_SYNC_USERS_` prefix:
 
 A **file** is a picture of the community at export time, so a run against one
 leaves out everybody `onboarding` has approved since it was taken. A run against
-the **registry** reconciles what is true. Both are supported and neither is
-deprecated: bootstrap runs before the registry holds anything, and an offline run
-is a real case.
+the **registry** reconciles what is true. Both are supported **for local
+development**: a developer's realm is set up before the registry holds anything,
+and an offline run is a real case there.
+
+**`sync-users` runs only with `ENV=dev`** (or `local`, `test`, `ci`: the guard
+`seed-dev-users` uses, `KeycloakSettings.is_production`). Unset, `prod`, `staging` or
+any other value, it exits 1 before it reads a source or asks Keycloak anything,
+`--dry-run` and `--check` included, and says to set `ENV=dev` if the realm is a
+development one. `CELINE_KEYCLOAK_ENV` and `CELINE_ENV` outrank `ENV`.
+
+**On a deployed realm `sync-users` writes nothing, from either source.** Members
+arrive through `onboarding`, and a community's organization, org roles and org
+groups come from the provisioning service's `POST /reconcile/{community}`, which
+onboarding calls; a manager's `managers` group is added with
+`keycloak set-user-organization`. See
+[ADR-0010](decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md).
 
 ```bash
-# the file path, unchanged
-celine-policies keycloak sync-users example-rec.yaml
+# the file path
+ENV=dev celine-policies keycloak sync-users example-rec.yaml
 
 # the live registry, every community it holds
-celine-policies keycloak sync-users --from-registry \
+ENV=dev celine-policies keycloak sync-users --from-registry \
   --registry-url http://api.celine.localhost/rec-registry
 
 # one community, and report divergence without writing anything
-celine-policies keycloak sync-users --from-registry \
+ENV=dev celine-policies keycloak sync-users --from-registry \
   --registry-url http://api.celine.localhost/rec-registry \
   --community example-renewable-community --check
 ```

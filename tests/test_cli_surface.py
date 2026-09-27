@@ -168,8 +168,10 @@ class TestSyncUsersOptions:
     def test_invitations_are_offered(self, help_text: str):
         assert "--invite" in help_text
 
-    def test_invite_refuses_a_password_it_would_hand_out(self, tmp_path):
-        """An invitation exists so that nobody is handed a password."""
+    def test_invite_refuses_a_password_it_would_hand_out(self, tmp_path, monkeypatch):
+        """An invitation exists so that nobody is handed a password. On a
+        development realm: anywhere else the command refuses before this."""
+        monkeypatch.setenv("ENV", "dev")
         rec = tmp_path / "rec.yaml"
         rec.write_text("community: {id: gl, name: GL}\nmembers: {}\n")
 

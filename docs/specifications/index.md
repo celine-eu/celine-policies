@@ -1,0 +1,63 @@
+# Requirements
+
+What this repository must do, stated so that a test can name it.
+
+This directory started on 2026-09-27 with the provisioning service's part in a community
+that starts clean ([ADR-0010](../decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)).
+It does not yet describe the rest of the repository: the Keycloak CLI, the MQTT auth backend
+and the Rego policies are described in [`docs/`](../architecture.md) and pinned by their
+tests, and gain requirements here when a change needs one.
+
+## Planned and implemented
+
+A requirement is **implemented** unless it says otherwise: it describes what the code does
+today, and at least one test declares it.
+
+A requirement may land **ahead of the code**, marked with a line directly under its heading:
+
+```markdown
+**Status:** planned
+```
+
+A planned requirement describes the behaviour a change will deliver. It carries no test yet,
+and is not reported as uncovered. It turns implemented — the status line is deleted — in the
+change that makes its tests pass and tags them. A planned requirement that no change is
+delivering any more is deleted, not left behind.
+
+## How a requirement is verified
+
+A test declares what it covers with a `@verifies REQ-####` tag in its docstring:
+
+```python
+def test_only_onboarding_holds_a_provisioning_scope():
+    """Every holder of any `provisioning.*` scope other than the service itself.
+
+    @verifies REQ-0001
+    """
+```
+
+The mapping is a projection of the two and is never written by hand. Until the harness
+checker is available in this checkout, the projection is a grep:
+
+```bash
+grep -rho --include='*.py' "@verifies REQ-[0-9]\{4\}" tests/ | sort | uniq -c
+grep -rhoE '^### (REQ-[0-9]{4})' docs/specifications/*.md | sort
+```
+
+Read it both ways: an implemented requirement no test declares is unverified, and a tag
+naming a requirement that does not exist is a typo.
+
+## The requirements
+
+| | |
+|---|---|
+| REQ-0001 – REQ-0003 | [provisioning](provisioning.md) — who may call the provisioning service, and what it creates for a community |
+| REQ-0004 – REQ-0005 | [client grants](client-grants.md) — which scopes a client holds as default and which as optional, where a decision fixed it |
+| REQ-0006 | [Keycloak CLI](keycloak-cli.md) — what a `celine-policies keycloak` command may do, where a decision fixed it |
+
+## What is not here
+
+- **Why** a choice was made — [`docs/decisions/`](../decisions/index.md).
+- What the system *is* — [`docs/architecture.md`](../architecture.md) and
+  [`docs/api-reference.md`](../api-reference.md).
+- Anything broken — the issue tracker.

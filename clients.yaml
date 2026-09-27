@@ -88,6 +88,10 @@ scopes:
     description: Permanently erase a member and its assets (erasure requests)
   - name: rec-registry.assets.write
     description: Create, update and delete member assets
+  # Narrower than members.write on purpose: role and area only, never user_id,
+  # DID or status. members.write and .admin also satisfy it (the registry's rule).
+  - name: rec-registry.members.profile.write
+    description: Change one member's role and area, nothing else
   - name: rec-registry.community.write
     description: Update community metadata, areas and topology
   - name: rec-registry.import
@@ -468,7 +472,9 @@ clients:
       - dataset.query
       # Aggregate population, and member names for the members page, read per
       # request and never persisted. No email, user id, DID or supply point leaves
-      # the BFF process.
+      # the BFF process. A meter's sensor id is the one registry value a manager
+      # types in: entered as free text in the meter dialog, it travels from the
+      # BFF to the registry and nowhere else (ADR-0011).
       - rec-registry.read
       # Aggregate-only operational metrics; nudging-tool retains participant records.
       - nudging.analytics.read
@@ -480,6 +486,15 @@ clients:
       # svc-onboarding is derived from it. No provisioning.* scope, ever:
       # onboarding is the single point of access to the provisioning service.
       - onboarding.members.invite
+      # Optional for the same reason: the BFF writes a member's meter and profile
+      # to the registry with its own token, requesting each scope only for the one
+      # write that needs it; the dashboard's policy decides which manager may press
+      # (ADR-0011). assets.write attaches and detaches a meter;
+      # members.profile.write changes role and area.
+      # rec-registry.members.write stays refused: it would also rewrite user_id,
+      # DID and status.
+      - rec-registry.assets.write
+      - rec-registry.members.profile.write
 
   - client_id: svc-webapp
     name: Webapp BFF Service

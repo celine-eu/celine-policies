@@ -69,10 +69,17 @@ environment; `--additive` / `--no-additive` override it.
 
 ### Step 4: Sync Users (optional)
 
+Local development only: on a deployed realm members arrive through onboarding
+([ADR-0010](decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)).
+`sync-users` runs only with `ENV=dev` (or `local`, `test`, `ci`), the guard `seed-dev-users`
+uses: unset, `prod`, `staging` or anything else, it refuses before it reads a source or
+asks Keycloak anything, `--dry-run` and `--check` included. `task keycloak:sync-users*`
+and the compose stack's `sync-users` service set it.
+
 Import users from a `rec-registry` REC definition YAML:
 
 ```bash
-celine-policies keycloak sync-users ../rec-registry/recs/rec-example.yaml \
+ENV=dev celine-policies keycloak sync-users ../rec-registry/recs/rec-example.yaml \
     --password "demo" --mock
 ```
 
@@ -139,7 +146,7 @@ task debug            # Start with debugger attached
 task test             # Run pytest suite
 task keycloak:bootstrap   # Bootstrap admin client
 task keycloak:sync        # Sync clients.yaml to Keycloak
-task keycloak:sync-users  # Sync example REC users
+task keycloak:sync-users  # Sync example REC users (sets ENV=dev)
 task keycloak:sync-orgs   # Sync organizations from owners.yaml
 ```
 

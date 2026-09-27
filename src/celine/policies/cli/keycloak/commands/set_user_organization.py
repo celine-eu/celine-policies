@@ -3,7 +3,11 @@
 Usage:
     celine-policies keycloak set-user-organization <username> \
         --organization myorg1 --organization orgB \
-        --group admin --group manager
+        --group admins --group managers
+
+Group names are the organization's own groups, plural: admins, managers,
+editors, viewers (ROLE_HIERARCHY). A name the organization does not have is
+refused before anything is written.
 """
 
 from __future__ import annotations
@@ -36,7 +40,14 @@ def set_user_organization(
     ],
     groups: Annotated[
         Optional[list[str]],
-        typer.Option("--group", "-g", help="Organization group to assign (repeatable)"),
+        typer.Option(
+            "--group",
+            "-g",
+            help=(
+                "Organization group to assign, by its plural name: admins, "
+                "managers, editors, viewers (repeatable)"
+            ),
+        ),
     ] = None,
     # Connection options
     base_url: Annotated[
@@ -76,7 +87,7 @@ def set_user_organization(
     not already a member, and added to each group in every organization.
 
     Examples:
-        celine-policies keycloak set-user-organization user1 -o myorg1 -o orgB -g admin -g manager
+        celine-policies keycloak set-user-organization user1 -o myorg1 -o orgB -g admins -g managers
         celine-policies keycloak set-user-organization user1 -o myorg1
         celine-policies keycloak set-user-organization user1 -o myorg1 -g viewers --dry-run
     """

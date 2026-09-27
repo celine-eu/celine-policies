@@ -46,7 +46,10 @@ def _client(config: KeycloakConfig, client_id: str) -> ClientConfig:
 
 
 def test_only_onboarding_holds_a_provisioning_scope():
-    """Every holder of any `provisioning.*` scope other than the service itself."""
+    """Every holder of any `provisioning.*` scope other than the service itself.
+
+    @verifies REQ-0001
+    """
     config = _merged()
 
     holders = {
@@ -67,7 +70,10 @@ def test_onboarding_holds_the_participant_write_scope_and_nothing_wider():
 
 
 def test_the_base_file_alone_says_the_same():
-    """The overlay must not be what makes the posture hold."""
+    """The overlay must not be what makes the posture hold.
+
+    @verifies REQ-0001
+    """
     config = KeycloakConfig.from_yaml(CLIENTS_YAML)
 
     holders = {
@@ -92,14 +98,22 @@ def test_svc_community_holds_no_provisioning_scope():
     community = _client(_merged(), "svc-community")
 
     assert _provisioning_scopes(community) == set()
-    # Its one optional scope is onboarding's, which is how it reaches the
-    # provisioning service instead.
-    assert community.optional_scopes == ["onboarding.members.invite"]
+    # Its optional scopes: onboarding's, which is how it reaches the
+    # provisioning service instead, and the two registry writes of the manager
+    # dialogs (ADR-0011, REQ-0005). Nothing else.
+    assert community.optional_scopes == [
+        "onboarding.members.invite",
+        "rec-registry.assets.write",
+        "rec-registry.members.profile.write",
+    ]
 
 
 def test_nobody_else_gets_a_token_addressed_to_the_service():
     """An audience onto `svc-provisioning` is derived from a provisioning scope,
-    or declared by hand in `extra_audiences`. Either way, only onboarding."""
+    or declared by hand in `extra_audiences`. Either way, only onboarding.
+
+    @verifies REQ-0001
+    """
     config = _merged()
     prefix_map = config.build_prefix_to_client_map()
 
