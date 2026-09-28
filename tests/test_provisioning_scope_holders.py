@@ -61,12 +61,26 @@ def test_only_onboarding_holds_a_provisioning_scope():
     assert holders == {SOLE_CALLER}
 
 
-def test_onboarding_holds_the_participant_write_scope_and_nothing_wider():
-    """Not `.admin`, which satisfies every provisioning scope, and not
-    `.reconcile`, which sweeps a whole community."""
-    onboarding = _client(_merged(), SOLE_CALLER)
+def test_onboarding_holds_the_participant_write_and_reconcile_and_nothing_wider():
+    """Not `.admin`, which satisfies every provisioning scope.
 
-    assert _provisioning_scopes(onboarding) == {"provisioning.participants.write"}
+    `.reconcile` sweeps a whole community, so it is **optional**: onboarding
+    requests it only for the registry sync's "set up community" step, which a
+    realm admin starts (ADR-0011, REQ-0004). A default-scope token of this
+    client carries `participants.write` and no sweep.
+
+    @verifies REQ-0004
+    """
+    for config in (KeycloakConfig.from_yaml(CLIENTS_YAML), _merged()):
+        onboarding = _client(config, SOLE_CALLER)
+
+        assert _provisioning_scopes(onboarding) == {
+            "provisioning.participants.write",
+            "provisioning.reconcile",
+        }
+        assert "provisioning.participants.write" in onboarding.default_scopes
+        assert "provisioning.reconcile" in onboarding.optional_scopes
+        assert "provisioning.reconcile" not in onboarding.default_scopes
 
 
 def test_the_base_file_alone_says_the_same():

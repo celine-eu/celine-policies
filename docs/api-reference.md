@@ -191,6 +191,8 @@ check is defence in depth, for a caller already inside the network.
 **`svc-onboarding` is the only client granted a `provisioning.*` scope.** Onboarding is the
 single point of access to this service; see
 [scopes-and-permissions.md](scopes-and-permissions.md#provisioning).
+It holds `provisioning.participants.write` by default and `provisioning.reconcile` as an
+optional scope, which its registry sync requests only for the reconcile call.
 A community manager's "Send invitation" and "Reset password" on the dashboard reach
 `POST …/invitation` through onboarding's member-keyed routes. `svc-community` holds
 `onboarding.members.invite` for that, never a provisioning scope.
@@ -372,8 +374,18 @@ disabled — skipping provisioning and revoking access are different acts.
 
 **Response (500)** when the assertion finds anything: the same body, under `detail`, with
 the divergences listed, and `code: "reconcile_diverged"` and a `message` beside them.
-`404` `community_not_found` for a community the registry does not have. Everything checked is something this same call claimed to have
-done, so a finding is a provisioning call that reported success and had not succeeded. It
+`404` `community_not_found` for a community the registry does not have, and nothing is
+created in Keycloak.
+
+**A community with no active member is set up, not refused:** the organization, its org
+roles and its org groups (`admins`, `managers`, `editors`, `viewers`) are ensured, and the
+answer is `200` with `members: 0`; a second call creates nothing. This is onboarding's
+registry sync's "set up community" step, with a `svc-onboarding` token that requested
+`provisioning.reconcile` for that call
+([REQ-0002](specifications/provisioning.md)).
+
+The divergence answer is a `500` because everything the assertion checks is something this
+same call claimed to have done, so a finding is a provisioning call that reported success and had not succeeded. It
 fails loudly rather than repairing quietly — a `200` with a list nobody reads is how 10 of
 45 members ended up outside their own organization with nothing saying so.
 

@@ -1274,3 +1274,132 @@ async def test_more_than_one_document_for_one_community_is_refused(keycloak, reg
 
     with pytest.raises(ProvisioningError):
         await a_service().reconcile("example-rec")
+
+
+# --- setting up a community that has no members yet -----------------------
+
+#: A community the registry holds and nobody has been approved into: what a
+#: clean community looks like before its first onboarding (ADR-0010). The
+#: registry exports it with an empty `members` map.
+EMPTY_REC = {
+    "community": {"id": "example-rec", "name": "Example REC", "type": "rec"},
+    "members": {},
+}
+
+
+class OrganizationKeycloak(FakeKeycloak):
+    """A fake that remembers the organizations, org roles and org groups it
+    was asked for, so a second call can be seen to create nothing."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        #: alias -> org id
+        self.organizations: dict[str, str] = {}
+        #: (org id, role name)
+        self.org_roles: set[tuple[str, str]] = set()
+        #: (org id, group name) -> group id
+        self.org_groups: dict[tuple[str, str], str] = {}
+        #: every create, in order: ("organization", alias), ("role", org, name), ...
+        self.created: list[tuple] = []
+
+    async def ensure_organization(self, *, alias, name, description, attributes):
+        self.calls.append(("ensure_organization", alias))
+        if alias in self.organizations:
+            return self.organizations[alias], False
+        self.organizations[alias] = f"org-{alias}"
+        self.created.append(("organization", alias))
+        return self.organizations[alias], True
+
+    async def ensure_org_role(self, org_id, role_name):
+        if (org_id, role_name) not in self.org_roles:
+            self.org_roles.add((org_id, role_name))
+            self.created.append(("role", org_id, role_name))
+
+    async def ensure_org_group(self, org_id, name):
+        if (org_id, name) in self.org_groups:
+            return self.org_groups[(org_id, name)], False
+        group_id = f"grp-{org_id}-{name}"
+        self.org_groups[(org_id, name)] = group_id
+        self.created.append(("group", org_id, name))
+        return group_id, True
+
+
+@pytest.fixture
+def organization_keycloak(monkeypatch: pytest.MonkeyPatch) -> OrganizationKeycloak:
+    fake = OrganizationKeycloak()
+    monkeypatch.setattr(service_module, "KeycloakAdminClient", lambda *a, **k: fake)
+    return fake
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        EMPTY_REC,
+        {"community": EMPTY_REC["community"]},
+        {
+            "community": EMPTY_REC["community"],
+            "members": {"ex-00001": {"user_id": "ex-00001", "status": "pending"}},
+        },
+    ],
+    ids=["empty-members", "no-members-key", "only-pending"],
+)
+async def test_a_community_with_no_members_gets_its_organization_roles_and_groups(
+    organization_keycloak, registry, document
+):
+    """The organization, and the whole of `ROLE_HIERARCHY` as org roles and org
+    groups, before anybody is approved — which is how a clean community gets
+    them on a deployed realm.
+
+    @verifies REQ-0002
+    """
+    kc = organization_keycloak
+    registry(documents=[document])
+
+    result = await a_service().reconcile("example-rec")
+
+    assert result.community == "example-rec"
+    assert (result.members, result.created, result.existing) == (0, 0, 0)
+    assert result.divergences == ()
+    assert kc.organizations == {"example-rec": "org-example-rec"}
+    assert kc.org_roles == {
+        ("org-example-rec", role) for role in ["admins", "managers", "editors", "viewers"]
+    }
+    assert set(kc.org_groups) == {
+        ("org-example-rec", group) for group in ["admins", "managers", "editors", "viewers"]
+    }
+    # No account is created or touched for a community nobody belongs to.
+    assert not [c for c in kc.calls if c[0] in ("ensure_user", "ensure_user_in_organization")]
+
+
+async def test_a_second_setup_of_a_community_with_no_members_creates_nothing(
+    organization_keycloak, registry
+):
+    """@verifies REQ-0002"""
+    kc = organization_keycloak
+    registry(documents=[EMPTY_REC])
+
+    await a_service().reconcile("example-rec")
+    first = list(kc.created)
+    second = await a_service().reconcile("example-rec")
+
+    assert len(first) == 1 + 4 + 4
+    assert kc.created == first
+    assert (second.members, second.created, second.existing) == (0, 0, 0)
+
+
+async def test_setting_up_a_community_the_registry_does_not_have_creates_nothing(
+    organization_keycloak, registry
+):
+    """`404 community_not_found`, and Keycloak is never opened.
+
+    @verifies REQ-0002
+    """
+    kc = organization_keycloak
+    registry(error=RegistryCommunityNotFound("http://registry has no community example-rec"))
+
+    with pytest.raises(CommunityNotFound) as excinfo:
+        await a_service().reconcile("example-rec")
+
+    assert excinfo.value.code == "community_not_found"
+    assert kc.calls == []
+    assert kc.created == []

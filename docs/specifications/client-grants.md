@@ -8,8 +8,6 @@ it. The scope families are described in
 
 ### REQ-0004 — `svc-onboarding` holds its write scopes as optional and its reads as default
 
-**Status:** planned
-
 For the manager features and the registry sync
 ([ADR-0011](../decisions/ADR-0011-the-dashboard-writes-registry-data-with-optional-scopes.md)),
 `svc-onboarding`'s declaration in `clients.yaml` holds, over `clients.yaml` alone and merged
@@ -22,6 +20,9 @@ with the ds-host overlay:
   a supply address to a boundary and validates a template's boundary ids; the second reads a
   community's areas, topology and member counts, which the registry's community `GET` routes
   require.
+- **Exactly those two optional scopes.** A token onboarding uses for everything else carries
+  neither, so the provisioning service refuses it on `POST /reconcile/{community}` with
+  `403 insufficient_scope`; a token that requested `provisioning.reconcile` is accepted there.
 - **Nothing wider than before in the provisioning family.** `provisioning.participants.write`
   stays a default scope, `provisioning.admin` stays refused, and REQ-0001 still holds.
 

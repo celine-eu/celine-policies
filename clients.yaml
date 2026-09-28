@@ -394,7 +394,7 @@ clients:
       # membership, not from scopes, via the oauth2-proxy audience mapper.
       - onboarding.admin
       # Dependencies — provisioning a participant's login, which this service
-      # will do by calling svc-provisioning instead of the Keycloak Admin API.
+      # does by calling svc-provisioning instead of the Keycloak Admin API.
       # Granted ahead of the switch on purpose: it is what makes that switch a
       # code change in `../onboarding` rather than a realm change that has to
       # land in the same breath. A scope held by a service that does not yet
@@ -415,6 +415,35 @@ clients:
       # supply points to any export.
       - rec-registry.members.write
       - rec-registry.lookup
+      # **The Digital Twin's boundary lookups** (ADR-0011, REQ-0004): resolving a
+      # supply address to the boundary it falls in, at save, submit and
+      # approval, and validating a template's boundary ids at import. A read,
+      # so a default scope. The audience mapper onto svc-digital-twin is derived
+      # from this line.
+      - digital-twin.values.read
+      # **The registry sync's reads** (ADR-0011, REQ-0004): a community's areas,
+      # topology and member counts, for the sync's dry run, its prune count and
+      # the console's drift check. The registry's community `GET` routes derive
+      # the action `read`, which neither `members.write` nor `lookup` satisfies.
+      # A read, so a default scope; svc-community holds the same one.
+      - rec-registry.read
+    # **Optional, requested per call** (ADR-0011, REQ-0004): the two writes of the
+    # registry sync a realm admin starts from the console or the onboarding CLI.
+    # Not default, because a default-scope token of this client must carry no
+    # community write and no sweep.
+    #
+    # `rec-registry.community.write` writes a community's areas and topology
+    # from its onboarding template. Registry-wide, like every registry grant;
+    # onboarding only syncs the communities its templates bind.
+    #
+    # `provisioning.reconcile` is the sync's "set up community" step: the
+    # provisioning sweep that ensures the Keycloak organization, its roles and
+    # groups, before any member exists (ADR-0010, REQ-0002). Onboarding stays
+    # the only provisioning caller (REQ-0001), and holds nothing wider: never
+    # `provisioning.admin`.
+    optional_scopes:
+      - rec-registry.community.write
+      - provisioning.reconcile
 
   # The `onboarding-cli` review/enablement commands. Holds the superset because it
   # is the break-glass and e2e driver; a narrower client is what a scheduled job

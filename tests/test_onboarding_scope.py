@@ -92,7 +92,7 @@ class TestOnboardingClients:
         assert onb.scopes_prefix == "onboarding"
         assert "onboarding.admin" in onb.default_scopes
 
-    def test_svc_onboarding_calls_exactly_two_other_services(self):
+    def test_svc_onboarding_calls_exactly_three_other_services(self):
         """It used to reference only its own scopes and derive no mapper at all.
 
         `svc-provisioning` for a participant's login, instead of reaching
@@ -106,15 +106,20 @@ class TestOnboardingClients:
         before it reads a scope. `ensure_member_did` never raises by design, so
         the symptom was a member who consents and exports nothing.
 
-        A **third** audience appearing here means somebody widened what the
+        `svc-digital-twin` for the boundary lookups (ADR-0011, REQ-0004):
+        resolving a supply address to its boundary and validating a template's
+        boundary ids, with `digital-twin.values.read` and nothing wider.
+
+        A **fourth** audience appearing here means somebody widened what the
         public onboarding front door can call, and that is the thing to argue
-        for. Note what is deliberately absent from the two it has:
+        for. Note what is deliberately absent from the registry scopes it has:
         `rec-registry.import` and `.members.purge`, either of which would let
         the front door destroy a community.
         """
         config = _config()
         onb = next(c for c in config.clients if c.client_id == "svc-onboarding")
         assert onb.desired_audiences(config.build_prefix_to_client_map()) == {
+            "svc-digital-twin",
             "svc-provisioning",
             "svc-rec-registry",
         }
@@ -124,7 +129,39 @@ class TestOnboardingClients:
         assert registry_scopes == {
             "rec-registry.members.write",
             "rec-registry.lookup",
+            "rec-registry.read",
         }
+        # The registry sync's community write and the provisioning sweep are
+        # optional, requested per call (ADR-0011, REQ-0004), and add no audience:
+        # both land on services this client already addresses.
+        assert set(onb.optional_scopes) == {
+            "rec-registry.community.write",
+            "provisioning.reconcile",
+        }
+
+    def test_svc_onboarding_reads_the_digital_twin_by_default_and_nothing_wider(
+        self,
+    ):
+        """The boundary lookups run on every save, submit and approval, and at
+        template import, so the read is a default scope (ADR-0011, REQ-0004).
+        It is the only Digital Twin scope onboarding holds, in either list,
+        over the base file and merged with the ds-host overlay.
+        """
+        for config in (
+            _config(),
+            KeycloakConfig.from_yaml_files(
+                [CLIENTS_YAML, DS_HOST_YAML], complete=False
+            ),
+        ):
+            onb = next(
+                c for c in config.clients if c.client_id == "svc-onboarding"
+            )
+            assert "digital-twin.values.read" in onb.default_scopes
+            assert {
+                s
+                for s in [*onb.default_scopes, *onb.optional_scopes]
+                if s.startswith("digital-twin.")
+            } == {"digital-twin.values.read"}
 
     def test_user_tokens_will_carry_the_console_audience(self):
         """oauth2-proxy gets a mapper for every client with a scopes_prefix.

@@ -54,7 +54,12 @@ run instead of writing them:
 
 1. **platform** — `platform.yaml`, written by `bootstrap`;
 2. **clients** — `clients.yaml`, written by `sync`;
-3. **organizations and users** — written by `sync-orgs`, `sync-users` and the provisioning service.
+3. **organizations and users** — written by the provisioning service (its
+   `POST /reconcile/{community}`, called by onboarding's registry sync, creates a REC's
+   organization, org roles and groups, even with no members), `set-user-organization` (a
+   manager's `managers` or `admins` group, run by a platform admin), `sync-orgs`, and
+   `sync-users` in local development only
+   ([ADR-0010](decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)).
 
 **Commands:**
 - `bootstrap` — converge the platform level from `platform.yaml` (only the keys it declares;
@@ -82,7 +87,9 @@ run instead of writing them:
 - `seed-dev-users` — create the development users (`admin`, `manager`, `editor`, `viewer`, from
   `config/keycloak/dev-users.yaml`) with their groups; development realms only, and a password is
   never reset
-- `set-user-organization` — assign a user to organizations and org-level groups
+- `set-user-organization` — assign a user to organizations and org-level groups; group names
+  are plural (`admins`, `managers`, `editors`, `viewers`) and a group the organization does not
+  have is refused, so it runs after the reconcile has created the organization
 - `status` — show current scopes, clients, and assignments
 
 Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time.

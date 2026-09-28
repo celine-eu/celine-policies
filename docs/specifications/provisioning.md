@@ -21,8 +21,6 @@ of its own, so a second holder is a change somebody has to argue for, and fails 
 
 ### REQ-0002 — a reconcile sets up a community that has no members yet
 
-**Status:** planned
-
 `POST /reconcile/{community}` ensures the community's Keycloak organization, its org roles and
 its org groups (the whole of `ROLE_HIERARCHY`: `admins`, `managers`, `editors`, `viewers`)
 **even when the registry community has no active member**, and answers `200` with
@@ -34,7 +32,9 @@ in Keycloak.
 This is how a clean community gets its organization on a deployed realm, before any member
 is approved and before a platform admin adds the managers' group
 ([ADR-0010](../decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)).
-The `404` already holds; the zero-member setup is what the code does today and no test pins.
+The caller is onboarding's registry sync, as its "set up community" step, with a
+`svc-onboarding` token that requested the optional `provisioning.reconcile` for that call
+(REQ-0004).
 
 ### REQ-0003 — filing a participant keeps the org groups they already have
 

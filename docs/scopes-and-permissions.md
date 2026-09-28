@@ -158,6 +158,9 @@ The service that writes participant accounts into the realm, and the only thing 
 provisioning service (requester, 2026-09-14): no other client calls it directly, and a
 `provisioning.*` grant to one is a change to argue for. `tests/test_provisioning_scope_holders.py`
 fails when a second client is granted one, over `clients.yaml` and the ds-host overlay.
+Onboarding holds `provisioning.participants.write` as a default scope and
+`provisioning.reconcile` as an optional one, for its registry sync's "set up community" step
+([svc-onboarding](#svc-onboarding)); never `provisioning.admin`.
 
 ---
 
@@ -301,6 +304,11 @@ default_scopes:
   - provisioning.participants.write
   - rec-registry.members.write   # approval registers the member; the dataspace step writes its DID
   - rec-registry.lookup          # the POD export reads back what each consenting DID holds
+  - digital-twin.values.read     # resolve a supply address to its boundary; validate a template's boundary ids
+  - rec-registry.read            # the registry sync's dry run, prune count and drift check
+optional_scopes:                 # requested per call, only by the registry sync
+  - rec-registry.community.write # write a community's areas and topology from its template
+  - provisioning.reconcile       # "set up community": the organization, its roles and groups
 ```
 
 **It administers nothing in the realm, and that is the point.** It held a fine-grained
@@ -321,11 +329,34 @@ audiences, that one authenticates outbound M2M.
 See [Realm administration](#realm-administration) below for what that block is and who
 else holds one.
 
-*Planned* ([ADR-0011](decisions/ADR-0011-the-dashboard-writes-registry-data-with-optional-scopes.md),
-[REQ-0004](specifications/client-grants.md)): `digital-twin.values.read` and
-`rec-registry.read` join the default scopes, and `provisioning.reconcile` and
-`rec-registry.community.write` arrive as **optional** scopes that onboarding requests only for
-the registry sync's calls. The block above changes in the change that grants them.
+`digital-twin.values.read` is the Digital Twin's boundary lookups
+([ADR-0011](decisions/ADR-0011-the-dashboard-writes-registry-data-with-optional-scopes.md),
+[REQ-0004](specifications/client-grants.md)): onboarding resolves a submission's supply address
+to the boundary it falls in, at save, submit and approval, and validates a boundary
+template's ids at import. It is a read, so a default scope, and it derives the audience
+mapper onto `svc-digital-twin`; a realm has it only after `keycloak sync`.
+
+`rec-registry.read` is the registry sync's reads (same ADR and requirement): a community's
+areas, topology and member counts, for the sync's dry run, its prune count and the console's
+drift check. The registry's community `GET` routes derive the action `read`, which neither
+`members.write` nor `lookup` satisfies. It is a read, so a default scope; `svc-community`
+holds the same one.
+
+**The registry sync's two writes are optional scopes**, requested per call, so the token
+onboarding uses for everything else carries no community write and no sweep:
+
+- `rec-registry.community.write` writes a community's areas and topology from its onboarding
+  template. Registry-wide, like every registry grant; onboarding only syncs the communities
+  its templates bind.
+- `provisioning.reconcile` is the sync's "set up community" step: `POST /reconcile/{community}`
+  on the provisioning service, which ensures the Keycloak organization, its roles and its
+  groups even before the community has a member
+  ([REQ-0002](specifications/provisioning.md)). The provisioning service refuses a
+  `svc-onboarding` token that did not request it with `403 insufficient_scope`.
+
+Neither adds an audience: both land on services this client already addresses. A realm has
+the optional assignments only after `keycloak sync`, and the sync is started by a realm admin
+(onboarding's `recs.write`), never on a template reload.
 
 ### svc-onboarding-cli
 

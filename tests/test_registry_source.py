@@ -299,20 +299,30 @@ class TestFetchRecDocuments:
         [
             # the registry's own answer for an unknown key
             (b'{"detail":"\'Community not found: nowhere\'"}', ["nowhere"], True),
+            # the same answer carrying the registry's error code beside the
+            # sentence (`{detail, code}`), which must not change the reading
+            (
+                b'{"detail":"Community not found: nowhere","code":"community_not_found"}',
+                ["nowhere"],
+                True,
+            ),
             # FastAPI's unrouted path: a wrong registry URL, an outage
             (b'{"detail":"Not Found"}', ["nowhere"], False),
             (b"<html>not found</html>", ["nowhere"], False),
             # an unnarrowed export names no community to be missing
             (b'{"detail":"\'Community not found: nowhere\'"}', None, False),
         ],
-        ids=["unknown-community", "unrouted", "not-json", "unnarrowed"],
+        ids=["unknown-community", "coded", "unrouted", "not-json", "unnarrowed"],
     )
     async def test_a_404_is_an_unknown_community_only_when_the_registry_says_so(
         self, monkeypatch: pytest.MonkeyPatch, content, keys, unknown_community
     ):
         """The provisioning service answers `community_not_found` on this, and
         `../onboarding` reads a `404` on disable as "nothing left to revoke" —
-        so a misconfigured URL must stay an outage."""
+        so a misconfigured URL must stay an outage.
+
+        @verifies REQ-0002
+        """
 
         class UnexpectedStatus(Exception):
             def __init__(self, status_code, content):

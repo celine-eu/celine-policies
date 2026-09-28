@@ -15,11 +15,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
+from celine.sdk.settings.models import OidcSettings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.provisioning import routes as routes_module
+from celine.provisioning import service as service_module
 from celine.provisioning.config import ProvisioningSettings
+from celine.provisioning.registry import RegistryCommunityNotFound
 from celine.provisioning.routes import get_service, get_settings, router
 from celine.provisioning.service import (
     AccountDisabled,
@@ -34,6 +38,7 @@ from celine.provisioning.service import (
     NoEmail,
     NoPassword,
     ProvisioningError,
+    ProvisioningService,
     ReconcileResult,
     RegistryUnavailable,
     SendFailed,
@@ -434,6 +439,7 @@ def test_every_404_says_which_thing_is_missing(app_with, path, error, code):
 
 
 def test_a_sweep_of_a_community_the_registry_does_not_have_is_404(app_with):
+    """@verifies REQ-0002"""
     client, _ = app_with(
         scopes=RECONCILE,
         service=FakeService(raises=CommunityNotFound("The registry has no community 'nowhere'")),
@@ -666,3 +672,235 @@ def test_the_service_exposes_four_routes_and_a_health_check():
         ("/reconcile/{community}", ("POST",)),
         ("/health", ("GET",)),
     }
+
+
+# --- onboarding's "set up community" call, with a real token ---------------
+#
+# The registry sync in `../onboarding` calls the sweep as its "set up community"
+# step, with a `svc-onboarding` client-credentials token that requested the
+# optional `provisioning.reconcile` for that one call (ADR-0011, REQ-0004).
+# Here the token is genuinely signed and verified (the conftest's only seam is
+# the JWKS fetch), and the service behind the route is the real one over a fake
+# Keycloak and a fake registry export: what is pinned is that this caller, with
+# this token, gets a community with no members set up, and nothing else.
+
+ISSUER = "http://keycloak.celine.localhost/realms/celine"
+
+#: What Keycloak puts in a `svc-onboarding` token that asked for the optional
+#: scope: its default scopes, plus the one it requested.
+ONBOARDING_DEFAULT_SCOPE = (
+    "profile email onboarding.admin provisioning.participants.write "
+    "rec-registry.members.write rec-registry.lookup digital-twin.values.read "
+    "rec-registry.read"
+)
+
+
+class _OrgKeycloak:
+    """Records organizations, org roles and org groups; any user call fails."""
+
+    def __init__(self):
+        self.created: list[tuple] = []
+        self.opened = False
+        self._orgs: set[str] = set()
+        self._roles: set[tuple[str, str]] = set()
+        self._groups: set[tuple[str, str]] = set()
+
+    async def __aenter__(self):
+        self.opened = True
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def authenticate(self):
+        pass
+
+    async def ensure_organization(self, *, alias, name, description, attributes):
+        created = alias not in self._orgs
+        if created:
+            self._orgs.add(alias)
+            self.created.append(("organization", alias))
+        return f"org-{alias}", created
+
+    async def ensure_org_role(self, org_id, role_name):
+        if (org_id, role_name) not in self._roles:
+            self._roles.add((org_id, role_name))
+            self.created.append(("role", role_name))
+
+    async def ensure_org_group(self, org_id, name):
+        created = (org_id, name) not in self._groups
+        if created:
+            self._groups.add((org_id, name))
+            self.created.append(("group", name))
+        return f"grp-{name}", created
+
+
+@pytest.fixture
+def onboarding_setup(monkeypatch: pytest.MonkeyPatch):
+    """The real route and the real service; Keycloak and the export are fakes."""
+
+    def build(*, documents=None, error=None, audience=None):
+        kc = _OrgKeycloak()
+        monkeypatch.setattr(service_module, "KeycloakAdminClient", lambda *a, **k: kc)
+
+        async def fake_fetch(**kwargs):
+            if error:
+                raise error
+            return list(documents)
+
+        monkeypatch.setattr(service_module, "fetch_rec_documents", fake_fetch)
+
+        settings = ProvisioningSettings(
+            oidc=OidcSettings(base_url=ISSUER, audience=audience),
+            registry_url="http://registry",
+            registry_client_secret="secret",
+        )
+        service = ProvisioningService(
+            settings,
+            KeycloakSettings(
+                base_url="http://kc.internal", realm="celine", admin_client_secret="secret"
+            ),
+        )
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_settings] = lambda: settings
+        app.dependency_overrides[get_service] = lambda: service
+        return TestClient(app, raise_server_exceptions=False), kc
+
+    return build
+
+
+EMPTY_COMMUNITY = {
+    "community": {"id": "example-rec", "name": "Example REC", "type": "rec"},
+    "members": {},
+}
+
+
+def _onboarding_token(bearer, scope: str):
+    """A client-credentials token as Keycloak mints it for `svc-onboarding`:
+    the service account's `sub`, `azp` naming the client, and `aud` carrying
+    the audience the mapper derived from its `provisioning.*` scopes."""
+    return bearer(
+        "service-account-uuid",
+        scope=scope,
+        issuer=ISSUER,
+        azp="svc-onboarding",
+        preferred_username="service-account-svc-onboarding",
+        aud=["svc-digital-twin", "svc-provisioning", "svc-rec-registry"],
+    )
+
+
+@pytest.mark.parametrize("audience", [None, "svc-provisioning"], ids=["no-aud-check", "aud-checked"])
+def test_onboarding_with_the_reconcile_scope_sets_up_a_community_with_no_members(
+    onboarding_setup, bearer, audience
+):
+    """`200`, `members: 0`, and the organization with its four roles and groups.
+
+    @verifies REQ-0002
+    @verifies REQ-0004
+    """
+    client, kc = onboarding_setup(documents=[EMPTY_COMMUNITY], audience=audience)
+
+    response = client.post(
+        "/reconcile/example-rec",
+        headers=_onboarding_token(bearer, f"{ONBOARDING_DEFAULT_SCOPE} provisioning.reconcile"),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "community": "example-rec",
+        "members": 0,
+        "created": 0,
+        "existing": 0,
+        "divergences": [],
+    }
+    assert kc.created[0] == ("organization", "example-rec")
+    assert {c[1] for c in kc.created if c[0] == "role"} == {
+        "admins",
+        "managers",
+        "editors",
+        "viewers",
+    }
+    assert {c[1] for c in kc.created if c[0] == "group"} == {
+        "admins",
+        "managers",
+        "editors",
+        "viewers",
+    }
+
+
+def test_a_second_setup_call_creates_nothing(onboarding_setup, bearer):
+    """@verifies REQ-0002"""
+    client, kc = onboarding_setup(documents=[EMPTY_COMMUNITY])
+    headers = _onboarding_token(bearer, f"{ONBOARDING_DEFAULT_SCOPE} provisioning.reconcile")
+
+    assert client.post("/reconcile/example-rec", headers=headers).status_code == 200
+    first = list(kc.created)
+    second = client.post("/reconcile/example-rec", headers=headers)
+
+    assert second.status_code == 200
+    assert second.json()["members"] == 0
+    assert kc.created == first
+
+
+def test_onboarding_setting_up_a_community_the_registry_lacks_is_404_and_writes_nothing(
+    onboarding_setup, bearer
+):
+    """@verifies REQ-0002"""
+    client, kc = onboarding_setup(
+        error=RegistryCommunityNotFound("http://registry has no community nowhere")
+    )
+
+    response = client.post(
+        "/reconcile/nowhere",
+        headers=_onboarding_token(bearer, f"{ONBOARDING_DEFAULT_SCOPE} provisioning.reconcile"),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "community_not_found"
+    assert kc.opened is False
+    assert kc.created == []
+
+
+def test_onboarding_default_token_without_the_optional_scope_cannot_sweep(
+    onboarding_setup, bearer
+):
+    """The scope is optional precisely so that the token onboarding uses for
+    everything else is refused here: `403 insufficient_scope`, Keycloak never
+    opened.
+
+    @verifies REQ-0004
+    """
+    client, kc = onboarding_setup(documents=[EMPTY_COMMUNITY])
+
+    response = client.post(
+        "/reconcile/example-rec",
+        headers=_onboarding_token(bearer, ONBOARDING_DEFAULT_SCOPE),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "insufficient_scope"
+    assert kc.opened is False
+
+
+def test_a_token_for_another_audience_is_refused_when_the_audience_is_checked(
+    onboarding_setup, bearer
+):
+    """With `CELINE_OIDC_AUDIENCE=svc-provisioning`, a token the mapper did not
+    address here is `401`, whatever scope it carries."""
+    client, kc = onboarding_setup(documents=[EMPTY_COMMUNITY], audience="svc-provisioning")
+
+    response = client.post(
+        "/reconcile/example-rec",
+        headers=bearer(
+            "service-account-uuid",
+            scope="provisioning.reconcile",
+            issuer=ISSUER,
+            azp="svc-onboarding",
+            aud=["svc-rec-registry"],
+        ),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "invalid_token"
+    assert kc.opened is False
