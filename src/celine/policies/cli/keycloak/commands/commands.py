@@ -6,7 +6,7 @@ Commands:
     celine-policies keycloak status
     celine-policies keycloak sync-users [rec_yaml]
     celine-policies keycloak sync-orgs [owners_yaml ...]
-    celine-policies keycloak set-user-organization <username> -o <org> [-r <role>]
+    celine-policies keycloak set-user-organization <username> -o <org> [-g <group>]
     celine-policies keycloak seed-dev-users [dev-users.yaml]   (development realms only)
 """
 
