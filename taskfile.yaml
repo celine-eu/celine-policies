@@ -24,6 +24,24 @@ tasks:
     cmds:
       - .venv/bin/uvicorn celine.mqtt_auth.main:create_app --reload --host 0.0.0.0 --port 8009
 
+  # **The provisioning service from source**, on the port its container uses.
+  # `run` above is mqtt_auth (:8009), not this. The defaults are the compose
+  # `environment:` block's own, so a host process and the container agree; a
+  # caller that exports any of them first (a deployment's binding) wins.
+  run:provisioning:
+    desc: "Run the provisioning service with hot reload (:8010)"
+    cmds:
+      - >-
+        CELINE_KEYCLOAK_ADMIN_CLIENT_ID="${CELINE_KEYCLOAK_ADMIN_CLIENT_ID:-svc-provisioning}"
+        CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET="${CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET:-svc-provisioning}"
+        CELINE_PROVISIONING_REGISTRY_CLIENT_ID="${CELINE_PROVISIONING_REGISTRY_CLIENT_ID:-svc-provisioning}"
+        CELINE_PROVISIONING_REGISTRY_CLIENT_SECRET="${CELINE_PROVISIONING_REGISTRY_CLIENT_SECRET:-svc-provisioning}"
+        CELINE_PROVISIONING_REGISTRY_URL="${CELINE_PROVISIONING_REGISTRY_URL-http://172.17.0.1:8004}"
+        CELINE_PROVISIONING_EMAIL_MODE="${CELINE_PROVISIONING_EMAIL_MODE:-dev}"
+        EMAIL_DEV_RECIPIENTS="${EMAIL_DEV_RECIPIENTS:-}"
+        CELINE_PROVISIONING_INVITE_REDIRECT_URI="${CELINE_PROVISIONING_INVITE_REDIRECT_URI:-http://webapp.celine.localhost/}"
+        .venv/bin/uvicorn celine.provisioning.main:create_app --factory --reload --host 0.0.0.0 --port 8010
+
   debug:
     desc: "Run development server with debugger"
     cmds:
