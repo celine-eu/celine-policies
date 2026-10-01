@@ -232,8 +232,8 @@ async def update_participant(
     names for `(community, key)`. Never creates an account and never changes
     the username.
 
-    An address change resets `email_verified` and emails a `VERIFY_EMAIL` link
-    to the **new** address only; the same address is not a change and sends
+    An address change resets `email_verified` and emails a confirmation link
+    (`send-verify-email`) to the **new** address only; the same address is not a change and sends
     nothing. `404` for a community, member or account that does not exist (the
     code says which), `409 account_disabled`, `409 email_taken` when another
     account holds the address, `502 send_failed` when Keycloak did not send the

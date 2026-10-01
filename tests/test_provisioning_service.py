@@ -101,6 +101,8 @@ class FakeKeycloak:
         #: the address the account carried when each email went out, which is
         #: where Keycloak sends it
         self.sent_to: list[str | None] = []
+        #: `send-verify-email` calls, kept apart from the actions emails
+        self.verifications: list[dict] = []
         self.locales: list[tuple[str, str]] = []
 
     async def __aenter__(self):
@@ -229,6 +231,22 @@ class FakeKeycloak:
         user = await self.get_user_by_id(user_id)
         user.clear()
         user.update(representation)
+
+    async def send_verify_email(self, user_id, *, lifespan, client_id=None, redirect_uri=None):
+        """`send-verify-email`: Keycloak's own verification email, which the
+        theme renders with `email-verification.ftl`, never as an invitation."""
+        self.send_attempts += 1
+        if self.send_error:
+            raise self.send_error
+        self.sent_to.append(((await self.get_user_by_id(user_id)) or {}).get("email"))
+        self.verifications.append(
+            {
+                "user_id": user_id,
+                "lifespan": lifespan,
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+            }
+        )
 
     async def set_user_enabled(self, user_id, enabled):
         user = await self.get_user_by_id(user_id)
@@ -1544,10 +1562,12 @@ async def test_an_address_change_resets_verified_and_emails_the_new_address_only
     assert result.email_verified is False
     assert result.verification == "sent"
     assert result.changed == ("email",)
-    assert kc.emails == [
+    # Keycloak's verification email, never an actions email: the theme renders
+    # an actions email under the invitation's subject ("set your password")
+    assert kc.emails == []
+    assert kc.verifications == [
         {
             "user_id": "u1",
-            "actions": ["VERIFY_EMAIL"],
             "lifespan": 604800,
             "client_id": "oauth2_proxy",
             "redirect_uri": "http://webapp.celine.localhost/",
@@ -1674,7 +1694,7 @@ async def test_a_failed_verification_send_puts_the_account_back(keycloak, regist
         community="example-rec", key="ex-00001", first_name="Anna", email="new@example.org"
     )
     assert result.verification == "sent"
-    assert len(kc.emails) == 1
+    assert len(kc.verifications) == 1
 
 
 async def test_in_dev_mode_a_new_address_off_the_list_is_written_and_not_emailed(
@@ -1691,7 +1711,7 @@ async def test_in_dev_mode_a_new_address_off_the_list_is_written_and_not_emailed
     assert result.verification == "not_on_dev_list"
     assert account["email"] == "new@example.org"
     assert account["emailVerified"] is False
-    assert kc.emails == []
+    assert kc.emails == [] and kc.verifications == []
 
 
 async def test_the_verification_neither_waits_for_nor_starts_the_cooldown(
@@ -1714,10 +1734,8 @@ async def test_the_verification_neither_waits_for_nor_starts_the_cooldown(
         await service.send_invitation(
             community="example-rec", key="ex-00001", intent="invitation"
         )
-    assert [e["actions"] for e in kc.emails] == [
-        ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
-        ["VERIFY_EMAIL"],
-    ]
+    assert [e["actions"] for e in kc.emails] == [["UPDATE_PASSWORD", "VERIFY_EMAIL"]]
+    assert len(kc.verifications) == 1
 
 
 async def test_an_update_of_a_disabled_account_is_refused_before_any_write(

@@ -184,3 +184,36 @@ def test_the_invitation_copy_says_the_person_signs_in_afterwards():
     for locale, entries in _bundles("email").items():
         assert "recInvitationAfter" in entries, locale
     assert "sign in" in _bundles("email")["en"]["recInvitationAfter"]
+
+
+@pytest.mark.parametrize("part", ["html", "text"])
+def test_verify_email_alone_is_never_rendered_as_the_invitation(part):
+    """An actions email whose only action is `VERIFY_EMAIL` confirms an address.
+
+    The template used to call any token carrying `VERIFY_EMAIL` an invitation,
+    so a confirmation of a changed address read "set your password … an account
+    was created for you" (onboarding stack run, 2026-10-01). The invitation is
+    `UPDATE_PASSWORD` *and* `VERIFY_EMAIL`; `VERIFY_EMAIL` alone gets the
+    verification copy.
+    """
+    ftl = (THEME / "email" / part / "executeActions.ftl").read_text(encoding="utf-8")
+
+    assert 'actions?seq_contains("VERIFY_EMAIL") && !actions?seq_contains("UPDATE_PASSWORD")' in ftl
+    assert 'invitation = (actions?seq_contains("VERIFY_EMAIL") && actions?seq_contains("UPDATE_PASSWORD"))' in ftl
+    verify, rest = ftl.split("<#elseif invitation>", 1)
+    assert 'msg("recVerifyTitle")' in verify.split("<#if verifyOnly>", 1)[1]
+    assert "recInvitation" not in verify.split("<#if verifyOnly>", 1)[1]
+    assert "recInvitation" in rest
+
+
+def test_the_address_confirmation_never_speaks_of_a_password_or_a_new_account():
+    """The verification copy serves a changed address: no password, and no "if
+    you did not create this account", in any language."""
+    for locale, entries in _bundles("email").items():
+        copy = " ".join(
+            entries[k]
+            for k in ("emailVerificationSubject", "recVerifyTitle", "recVerifyIntro",
+                      "recVerifyButton", "recVerifyIgnore")
+        ).lower()
+        for word in ("password", "contraseña", "creato", "created", "creado"):
+            assert word not in copy, (locale, word)

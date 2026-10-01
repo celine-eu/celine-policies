@@ -288,7 +288,7 @@ What celine decides about them is in `clients.ds-host.yaml`, one grants-only
 entry per client:
 
 - **`svc-ds-identity-registry`** — `identity-registry.admin`. ds drops every `*.admin` from what it carries into a host realm; this realm drives the registry as an operator surface, so it grants the superset and declares it.
-- **`svc-ds-onboarding`** — `rec-registry.members.write`. rec-registry is celine's own service, so ds's file cannot carry this grant.
+- **`svc-ds-onboarding`** — `rec-registry.members.write`, `rec-registry.lookup` and `rec-registry.read` (the community reads, such as the console's duplicate delivery points, as `svc-onboarding` holds them). rec-registry is celine's own service, so ds's file cannot carry these grants.
 - **`svc-ds-portal`** — the host-side console grants, including `dataset.query` / `dataset.read` against celine's dataset-api.
 - **`svc-ds-dataset-api`** — `dataset.admin` and the `svc-dataset-api` audience. `dataset.*` is celine's vocabulary on celine's data plane; this client is the dataset API's outbound identity ([spindoxlabs/ds#14](https://github.com/spindoxlabs/ds/issues/14)).
 

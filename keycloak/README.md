@@ -45,13 +45,15 @@ Key behaviours:
 
 | Template | Sent for | Wording |
 |---|---|---|
-| `executeActions.ftl` | the provisioning service's invitation and operator reset | "set your password" when the token's actions include `VERIFY_EMAIL` (an invitation), "reset your password" otherwise. One template, two emails |
+| `executeActions.ftl` | the provisioning service's invitation and operator reset | "set your password" when the token carries `UPDATE_PASSWORD` and `VERIFY_EMAIL` (an invitation), "confirm your email address" for `VERIFY_EMAIL` alone, "reset your password" otherwise |
 | `password-reset.ftl` | forgot password, from the login page | reset |
-| `email-verification.ftl` | a verification Keycloak sends | confirm the address |
+| `email-verification.ftl` | a verification Keycloak sends, including the provisioning service's confirmation of a changed address (`send-verify-email`) | confirm the address; worded to fit a first verification and a changed address alike |
 
 Each has an `html/` and a `text/` part. The emails name the platform (`realmName`, then
 `BRAND_NAME`), not a community. Subjects are fixed keys with no parameters, so
-`executeActionsSubject` is worded to fit both uses. Expiry is always
+`executeActionsSubject` is worded to fit both uses — which is why a changed address is
+confirmed through `send-verify-email` (subject `emailVerificationSubject`) and never through an
+actions email: `VERIFY_EMAIL` alone would still arrive under "set your password". Expiry is always
 `linkExpirationFormatter(linkExpiration)`: the raw value is minutes. Text templates declare
 `output_format="plainText"`, and HTML templates never use `?no_esc` on the model.
 

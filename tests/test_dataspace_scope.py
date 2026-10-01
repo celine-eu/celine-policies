@@ -231,6 +231,23 @@ class TestClientsYamlDataspaceEntries:
         assert "rec-registry.members.write" in ob.default_scopes
         assert "svc-rec-registry" in ob.extra_audiences
 
+    def test_ds_onboarding_reads_the_registry_as_svc_onboarding_does(self):
+        """In dataspace mode onboarding authenticates as this client, so the
+        registry's community reads (the console's duplicate delivery points,
+        the registry sync's reads) need `rec-registry.read` here too, as a
+        default scope like svc-onboarding's. Without it the registry answered
+        403 and the console 502.
+        """
+        host = KeycloakConfig.from_yaml(DS_HOST_YAML)
+        ob = next(c for c in host.clients if c.client_id == "svc-ds-onboarding")
+        assert "rec-registry.read" in ob.default_scopes
+        onboarding = next(
+            c for c in KeycloakConfig.from_yaml(CLIENTS_YAML).clients
+            if c.client_id == "svc-onboarding"
+        )
+        assert "rec-registry.read" in onboarding.default_scopes
+        assert "rec-registry.admin" not in ob.default_scopes + ob.optional_scopes
+
     def test_ds_onboarding_holds_no_registry_admin_scope(self):
         """The least-privilege realignment must not be undone.
 

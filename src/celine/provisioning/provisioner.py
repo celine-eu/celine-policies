@@ -284,6 +284,23 @@ class Provisioner:
             redirect_uri=redirect_uri,
         )
 
+    async def send_verify_email(
+        self,
+        keycloak_id: str,
+        *,
+        lifespan: int,
+        client_id: str | None = None,
+        redirect_uri: str | None = None,
+    ) -> None:
+        """Have Keycloak email the account's current address a confirmation link,
+        with the theme's `email-verification` wording and subject."""
+        await self._kc.send_verify_email(
+            keycloak_id,
+            lifespan=lifespan,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+        )
+
     async def set_enabled(self, keycloak_id: str, enabled: bool) -> bool:
         """Disable or re-enable an account. Returns whether it changed.
 

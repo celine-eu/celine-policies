@@ -282,8 +282,9 @@ class ParticipantUpdateResponse(BaseModel):
         ...,
         description=(
             "`not_requested` (the address did not change), `sent` (Keycloak "
-            "emailed `VERIFY_EMAIL` to the new address), `not_on_dev_list` (dev "
-            "email mode: written, nothing sent). New codes may be added"
+            "emailed the new address a confirmation link, `send-verify-email`), "
+            "`not_on_dev_list` (dev email mode: written, nothing sent). New "
+            "codes may be added"
         ),
     )
 

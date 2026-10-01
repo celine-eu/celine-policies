@@ -305,7 +305,7 @@ identity registry key on — an address change keeps the same account and the sa
 | Field | Meaning |
 |---|---|
 | `first_name`, `last_name` | Written as given. Omitted or `null`: not touched |
-| `email` | The new address. A change resets `email_verified` and has Keycloak email a `VERIFY_EMAIL` link **to the new address only**; nothing is sent to the old one. The same address, ignoring case and surrounding space, is not a change: nothing is reset and nothing sent |
+| `email` | The new address. A change resets `email_verified` and has Keycloak email a confirmation link (`send-verify-email`, the theme's "confirm your email address") **to the new address only**; nothing is sent to the old one. The same address, ignoring case and surrounding space, is not a change: nothing is reset and nothing sent |
 
 An empty body, a body whose fields are all `null`, an empty string, or any other field —
 `username` included — is `422`.
@@ -332,7 +332,7 @@ retry of a call that succeeded is a no-op.
 | `verification` | Meaning |
 |---|---|
 | `not_requested` | The address did not change |
-| `sent` | Keycloak emailed `VERIFY_EMAIL` to the new address, valid `CELINE_PROVISIONING_INVITE_LIFESPAN` (7 days), with the invitation's redirect |
+| `sent` | Keycloak emailed the new address a confirmation link through `PUT /users/{id}/send-verify-email`, valid `CELINE_PROVISIONING_INVITE_LIFESPAN` (7 days), with the invitation's redirect. The email is the theme's `email-verification` ("confirm your email address"), not an actions email, whose fixed subject is the invitation's |
 | `not_on_dev_list` | `CELINE_PROVISIONING_EMAIL_MODE=dev` and the new address is not on `EMAIL_DEV_RECIPIENTS`: written, not emailed |
 
 **A failed send undoes the call.** If Keycloak does not send the link, the account is put
@@ -340,8 +340,8 @@ back as it was read — names, address and `email_verified` — and the answer i
 `502 send_failed`, so a retry of the same request is a change again and sends. The
 verification is **outside the invitation cooldown**: it is guarded by the change itself
 (repeating the call sends nothing), it goes to a recipient nothing was sent to before, and
-it neither waits for nor starts the cooldown. It is only `VERIFY_EMAIL`: an account that has
-no password yet still needs `POST …/invitation`.
+it neither waits for nor starts the cooldown. It only confirms the address: an account that
+has no password yet still needs `POST …/invitation`.
 
 The checks run in this order, before anything is written: `community_not_found`,
 `member_not_found`, `account_not_found`, `account_disabled`, `email_taken`.

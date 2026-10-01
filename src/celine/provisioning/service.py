@@ -67,7 +67,6 @@ from celine.provisioning.config import ProvisioningSettings
 from celine.provisioning.invitation import (
     INVITE_ACTIONS,
     RESET_ACTIONS,
-    VERIFY_ACTIONS,
     InvitationOutcome,
     SendIntent,
     VerificationOutcome,
@@ -675,7 +674,8 @@ class ProvisioningService:
         same DID. A field passed as `None` is not touched.
 
         **An address change is unverified until the person proves it**:
-        `emailVerified` is reset and Keycloak emails a `VERIFY_EMAIL` link **to
+        `emailVerified` is reset and Keycloak emails a confirmation link
+        (`send-verify-email`, worded "confirm your email address") **to
         the new address only** — nothing goes to the old one. An address equal
         to the current one, ignoring case and surrounding space, is not a change:
         nothing is reset and nothing is sent.
@@ -797,19 +797,22 @@ class ProvisioningService:
         address: str,
         before: dict,
     ) -> VerificationOutcome:
-        """Email the `VERIFY_EMAIL` link to the address just written.
+        """Email the confirmation link to the address just written.
 
-        Keycloak sends to the account's address, which is now the new one, so
-        the old address cannot receive it. On a failed send the account is put
+        Keycloak's `send-verify-email`, not `execute-actions-email`: it renders
+        the theme's `email-verification` template under its own subject
+        ("confirm your email address"), where an actions email carries the
+        invitation's subject whatever its actions. Keycloak sends to the
+        account's address, which is now the new one, so the old address cannot
+        receive it. On a failed send the account is put
         back as `before` and `SendFailed` is raised.
         """
         if not self._settings.email_policy.allows(address):
             self._settings.email_policy.refuse(who)
             return "not_on_dev_list"
         try:
-            await provisioner.send_actions_email(
+            await provisioner.send_verify_email(
                 keycloak_id,
-                VERIFY_ACTIONS,
                 lifespan=self._settings.invite_lifespan,
                 client_id=self._settings.invite_client_id,
                 redirect_uri=self._settings.invite_redirect_uri,

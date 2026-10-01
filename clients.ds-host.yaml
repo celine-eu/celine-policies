@@ -70,6 +70,15 @@ clients:
       # `assets.lookup` apart from `lookup` so a policy can separate them later,
       # but rec_registry/access.rego grants both from `rec-registry.lookup`.
       - rec-registry.lookup
+      # **The registry's community reads**, as svc-onboarding holds them
+      # (ADR-0011, REQ-0004): a community's areas, topology and member counts,
+      # and the duplicate delivery points the console flags before review
+      # (`GET /admin/communities/{ck}/delivery-points/duplicates`). The registry
+      # derives the action `read` for those routes, which neither
+      # `members.write` nor `lookup` satisfies: in dataspace mode onboarding
+      # authenticates as this client, and without it the console answered 502
+      # over the registry's 403. A read, so a default scope.
+      - rec-registry.read
     extra_audiences:
       - svc-rec-registry
 

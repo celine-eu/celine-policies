@@ -2238,6 +2238,36 @@ class KeycloakAdminClient:
         self._handle_response(response, expected_status=[200, 204])
         logger.info("Sent %s to user %s (lifespan %ss)", ",".join(actions), user_id, lifespan)
 
+    async def send_verify_email(
+        self,
+        user_id: str,
+        *,
+        lifespan: int,
+        client_id: str | None = None,
+        redirect_uri: str | None = None,
+    ) -> None:
+        """Have Keycloak email the account a link confirming its address.
+
+        `PUT /users/{id}/send-verify-email`. Unlike `execute-actions-email` with
+        `VERIFY_EMAIL`, this renders the theme's `email-verification` template
+        under `emailVerificationSubject`, so the person reads "confirm your email
+        address" rather than the invitation's "set your password" (the
+        `executeActions` subject is one fixed key for every actions email).
+        `lifespan`, `client_id` and `redirect_uri` are optional query
+        parameters on 26.7.3 (lifespan default 12 hours). The link is bound to
+        the address the account carries when it is sent.
+        """
+        params: dict[str, Any] = {"lifespan": lifespan}
+        if redirect_uri:
+            params["redirect_uri"] = redirect_uri
+            if client_id:
+                params["client_id"] = client_id
+        url = f"{self._settings.admin_url}/users/{user_id}/send-verify-email"
+        headers = await self._headers()
+        response = await self._client.put(url, headers=headers, params=params)
+        self._handle_response(response, expected_status=[200, 204])
+        logger.info("Sent verify-email to user %s (lifespan %ss)", user_id, lifespan)
+
     async def add_user_to_group_with_retry(
         self,
         user_id: str,

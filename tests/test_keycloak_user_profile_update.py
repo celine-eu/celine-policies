@@ -87,3 +87,31 @@ async def test_a_realm_refusing_a_duplicate_address_surfaces_as_a_conflict() -> 
 
     with pytest.raises(KeycloakConflictError):
         await _client(handler).update_user_profile("u-1", email="taken@example.org")
+
+
+async def test_the_address_confirmation_is_keycloaks_verify_email_not_an_actions_email() -> None:
+    """`send-verify-email` renders the theme's `email-verification` template under
+    "confirm your email address"; `execute-actions-email` would carry the
+    invitation's fixed subject whatever its actions."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(204)
+
+    await _client(handler).send_verify_email(
+        "u-1",
+        lifespan=604800,
+        client_id="oauth2_proxy",
+        redirect_uri="http://webapp.celine.localhost/",
+    )
+
+    (request,) = seen
+    assert request.method == "PUT"
+    assert request.url.path == "/admin/realms/celine/users/u-1/send-verify-email"
+    assert "execute-actions-email" not in str(request.url)
+    assert dict(request.url.params) == {
+        "lifespan": "604800",
+        "redirect_uri": "http://webapp.celine.localhost/",
+        "client_id": "oauth2_proxy",
+    }

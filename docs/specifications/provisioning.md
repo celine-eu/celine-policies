@@ -57,7 +57,8 @@ writes them on the account the registry names for `(community, key)`, and on no 
 - **The username is unchanged**, and a body naming one is `422`.
 - **An address another account holds is `409 email_taken`**, compared case-insensitively,
   and nothing is written.
-- **An address change resets `emailVerified`, and the `VERIFY_EMAIL` link goes to the new
+- **An address change resets `emailVerified`, and the confirmation link — Keycloak's
+  `send-verify-email`, worded "confirm your email address", never the invitation — goes to the new
   address only.** An unchanged address resets nothing and sends nothing; a names-only update
   leaves the address and its verification as they were.
 - It needs `provisioning.participants.write` (or `provisioning.admin`), like every other
