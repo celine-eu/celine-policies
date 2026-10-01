@@ -1929,6 +1929,66 @@ class KeycloakAdminClient:
             return results[0]
         return None
 
+    async def get_users_by_email(self, email: str) -> list[dict[str, Any]]:
+        """Every account whose address is `email`, compared case-insensitively.
+
+        Unlike `get_user_by_email`, which takes the first match, this answers
+        the question "does anybody else hold this address": a realm that allows
+        duplicate addresses can return more than one, and the caller has to see
+        all of them to tell its own account from another. Keycloak stores
+        addresses lower-cased, and the result is filtered again here so the
+        answer does not depend on how a given version matches.
+        """
+        wanted = email.strip().lower()
+        results = await self._get("/users", params={"email": wanted, "exact": "true"})
+        return [
+            u for u in results or [] if (u.get("email") or "").strip().lower() == wanted
+        ]
+
+    async def update_user_profile(
+        self,
+        user_id: str,
+        *,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        email: str | None = None,
+        email_verified: bool | None = None,
+    ) -> dict[str, Any]:
+        """Write a profile field on an existing account; `None` leaves it alone.
+
+        Reads first and puts the whole representation back, as
+        `set_user_enabled` does, so no other attribute is lost. **The username
+        is never in the change**: it is whatever the account already carries,
+        sent back unchanged. Returns the representation that was put.
+
+        A realm that refuses duplicate addresses answers `409` for an address
+        another account holds; it surfaces as `KeycloakConflictError`.
+        """
+        user = await self.get_user_by_id(user_id)
+        if user is None:
+            raise KeycloakNotFoundError(f"User not found: {user_id}")
+        payload = dict(user)
+        changes = {
+            "firstName": first_name,
+            "lastName": last_name,
+            "email": email,
+            "emailVerified": email_verified,
+        }
+        for name, value in changes.items():
+            if value is not None:
+                payload[name] = value
+        await self._put(f"/users/{user_id}", json=payload, expected_status=[204])
+        logger.info(
+            "Updated user %s: %s",
+            user_id,
+            ",".join(name for name, value in changes.items() if value is not None),
+        )
+        return payload
+
+    async def put_user(self, user_id: str, representation: dict[str, Any]) -> None:
+        """Put a whole representation back, as read earlier — an undo."""
+        await self._put(f"/users/{user_id}", json=representation, expected_status=[204])
+
     async def set_user_enabled(self, user_id: str, enabled: bool) -> bool:
         """Enable or disable an account. Returns whether it changed.
 

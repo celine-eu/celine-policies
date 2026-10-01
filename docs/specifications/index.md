@@ -51,8 +51,8 @@ naming a requirement that does not exist is a typo.
 
 | | |
 |---|---|
-| REQ-0001 – REQ-0003 | [provisioning](provisioning.md) — who may call the provisioning service, and what it creates for a community |
-| REQ-0004 – REQ-0005 | [client grants](client-grants.md) — which scopes a client holds as default and which as optional, where a decision fixed it |
+| REQ-0001 – REQ-0003, REQ-0007 | [provisioning](provisioning.md) — who may call the provisioning service, what it creates for a community, and how it corrects an account |
+| REQ-0004 – REQ-0005, REQ-0008 | [client grants](client-grants.md) — which scopes a client holds as default and which as optional, where a decision fixed it |
 | REQ-0006 | [Keycloak CLI](keycloak-cli.md) — what a `celine-policies keycloak` command may do, where a decision fixed it |
 
 ## What is not here

@@ -181,6 +181,7 @@ the scope is `403`. `provisioning.admin` satisfies any of the scopes below.
 | Endpoint | Scope |
 |---|---|
 | `PUT /participants/{community}/{key}` | `provisioning.participants.write` |
+| `PATCH /participants/{community}/{key}` | `provisioning.participants.write` |
 | `POST /participants/{community}/{key}/invitation` | `provisioning.participants.write` |
 | `POST /participants/{community}/{key}/disable` | `provisioning.participants.write` |
 | `POST /reconcile/{community}` | `provisioning.reconcile` |
@@ -286,6 +287,78 @@ in once with the password they chose.
 **The registry is not written from here.** The caller writes the member row, with the
 username this call returned — which keeps member creation single-writer and the step order
 fail-closed: the login exists before the row that keys on it.
+
+## PATCH /participants/{community}/{key}
+
+Correct a member's names or email address **on the account they already have**. The member
+is resolved through the registry, as for the invitation: `Member.user_id` is the username.
+**It never creates an account and never changes the username**, which the registry and the
+identity registry key on — an address change keeps the same account and the same DID
+([REQ-0007](specifications/provisioning.md)).
+
+**Request:** at least one field.
+
+```json
+{"first_name": "Anna", "last_name": "Rossi", "email": "a.new@example.org"}
+```
+
+| Field | Meaning |
+|---|---|
+| `first_name`, `last_name` | Written as given. Omitted or `null`: not touched |
+| `email` | The new address. A change resets `email_verified` and has Keycloak email a `VERIFY_EMAIL` link **to the new address only**; nothing is sent to the old one. The same address, ignoring case and surrounding space, is not a change: nothing is reset and nothing sent |
+
+An empty body, a body whose fields are all `null`, an empty string, or any other field —
+`username` included — is `422`.
+
+**Response (200):**
+
+```json
+{
+  "user_id": "3f1c…",
+  "username": "ex-00001",
+  "first_name": "Anna",
+  "last_name": "Rossi",
+  "email": "a.new@example.org",
+  "email_verified": false,
+  "changed": ["first_name", "last_name", "email"],
+  "verification": "sent"
+}
+```
+
+The account as it now is. `changed` names the fields this call wrote, and is empty when
+every value given was already the account's — nothing was written and nothing sent, so a
+retry of a call that succeeded is a no-op.
+
+| `verification` | Meaning |
+|---|---|
+| `not_requested` | The address did not change |
+| `sent` | Keycloak emailed `VERIFY_EMAIL` to the new address, valid `CELINE_PROVISIONING_INVITE_LIFESPAN` (7 days), with the invitation's redirect |
+| `not_on_dev_list` | `CELINE_PROVISIONING_EMAIL_MODE=dev` and the new address is not on `EMAIL_DEV_RECIPIENTS`: written, not emailed |
+
+**A failed send undoes the call.** If Keycloak does not send the link, the account is put
+back as it was read — names, address and `email_verified` — and the answer is
+`502 send_failed`, so a retry of the same request is a change again and sends. The
+verification is **outside the invitation cooldown**: it is guarded by the change itself
+(repeating the call sends nothing), it goes to a recipient nothing was sent to before, and
+it neither waits for nor starts the cooldown. It is only `VERIFY_EMAIL`: an account that has
+no password yet still needs `POST …/invitation`.
+
+The checks run in this order, before anything is written: `community_not_found`,
+`member_not_found`, `account_not_found`, `account_disabled`, `email_taken`.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 404 | `community_not_found` | The registry has no community under `{community}` |
+| 404 | `member_not_found` | The community has no **active** member under `{key}` |
+| 404 | `account_not_found` | The registry has the member, and the realm has no account for it. Nothing is created |
+| 409 | `account_disabled` | The account is disabled; nothing was changed |
+| 409 | `email_taken` | Another account holds the address (case-insensitive), or Keycloak refused it as a duplicate. Nothing was changed |
+| 422 | — | No field, an empty one, or a field that is not one of the three |
+| 502 | `send_failed` | Keycloak did not send the verification; the account was put back |
+| 502 | `registry_unavailable`, `provisioning_failed` | A dependency failed |
+
+The service function behind it, `update_account(username, …)`, takes a username and reads
+no registry, so the member's own self-service can use the same rules later.
 
 ## POST /participants/{community}/{key}/invitation
 
@@ -413,15 +486,16 @@ FastAPI's own validation body, `{"detail": [ … ]}`.
 | 404 | `community_not_found` | The registry has no such community |
 | 404 | `member_not_found` | The community has no active member under that key |
 | 404 | `account_not_found` | The member exists, and the realm has no account for it |
-| 409 | `account_disabled` | An invitation for a disabled account |
+| 409 | `account_disabled` | An invitation for, or an update of, a disabled account |
 | 409 | `has_password` | Intent `invitation` for an account that has a password |
 | 409 | `no_password` | Intent `password_reset` for an account that has none |
 | 409 | `no_email` | A send to an account with no email address |
-| 422 | — | The upsert's body is missing the address, or `locale` is not `it`, `en` or `es`; the invitation's body is missing, or its `intent` is unknown |
+| 409 | `email_taken` | An update to an address another account holds |
+| 422 | — | The upsert's body is missing the address, or `locale` is not `it`, `en` or `es`; the invitation's body is missing, or its `intent` is unknown; the update's body has no field, an empty one, or one it does not take |
 | 429 | `cooldown` | An invitation within the cooldown; `Retry-After` says when |
 | 500 | `reconcile_diverged` | A reconcile ended with divergences; the report is in `detail` |
 | 502 | `registry_unavailable` | The registry could not be read, or is not configured |
-| 502 | `send_failed` | Keycloak did not send the email: SMTP failure, a refusal such as `Invalid redirect uri.` for a `CELINE_PROVISIONING_INVITE_REDIRECT_URI` not registered on `oauth2_proxy`, or a timeout. Starts no cooldown |
+| 502 | `send_failed` | Keycloak did not send the email (an update's verification is then undone): SMTP failure, a refusal such as `Invalid redirect uri.` for a `CELINE_PROVISIONING_INVITE_REDIRECT_URI` not registered on `oauth2_proxy`, or a timeout. Starts no cooldown |
 | 502 | `provisioning_failed` | Any other dependency failure — a dependency, not this service refusing |
 
 A registry `404` counts as `community_not_found` only when the registry names the community.

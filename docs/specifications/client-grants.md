@@ -40,4 +40,20 @@ over `clients.yaml` alone and merged with the ds-host overlay:
   no registry write: its only registry scope is `rec-registry.read`.
 - **`svc-community` never holds `rec-registry.members.write` or `rec-registry.admin`**, as a
   default or an optional scope. Its registry scopes are exactly `rec-registry.read` (default)
-  and the two writes (optional).
+  and the two writes (optional), plus the per-field role and area writes of REQ-0008
+  (optional).
+
+### REQ-0008 — member writes are granted per field
+
+For the registry's per-field member routes (rec-registry, "member writes are granted per
+field"), over `clients.yaml` alone and merged with the ds-host overlay:
+
+- **Four scopes are declared** in the registry's family, owned by `svc-rec-registry`, named
+  `rec-registry.members.<field>.write`: `name`, `role`, `area`, `delivery_points`.
+- **`svc-community` holds `rec-registry.members.role.write` and `.area.write` as optional
+  scopes**, beside `rec-registry.members.profile.write`, which it keeps until the BFF calls the
+  new routes. It holds neither `name.write` nor `delivery_points.write`.
+- **`svc-onboarding` holds `rec-registry.members.name.write` and `.delivery_points.write` as
+  default scopes**, beside `rec-registry.members.write`, which it keeps because creating a
+  member needs it. It holds neither `role.write` nor `area.write`, and its optional scopes are
+  still exactly REQ-0004's two.

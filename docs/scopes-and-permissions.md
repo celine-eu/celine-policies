@@ -59,6 +59,10 @@ Examples:
 | `rec-registry.members.purge` | Permanently erase a member and its assets (erasure requests) |
 | `rec-registry.assets.write` | Create, update and delete member assets |
 | `rec-registry.members.profile.write` | Change one member's role and area, nothing else. `members.write` and `.admin` also satisfy it (the registry's rule) |
+| `rec-registry.members.name.write` | Change one member's name, nothing else. `members.write` and `.admin` also satisfy it |
+| `rec-registry.members.role.write` | Change one member's role, nothing else. `members.profile.write`, `members.write` and `.admin` also satisfy it |
+| `rec-registry.members.area.write` | Change one member's area, nothing else. `members.profile.write`, `members.write` and `.admin` also satisfy it |
+| `rec-registry.members.delivery_points.write` | Add, replace and remove one member's delivery points, nothing else. `members.write` and `.admin` also satisfy it |
 | `rec-registry.community.write` | Update community metadata, areas and topology |
 | `rec-registry.import` | Import into the registry |
 | `rec-registry.export` | Export from the registry |
@@ -81,6 +85,7 @@ scope at all. These scopes exist for the other subject type — service accounts
 | `onboarding.submissions.reveal` | Unmask fiscal code and POD (each reveal is audit-logged) |
 | `onboarding.submissions.write` | Edit submission fields and operator notes |
 | `onboarding.submissions.review` | Take in charge, approve, reject, reopen |
+| `onboarding.submissions.revise` | Correct a submission's POD, names or email by tracked revision |
 | `onboarding.submissions.purge` | GDPR erasure of a submission and its files |
 | `onboarding.enablement.retry` | Re-run a failed enablement step |
 | `onboarding.enablement.revoke` | Reverse enablement — revoke credential, membership, login |
@@ -150,7 +155,7 @@ The service that writes participant accounts into the realm, and the only thing 
 | Scope | Description |
 |-------|-------------|
 | `provisioning.admin` | Full access to the provisioning service |
-| `provisioning.participants.write` | Create or update one participant's account, email them an invitation or a password reset, disable it |
+| `provisioning.participants.write` | Create or update one participant's account, correct its names or address, email them an invitation or a password reset, disable it |
 | `provisioning.reconcile` | Sweep one community from the registry and reconcile the realm against it |
 
 **Only `svc-onboarding` holds a `provisioning.*` scope**, apart from the service itself
@@ -264,6 +269,8 @@ optional_scopes:
   - onboarding.members.invite           # "Send invitation" / "Reset password", through onboarding
   - rec-registry.assets.write           # attach or detach a member's meter
   - rec-registry.members.profile.write  # change a member's role and area
+  - rec-registry.members.role.write     # change a member's role (its own route)
+  - rec-registry.members.area.write     # change a member's area (its own route)
 ```
 
 `rec-registry.read` also gives the members page its names. They are read per request and never
@@ -281,6 +288,11 @@ call; which manager may press, and for which REC, is the dashboard's policy
 ([ADR-0011](decisions/ADR-0011-the-dashboard-writes-registry-data-with-optional-scopes.md)).
 Every registry grant is registry-wide. `rec-registry.members.write` stays refused: it would also
 rewrite a member's user id, DID and status.
+
+`rec-registry.members.role.write` and `.area.write` are the per-field successors of
+`profile.write`, one per registry route ([REQ-0008](specifications/client-grants.md)), optional
+for the same reason. `profile.write` stays until the BFF has moved to them; removing it first
+would break the profile dialog.
 
 `onboarding.members.invite` is **optional, not default**. The Digital Twin forwards this
 client's default-scope token to dataset-api, and a send capability must not travel there. The
@@ -304,6 +316,8 @@ default_scopes:
   - provisioning.participants.write
   - rec-registry.members.write   # approval registers the member; the dataspace step writes its DID
   - rec-registry.lookup          # the POD export reads back what each consenting DID holds
+  - rec-registry.members.name.write            # an operator's correction of a member's name
+  - rec-registry.members.delivery_points.write # an operator's correction of a member's POD
   - digital-twin.values.read     # resolve a supply address to its boundary; validate a template's boundary ids
   - rec-registry.read            # the registry sync's dry run, prune count and drift check
 optional_scopes:                 # requested per call, only by the registry sync

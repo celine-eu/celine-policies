@@ -35,6 +35,7 @@ EXPECTED_SCOPES = {
     "onboarding.submissions.reveal",
     "onboarding.submissions.write",
     "onboarding.submissions.review",
+    "onboarding.submissions.revise",
     "onboarding.submissions.purge",
     "onboarding.enablement.retry",
     "onboarding.enablement.revoke",
@@ -130,6 +131,9 @@ class TestOnboardingClients:
             "rec-registry.members.write",
             "rec-registry.lookup",
             "rec-registry.read",
+            # per-field member writes, narrower than members.write (REQ-0008)
+            "rec-registry.members.name.write",
+            "rec-registry.members.delivery_points.write",
         }
         # The registry sync's community write and the provisioning sweep are
         # optional, requested per call (ADR-0011, REQ-0004), and add no audience:

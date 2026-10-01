@@ -15,7 +15,7 @@ not how often it changes:
 |---|---|---|
 | **platform**: realm features (Organizations, fine-grained admin permissions), sign-in settings, languages, themes, token lifespans, brute force, `smtpServer`, the realm role groups | `keycloak bootstrap` | [`platform.yaml`](platform.yaml), `CELINE_KEYCLOAK_PLATFORM_*` overrides, `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `CELINE_KEYCLOAK_SMTP_*` |
 | **clients**: clients, scopes, scope bindings, audience mappers, realm claim scopes, service-account grants | `keycloak sync` | `clients.yaml` |
-| **organizations and users**: REC organizations, org groups, participants, memberships | the provisioning service (`POST /reconcile/{community}` creates a REC's organization, org roles and groups, even with no members; `PUT /participants` files a participant), `keycloak set-user-organization` (a manager's `managers` or `admins` group, run by a platform admin), `keycloak sync-orgs`; `keycloak sync-users` in local development only — see [ADR-0010](docs/decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md) | the registry, owners and REC YAML |
+| **organizations and users**: REC organizations, org groups, participants, memberships | the provisioning service (`POST /reconcile/{community}` creates a REC's organization, org roles and groups, even with no members; `PUT /participants` files a participant, `PATCH /participants` corrects their names or address), `keycloak set-user-organization` (a manager's `managers` or `admins` group, run by a platform admin), `keycloak sync-orgs`; `keycloak sync-users` in local development only — see [ADR-0010](docs/decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md) | the registry, owners and REC YAML |
 
 A command never writes a level it does not own. It checks the levels it depends on and
 refuses, naming the command to run. So the order is `bootstrap`, then `sync`, then the
@@ -67,7 +67,7 @@ celine-policies/
 │   │   ├── bundle.py       # Reading a REC bundle (file or registry: same parser)
 │   │   ├── registry.py     # GET /admin/export on the live rec-registry
 │   │   ├── service.py      # What each route does, with no FastAPI in it
-│   │   ├── routes.py       # PUT /participants, invitation, disable, reconcile
+│   │   ├── routes.py       # PUT/PATCH /participants, invitation, disable, reconcile
 │   │   ├── invitation.py   # Who may be emailed, which actions, shared with sync-users
 │   │   ├── api_models.py   # Wire models; the one place keycloak_id becomes user_id
 │   │   ├── config.py       # ProvisioningSettings

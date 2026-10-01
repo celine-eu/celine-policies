@@ -110,3 +110,24 @@ async def test_an_exact_page_asks_once_more_and_stops_on_empty() -> None:
 
     assert members == everyone
     assert calls == 3
+
+
+async def test_every_holder_of_an_address_is_found_whatever_its_case() -> None:
+    """`get_users_by_email` answers "does anybody else hold this address", so it
+    returns every match, encodes the `+`, and compares case-insensitively."""
+    seen: list[httpx.Request] = []
+    holders = [
+        {"id": "x-1", "username": "one", "email": VALUE},
+        {"id": "x-2", "username": "two", "email": VALUE.upper()},
+        {"id": "x-3", "username": "three", "email": "someone-else@example.test"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=holders)
+
+    result = await _client(handler).get_users_by_email(f" {VALUE.upper()} ")
+
+    assert [u["id"] for u in result] == ["x-1", "x-2"]
+    assert "%2B" in seen[0].url.raw_path.decode()
+    assert parse_qs(urlsplit(str(seen[0].url)).query)["email"] == [VALUE]

@@ -26,12 +26,13 @@ import pytest
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.provisioning import service as service_module
 from celine.provisioning.config import ProvisioningSettings
-from celine.policies.cli.keycloak.client import KeycloakError
+from celine.policies.cli.keycloak.client import KeycloakConflictError, KeycloakError
 from celine.provisioning.registry import RegistryCommunityNotFound, RegistryError
 from celine.provisioning.service import (
     AccountDisabled,
     AccountNotFound,
     CommunityNotFound,
+    EmailTaken,
     HasPassword,
     InvitationCooldown,
     MemberNotFound,
@@ -71,6 +72,7 @@ class FakeKeycloak:
         passwords_on: set[str] | None = None,
         send_error: Exception | None = None,
         send_yields: bool = False,
+        update_error: Exception | None = None,
     ):
         self.users_by_email = users_by_email or {}
         self.users_by_username = users_by_username or {}
@@ -90,11 +92,15 @@ class FakeKeycloak:
         #: concurrent calls interleave the way two HTTP requests would
         self.send_yields = send_yields
         self.send_attempts = 0
+        self.update_error = update_error
 
         self.calls: list[tuple] = []
         self.passwords: list[tuple[str, str, bool]] = []
         self.enabled_changes: list[tuple[str, bool]] = []
         self.emails: list[dict] = []
+        #: the address the account carried when each email went out, which is
+        #: where Keycloak sends it
+        self.sent_to: list[str | None] = []
         self.locales: list[tuple[str, str]] = []
 
     async def __aenter__(self):
@@ -179,6 +185,7 @@ class FakeKeycloak:
             await asyncio.sleep(0)
         if self.send_error:
             raise self.send_error
+        self.sent_to.append(((await self.get_user_by_id(user_id)) or {}).get("email"))
         self.emails.append(
             {
                 "user_id": user_id,
@@ -188,6 +195,40 @@ class FakeKeycloak:
                 "redirect_uri": redirect_uri,
             }
         )
+
+    async def get_users_by_email(self, email):
+        self.calls.append(("get_users_by_email", email))
+        wanted = email.strip().lower()
+        seen = {}
+        for user in [*self.users_by_username.values(), *self.users_by_email.values()]:
+            if (user.get("email") or "").strip().lower() == wanted:
+                seen[user["id"]] = user
+        return list(seen.values())
+
+    async def update_user_profile(
+        self, user_id, *, first_name=None, last_name=None, email=None, email_verified=None
+    ):
+        self.calls.append(
+            ("update_user_profile", user_id, first_name, last_name, email, email_verified)
+        )
+        if self.update_error:
+            raise self.update_error
+        user = await self.get_user_by_id(user_id)
+        for name, value in (
+            ("firstName", first_name),
+            ("lastName", last_name),
+            ("email", email),
+            ("emailVerified", email_verified),
+        ):
+            if value is not None:
+                user[name] = value
+        return dict(user)
+
+    async def put_user(self, user_id, representation):
+        self.calls.append(("put_user", user_id))
+        user = await self.get_user_by_id(user_id)
+        user.clear()
+        user.update(representation)
 
     async def set_user_enabled(self, user_id, enabled):
         user = await self.get_user_by_id(user_id)
@@ -1403,3 +1444,363 @@ async def test_setting_up_a_community_the_registry_does_not_have_creates_nothing
     assert excinfo.value.code == "community_not_found"
     assert kc.calls == []
     assert kc.created == []
+
+
+# --- correcting names and address (PATCH) ----------------------------------
+#
+# Onboarding plan "an operator corrects a member's declared data", R7: by
+# username, never renamed, never created; `email_taken`; an address change
+# resets `emailVerified` and sends the link to the new address only.
+
+
+def _account(
+    uuid="u1",
+    username="ex-00001",
+    *,
+    email="old@example.org",
+    first="One",
+    last="Member",
+    verified=True,
+    enabled=True,
+):
+    return {
+        "id": uuid,
+        "username": username,
+        "email": email,
+        "firstName": first,
+        "lastName": last,
+        "emailVerified": verified,
+        "enabled": enabled,
+        "attributes": {"locale": ["it"]},
+    }
+
+
+def _writes(kc) -> list[tuple]:
+    return [c for c in kc.calls if c[0] in ("update_user_profile", "put_user", "ensure_user")]
+
+
+async def test_an_update_finds_the_account_by_its_registry_username(keycloak, registry):
+    """The registry row says `a.person@example.org`; that is the account updated,
+    whatever the key looks like.
+
+    @verifies REQ-0007
+    """
+    kc = keycloak(
+        users_by_username={
+            "a.person@example.org": _account("uuid-legacy", "a.person@example.org")
+        }
+    )
+    registry()
+
+    result = await a_service().update_participant(
+        community="example-rec", key="20260912-a3f9c2", first_name="Anna"
+    )
+
+    assert ("get_user_by_username", "a.person@example.org") in kc.calls
+    assert result.keycloak_id == "uuid-legacy"
+    assert result.username == "a.person@example.org"
+    assert result.first_name == "Anna"
+    assert result.changed == ("first_name",)
+
+
+async def test_an_address_change_keeps_the_username_and_creates_no_account(
+    keycloak, registry
+):
+    """@verifies REQ-0007"""
+    account = _account()
+    kc = keycloak(users_by_username={"ex-00001": account})
+    registry()
+
+    result = await a_service().update_participant(
+        community="example-rec", key="ex-00001", email="new@example.org"
+    )
+
+    assert result.username == "ex-00001"
+    assert account["username"] == "ex-00001"
+    assert list(kc.users_by_username) == ["ex-00001"]
+    assert not [c for c in kc.calls if c[0] == "ensure_user"]
+    assert account["email"] == "new@example.org"
+    assert account["attributes"] == {"locale": ["it"]}  # nothing else lost
+
+
+async def test_an_address_change_resets_verified_and_emails_the_new_address_only(
+    keycloak, registry
+):
+    """Keycloak sends to the account's address; the send happens after the
+    write, so the only address it can reach is the new one.
+
+    @verifies REQ-0007
+    """
+    account = _account(verified=True)
+    kc = keycloak(users_by_username={"ex-00001": account})
+    registry()
+
+    result = await a_service().update_participant(
+        community="example-rec", key="ex-00001", email="New@Example.org "
+    )
+
+    write = next(c for c in kc.calls if c[0] == "update_user_profile")
+    assert write[4:] == ("New@Example.org", False)
+    assert result.email_verified is False
+    assert result.verification == "sent"
+    assert result.changed == ("email",)
+    assert kc.emails == [
+        {
+            "user_id": "u1",
+            "actions": ["VERIFY_EMAIL"],
+            "lifespan": 604800,
+            "client_id": "oauth2_proxy",
+            "redirect_uri": "http://webapp.celine.localhost/",
+        }
+    ]
+    # Keycloak sends to the account's address: at the send it was the new one,
+    # and nothing went to the old one
+    assert kc.sent_to == ["New@Example.org"]
+    assert "old@example.org" not in kc.sent_to
+    assert kc.send_attempts == 1
+
+
+async def test_the_same_address_in_another_case_is_not_a_change(keycloak, registry):
+    """@verifies REQ-0007"""
+    kc = keycloak(users_by_username={"ex-00001": _account(email="one@example.org")})
+    registry()
+
+    result = await a_service().update_participant(
+        community="example-rec", key="ex-00001", email=" ONE@example.org"
+    )
+
+    assert result.changed == ()
+    assert result.email_verified is True
+    assert result.verification == "not_requested"
+    assert _writes(kc) == []
+    assert kc.emails == []
+
+
+async def test_a_names_only_update_leaves_the_address_and_its_verification_alone(
+    keycloak, registry
+):
+    """@verifies REQ-0007"""
+    account = _account(verified=True)
+    kc = keycloak(users_by_username={"ex-00001": account})
+    registry()
+
+    result = await a_service().update_participant(
+        community="example-rec", key="ex-00001", first_name="Anna", last_name="Rossi"
+    )
+
+    write = next(c for c in kc.calls if c[0] == "update_user_profile")
+    assert write[2:] == ("Anna", "Rossi", None, None)
+    assert account["email"] == "old@example.org"
+    assert account["emailVerified"] is True
+    assert result.changed == ("first_name", "last_name")
+    assert result.verification == "not_requested"
+    assert kc.emails == []
+    assert not [c for c in kc.calls if c[0] == "get_users_by_email"]
+
+
+async def test_values_already_on_the_account_write_nothing(keycloak, registry):
+    kc = keycloak(users_by_username={"ex-00001": _account()})
+    registry()
+
+    result = await a_service().update_participant(
+        community="example-rec", key="ex-00001", first_name="One", last_name="Member"
+    )
+
+    assert result.changed == ()
+    assert _writes(kc) == []
+
+
+async def test_an_address_another_account_holds_is_email_taken_and_writes_nothing(
+    keycloak, registry
+):
+    """@verifies REQ-0007"""
+    other = _account("u2", "someone", email="Taken@Example.org")
+    mine = _account()
+    kc = keycloak(users_by_username={"ex-00001": mine, "someone": other})
+    registry()
+
+    with pytest.raises(EmailTaken) as excinfo:
+        await a_service().update_participant(
+            community="example-rec",
+            key="ex-00001",
+            first_name="Anna",
+            email="taken@example.ORG",
+        )
+
+    assert excinfo.value.code == "email_taken"
+    assert "taken@example" not in str(excinfo.value).lower()  # no address in the message
+    assert _writes(kc) == []
+    assert kc.emails == []
+    assert mine["firstName"] == "One"
+
+
+async def test_keycloaks_own_duplicate_refusal_is_email_taken(keycloak, registry):
+    """A realm with `duplicateEmailsAllowed: false` answers 409 itself, e.g. on
+    a race the read-before-write could not see."""
+    kc = keycloak(
+        users_by_username={"ex-00001": _account()},
+        update_error=KeycloakConflictError("User exists with same email", status_code=409),
+    )
+    registry()
+
+    with pytest.raises(EmailTaken):
+        await a_service().update_participant(
+            community="example-rec", key="ex-00001", email="new@example.org"
+        )
+    assert kc.emails == []
+
+
+async def test_a_failed_verification_send_puts_the_account_back(keycloak, registry):
+    account = _account(verified=True)
+    kc = keycloak(
+        users_by_username={"ex-00001": account},
+        send_error=KeycloakError("Failed to send execute actions email", status_code=500),
+    )
+    registry()
+
+    with pytest.raises(SendFailed):
+        await a_service().update_participant(
+            community="example-rec", key="ex-00001", first_name="Anna", email="new@example.org"
+        )
+
+    assert account["email"] == "old@example.org"
+    assert account["emailVerified"] is True
+    assert account["firstName"] == "One"
+    assert ("put_user", "u1") in kc.calls
+
+    # so a retry of the same call is a change again, and sends
+    kc.send_error = None
+    result = await a_service().update_participant(
+        community="example-rec", key="ex-00001", first_name="Anna", email="new@example.org"
+    )
+    assert result.verification == "sent"
+    assert len(kc.emails) == 1
+
+
+async def test_in_dev_mode_a_new_address_off_the_list_is_written_and_not_emailed(
+    keycloak, registry
+):
+    account = _account()
+    kc = keycloak(users_by_username={"ex-00001": account})
+    registry()
+
+    result = await a_service(email_mode="dev").update_participant(
+        community="example-rec", key="ex-00001", email="new@example.org"
+    )
+
+    assert result.verification == "not_on_dev_list"
+    assert account["email"] == "new@example.org"
+    assert account["emailVerified"] is False
+    assert kc.emails == []
+
+
+async def test_the_verification_neither_waits_for_nor_starts_the_cooldown(
+    keycloak, registry
+):
+    """The operator corrects the address because the invitation went astray;
+    the link to the new address must not be held back by that invitation."""
+    account = _account(email="wrong@example.org", verified=False)
+    kc = keycloak(users_by_username={"ex-00001": account})
+    registry()
+    service = a_service(clock=Clock())
+
+    await service.send_invitation(community="example-rec", key="ex-00001", intent="invitation")
+    result = await service.update_participant(
+        community="example-rec", key="ex-00001", email="right@example.org"
+    )
+    assert result.verification == "sent"
+
+    with pytest.raises(InvitationCooldown):  # the invitation's own cooldown still stands
+        await service.send_invitation(
+            community="example-rec", key="ex-00001", intent="invitation"
+        )
+    assert [e["actions"] for e in kc.emails] == [
+        ["UPDATE_PASSWORD", "VERIFY_EMAIL"],
+        ["VERIFY_EMAIL"],
+    ]
+
+
+async def test_an_update_of_a_disabled_account_is_refused_before_any_write(
+    keycloak, registry
+):
+    kc = keycloak(users_by_username={"ex-00001": _account(enabled=False)})
+    registry()
+
+    with pytest.raises(AccountDisabled):
+        await a_service().update_participant(
+            community="example-rec", key="ex-00001", email="new@example.org"
+        )
+    assert _writes(kc) == []
+    assert kc.emails == []
+
+
+@pytest.mark.parametrize(
+    "key,users,error,code",
+    [
+        ("nobody", {}, MemberNotFound, "member_not_found"),
+        ("ex-00003", {"ex-00003": _account("u3", "ex-00003")}, MemberNotFound, "member_not_found"),
+        ("ex-00001", {}, AccountNotFound, "account_not_found"),
+    ],
+    ids=["not-in-community", "not-active", "no-account"],
+)
+async def test_an_update_of_nobody_in_that_community_is_404_and_creates_nothing(
+    keycloak, registry, key, users, error, code
+):
+    """@verifies REQ-0007"""
+    kc = keycloak(users_by_username=users)
+    registry()
+
+    with pytest.raises(error) as excinfo:
+        await a_service().update_participant(
+            community="example-rec", key=key, email="new@example.org"
+        )
+
+    assert excinfo.value.code == code
+    assert _writes(kc) == []
+    assert kc.emails == []
+
+
+async def test_an_update_in_a_community_the_registry_does_not_have_is_community_not_found(
+    keycloak, registry
+):
+    kc = keycloak(users_by_username={"ex-00001": _account()})
+    registry(error=RegistryCommunityNotFound("http://registry has no community nowhere"))
+
+    with pytest.raises(CommunityNotFound):
+        await a_service().update_participant(
+            community="nowhere", key="ex-00001", first_name="Anna"
+        )
+    assert _writes(kc) == []
+
+
+async def test_update_account_is_callable_by_username_without_the_registry(
+    keycloak, registry
+):
+    """R13: the webapp's self-service will know the username from the member's
+    own session; the work is the same function, with no registry read."""
+    kc = keycloak(users_by_username={"ex-00001": _account()})
+    calls = registry()
+
+    result = await a_service().update_account("ex-00001", last_name="Rossi")
+
+    assert calls == []
+    assert result.changed == ("last_name",)
+    assert kc.users_by_username["ex-00001"]["lastName"] == "Rossi"
+
+
+async def test_an_update_logs_field_names_and_never_values(keycloak, registry, caplog):
+    keycloak(users_by_username={"ex-00001": _account()})
+    registry()
+
+    with caplog.at_level("DEBUG"):
+        await a_service().update_participant(
+            community="example-rec",
+            key="ex-00001",
+            first_name="Anna",
+            email="new@example.org",
+        )
+
+    text = caplog.text
+    assert "first_name" in text and "email" in text
+    assert "Anna" not in text
+    assert "new@example.org" not in text

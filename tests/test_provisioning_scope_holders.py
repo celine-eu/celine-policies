@@ -114,11 +114,14 @@ def test_svc_community_holds_no_provisioning_scope():
     assert _provisioning_scopes(community) == set()
     # Its optional scopes: onboarding's, which is how it reaches the
     # provisioning service instead, and the two registry writes of the manager
-    # dialogs (ADR-0011, REQ-0005). Nothing else.
+    # dialogs (ADR-0011, REQ-0005), with role and area per field (REQ-0008).
+    # Nothing else.
     assert community.optional_scopes == [
         "onboarding.members.invite",
         "rec-registry.assets.write",
         "rec-registry.members.profile.write",
+        "rec-registry.members.role.write",
+        "rec-registry.members.area.write",
     ]
 
 

@@ -11,7 +11,7 @@ it becomes `user_id`.
 from __future__ import annotations
 
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # The value sets below are `str` enums rather than bare `Literal`s for one
 # reason: a named enum becomes a named component in the OpenAPI document, so
@@ -57,7 +57,7 @@ class ErrorDetail(BaseModel):
             "Stable machine-readable reason: `missing_token`, `invalid_token`, "
             "`insufficient_scope`, `community_not_found`, `member_not_found`, "
             "`account_not_found`, `account_disabled`, `has_password`, "
-            "`no_password`, `no_email`, `cooldown`, "
+            "`no_password`, `no_email`, `email_taken`, `cooldown`, "
             "`reconcile_diverged`, `registry_unavailable`, `send_failed`, "
             "`provisioning_failed`. New codes may be added: branch on the HTTP "
             "status for one you do not know."
@@ -199,6 +199,92 @@ class ParticipantResponse(BaseModel):
     )
     invited: bool = Field(
         ..., description="True if and only if `invitation` is `sent`."
+    )
+
+
+class ParticipantUpdate(BaseModel):
+    """The body of `PATCH /participants/{community}/{key}`.
+
+    At least one field; an empty body, or one with only `null`s, is `422`.
+    **No `username`**: the account keeps the one it has, and a body naming one
+    (or any other field) is refused `422` rather than silently ignored.
+
+    The address is a plain string, for the reason `ParticipantUpsert` gives.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    first_name: str | None = Field(
+        default=None, min_length=1, description="Given name; omitted, it is not touched"
+    )
+    last_name: str | None = Field(
+        default=None, min_length=1, description="Family name; omitted, it is not touched"
+    )
+    email: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "The new address. A change resets `email_verified` and emails a "
+            "verification link to this address only; the same address (ignoring "
+            "case) is not a change. `409 email_taken` if another account holds it"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _at_least_one(self) -> ParticipantUpdate:
+        if self.first_name is None and self.last_name is None and self.email is None:
+            raise ValueError("give at least one of first_name, last_name, email")
+        return self
+
+
+class VerificationOutcome(str, Enum):
+    """What an update did about verifying an address.
+
+    Mirrors `celine.provisioning.invitation.VerificationOutcome`.
+    """
+
+    not_requested = "not_requested"
+    sent = "sent"
+    not_on_dev_list = "not_on_dev_list"
+
+
+class UpdatedField(str, Enum):
+    first_name = "first_name"
+    last_name = "last_name"
+    email = "email"
+
+
+class ParticipantUpdateResponse(BaseModel):
+    """The account after `PATCH /participants/{community}/{key}`.
+
+    `user_id` and `username` as on every other route: the Keycloak uuid, and the
+    name the account authenticates as, which this route never changes.
+    """
+
+    user_id: str = Field(
+        ..., description="The Keycloak uuid of the account (not the registry's user_id)"
+    )
+    username: str = Field(..., description="Unchanged by this route, always")
+    first_name: str | None
+    last_name: str | None
+    email: str | None
+    email_verified: bool = Field(
+        ..., description="False after an address change, until the person follows the link"
+    )
+    changed: list[UpdatedField] = Field(
+        ...,
+        description=(
+            "The fields this call wrote. Empty when every value given was already "
+            "the account's: nothing was written and nothing sent"
+        ),
+    )
+    verification: VerificationOutcome = Field(
+        ...,
+        description=(
+            "`not_requested` (the address did not change), `sent` (Keycloak "
+            "emailed `VERIFY_EMAIL` to the new address), `not_on_dev_list` (dev "
+            "email mode: written, nothing sent). New codes may be added"
+        ),
     )
 
 

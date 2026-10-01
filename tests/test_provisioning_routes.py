@@ -31,6 +31,7 @@ from celine.provisioning.service import (
     CommunityNotFound,
     DisableResult,
     Divergence,
+    EmailTaken,
     HasPassword,
     InvitationCooldown,
     InvitationResult,
@@ -42,6 +43,7 @@ from celine.provisioning.service import (
     ReconcileResult,
     RegistryUnavailable,
     SendFailed,
+    UpdateResult,
     UpsertResult,
 )
 
@@ -86,6 +88,27 @@ class FakeService:
             invitation="sent",
             actions=("UPDATE_PASSWORD", "VERIFY_EMAIL"),
             lifespan=604800,
+        )
+
+    async def update_participant(self, *, community, key, first_name, last_name, email):
+        self.calls.append(
+            ("update_participant", community, key, first_name, last_name, email)
+        )
+        if self.raises:
+            raise self.raises
+        changed = tuple(
+            n for n, v in (("first_name", first_name), ("last_name", last_name), ("email", email))
+            if v is not None
+        )
+        return UpdateResult(
+            username="ex-00001",
+            keycloak_id="uuid-1",
+            first_name=first_name or "One",
+            last_name=last_name or "Member",
+            email=email or "one@example.org",
+            email_verified=email is None,
+            changed=changed,
+            verification="sent" if email is not None else "not_requested",
         )
 
     async def disable(self, *, community, key):
@@ -135,6 +158,7 @@ ADMIN = ("provisioning.admin",)
 BODY = {"email": "a.person@example.org"}
 INVITE = {"intent": "invitation"}
 RESET = {"intent": "password_reset"}
+PATCH = {"first_name": "Ann"}
 
 
 # --- authentication and authorisation ------------------------------------
@@ -203,6 +227,7 @@ def test_the_reconcile_scope_does_not_authorise_an_upsert(app_with):
     "method,path",
     [
         ("put", "/participants/example-rec/ex-00001"),
+        ("patch", "/participants/example-rec/ex-00001"),
         ("post", "/participants/example-rec/ex-00001/invitation"),
         ("post", "/participants/example-rec/ex-00001/disable"),
         ("post", "/reconcile/example-rec"),
@@ -214,7 +239,15 @@ def test_provisioning_admin_satisfies_every_route(app_with, method, path):
     worse than one that repeats it."""
     client, _ = app_with(scopes=ADMIN)
 
-    body = BODY if method == "put" else INVITE if path.endswith("/invitation") else None
+    body = (
+        BODY
+        if method == "put"
+        else PATCH
+        if method == "patch"
+        else INVITE
+        if path.endswith("/invitation")
+        else None
+    )
     response = getattr(client, method)(
         path, json=body, headers={"Authorization": "Bearer x"}
     )
@@ -587,6 +620,135 @@ def test_a_sweep_that_leaves_a_member_outside_its_organization_fails_loudly(app_
     assert detail["community"] == "example-rec"
 
 
+# --- the update -----------------------------------------------------------
+
+
+def _patch(client, body, path="/participants/example-rec/ex-00001", auth=True):
+    return client.patch(
+        path, json=body, headers={"Authorization": "Bearer x"} if auth else {}
+    )
+
+
+def test_an_update_without_a_token_is_refused_and_touches_nothing(app_with):
+    client, service = app_with(scopes=WRITE)
+
+    response = _patch(client, PATCH, auth=False)
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "missing_token"
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [("onboarding.admin",), RECONCILE, ("rec-registry.members.name.write",)],
+    ids=["another-service", "reconcile", "registry-name-write"],
+)
+def test_an_update_needs_the_participant_write_scope(app_with, scopes):
+    """The same grant as the other participant writes, and nothing else will do:
+    not a sweep, not a registry grant over the same field.
+
+    @verifies REQ-0007
+    """
+    client, service = app_with(scopes=scopes)
+
+    response = _patch(client, {"email": "new@example.org"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "insufficient_scope"
+    assert "provisioning.participants.write" in response.json()["detail"]["message"]
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"first_name": None, "last_name": None, "email": None},
+        {"first_name": ""},
+        {"email": ""},
+        {"username": "someone-else"},
+        {"username": "someone-else", "email": "new@example.org"},
+    ],
+    ids=["empty", "all-null", "empty-name", "empty-email", "username-only", "username-and-email"],
+)
+def test_an_update_body_needs_a_field_and_cannot_name_a_username(app_with, body):
+    """@verifies REQ-0007"""
+    client, service = app_with(scopes=WRITE)
+
+    response = _patch(client, body)
+
+    assert response.status_code == 422
+    assert service.calls == []
+
+
+def test_an_update_passes_only_what_was_given_and_answers_the_account(app_with):
+    client, service = app_with(scopes=WRITE)
+
+    response = _patch(client, {"email": "new@example.org"})
+
+    assert response.status_code == 200
+    assert service.calls == [
+        ("update_participant", "example-rec", "ex-00001", None, None, "new@example.org")
+    ]
+    assert response.json() == {
+        "user_id": "uuid-1",
+        "username": "ex-00001",
+        "first_name": "One",
+        "last_name": "Member",
+        "email": "new@example.org",
+        "email_verified": False,
+        "changed": ["email"],
+        "verification": "sent",
+    }
+
+
+def test_an_address_another_account_holds_is_409_email_taken(app_with):
+    """@verifies REQ-0007"""
+    error = EmailTaken("another account already holds the address asked for example-rec/ex-00001")
+    client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
+
+    response = _patch(client, {"email": "taken@example.org"})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": {"code": "email_taken", "message": str(error)}}
+
+
+@pytest.mark.parametrize(
+    "error,status_code,code",
+    [
+        *[(e, 404, c) for e, c in NOT_FOUND],
+        (AccountDisabled("example-rec/ex-00001 ('ex-00001') is disabled"), 409, "account_disabled"),
+        (SendFailed("Keycloak did not email example-rec/ex-00001"), 502, "send_failed"),
+        (RegistryUnavailable("registry down"), 502, "registry_unavailable"),
+        (ProvisioningError("Keycloak did not update example-rec/ex-00001"), 502, "provisioning_failed"),
+    ],
+    ids=lambda v: v if isinstance(v, str) else None,
+)
+def test_an_update_refusal_carries_its_code(app_with, error, status_code, code):
+    client, _ = app_with(scopes=WRITE, service=FakeService(raises=error))
+
+    response = _patch(client, {"email": "new@example.org"})
+
+    assert response.status_code == status_code
+    assert response.json() == {"detail": {"code": code, "message": str(error)}}
+
+
+def test_the_update_contract_has_no_username_and_names_its_outcomes():
+    spec = _openapi()
+    operation = spec["paths"]["/participants/{community}/{key}"]["patch"]
+
+    ref = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    request = spec["components"]["schemas"][ref.rsplit("/", 1)[-1]]
+    assert set(request["properties"]) == {"first_name", "last_name", "email"}
+    assert request.get("additionalProperties") is False
+    assert spec["components"]["schemas"]["VerificationOutcome"]["enum"] == [
+        "not_requested",
+        "sent",
+        "not_on_dev_list",
+    ]
+
+
 # --- the shape of the surface --------------------------------------------
 
 
@@ -629,13 +791,15 @@ def test_the_invitation_route_requires_an_intent_body():
         "invitation",
         "password_reset",
     ]
-    assert spec["info"]["version"] == "1.3.0"
+    # 1.4.0 added `PATCH /participants/{community}/{key}`; this route is as 1.3.0 left it
+    assert spec["info"]["version"] == "1.4.0"
 
 
 def test_every_route_declares_its_errors_with_the_shared_body():
     spec = _openapi()
     expected = {
         ("/participants/{community}/{key}", "put"): {"401", "403", "502"},
+        ("/participants/{community}/{key}", "patch"): {"401", "403", "404", "409", "502"},
         ("/participants/{community}/{key}/invitation", "post"): {"401", "403", "404", "409", "429", "502"},
         ("/participants/{community}/{key}/disable", "post"): {"401", "403", "404", "502"},
         ("/reconcile/{community}", "post"): {"401", "403", "404", "502"},
@@ -654,7 +818,7 @@ def test_every_route_declares_its_errors_with_the_shared_body():
     assert "enum" not in detail["properties"]["code"]
 
 
-def test_the_service_exposes_four_routes_and_a_health_check():
+def test_the_service_exposes_five_routes_and_a_health_check():
     """A route added here by accident converts a realm-wide admin credential
     into an internet-facing one. The count is the review surface."""
     from celine.provisioning.main import create_app
@@ -667,6 +831,7 @@ def test_the_service_exposes_four_routes_and_a_health_check():
 
     assert paths == {
         ("/participants/{community}/{key}", ("PUT",)),
+        ("/participants/{community}/{key}", ("PATCH",)),
         ("/participants/{community}/{key}/invitation", ("POST",)),
         ("/participants/{community}/{key}/disable", ("POST",)),
         ("/reconcile/{community}", ("POST",)),

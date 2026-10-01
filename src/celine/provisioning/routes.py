@@ -1,4 +1,4 @@
-"""The four routes, their scope checks, and their status codes.
+"""The five routes, their scope checks, and their status codes.
 
 Authorisation is by scope like every other celine service. **Ingress
 restriction is defence in depth, not the control**: the argument that this
@@ -31,6 +31,8 @@ from celine.provisioning.api_models import (
     InvitationRequest,
     InvitationResponse,
     ParticipantResponse,
+    ParticipantUpdate,
+    ParticipantUpdateResponse,
     ParticipantUpsert,
     ReconcileResponse,
 )
@@ -99,7 +101,8 @@ def _responses(*codes: int) -> dict[int | str, dict]:
         409: (
             "The account's state rules it out: `account_disabled`; on the "
             "invitation route also `has_password` (intent `invitation`), "
-            "`no_password` (intent `password_reset`) and `no_email`"
+            "`no_password` (intent `password_reset`) and `no_email`; on the "
+            "update `email_taken`"
         ),
         429: "Emailed within the cooldown (`cooldown`); see `Retry-After`",
         502: "A dependency failed: `registry_unavailable`, `send_failed`, `provisioning_failed`",
@@ -208,6 +211,56 @@ async def upsert_participant(
         created=result.created,
         invitation=result.invitation,
         invited=result.invited,
+    )
+
+
+@router.patch(
+    "/participants/{community}/{key}",
+    response_model=ParticipantUpdateResponse,
+    responses=_responses(401, 403, 404, 409, 502),
+    summary="Correct a member's names or email address on their existing account",
+)
+async def update_participant(
+    community: str,
+    key: str,
+    body: ParticipantUpdate,
+    authorization: Annotated[str | None, Header()] = None,
+    settings: ProvisioningSettings = Depends(get_settings),
+    service: ProvisioningService = Depends(get_service),
+) -> ParticipantUpdateResponse:
+    """Write `first_name`, `last_name` and `email` on the account the registry
+    names for `(community, key)`. Never creates an account and never changes
+    the username.
+
+    An address change resets `email_verified` and emails a `VERIFY_EMAIL` link
+    to the **new** address only; the same address is not a change and sends
+    nothing. `404` for a community, member or account that does not exist (the
+    code says which), `409 account_disabled`, `409 email_taken` when another
+    account holds the address, `502 send_failed` when Keycloak did not send the
+    link — the account is then put back as it was, so a retry sends.
+    """
+    _require_scope(authorization, settings, SCOPE_PARTICIPANTS_WRITE)
+
+    try:
+        result = await service.update_participant(
+            community=community,
+            key=key,
+            first_name=body.first_name,
+            last_name=body.last_name,
+            email=body.email,
+        )
+    except ProvisioningError as e:
+        raise _refusal(e) from e
+
+    return ParticipantUpdateResponse(
+        user_id=result.keycloak_id,
+        username=result.username,
+        first_name=result.first_name,
+        last_name=result.last_name,
+        email=result.email,
+        email_verified=result.email_verified,
+        changed=list(result.changed),
+        verification=result.verification,
     )
 
 

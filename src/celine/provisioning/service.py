@@ -17,8 +17,8 @@ on: find by email, create under the address if there is no match, and read the
 username back from Keycloak because an account that already existed may
 authenticate as something this platform never chose.
 
-**The lifecycle calls have a member and no address.** An invitation or a
-revocation is for somebody the registry already holds, and the registry's
+**The lifecycle calls have a member and no address.** An invitation, a
+correction of names or address, or a revocation is for somebody the registry already holds, and the registry's
 `Member.user_id` *is* the username. So `(community, key)` resolves through the
 registry export — the same artefact the sweep reads — and no address is needed
 or asked for.
@@ -51,7 +51,11 @@ from dataclasses import dataclass
 
 import httpx
 
-from celine.policies.cli.keycloak.client import KeycloakAdminClient, KeycloakError
+from celine.policies.cli.keycloak.client import (
+    KeycloakAdminClient,
+    KeycloakConflictError,
+    KeycloakError,
+)
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.provisioning.bundle import (
     load_rec_community_info,
@@ -63,8 +67,10 @@ from celine.provisioning.config import ProvisioningSettings
 from celine.provisioning.invitation import (
     INVITE_ACTIONS,
     RESET_ACTIONS,
+    VERIFY_ACTIONS,
     InvitationOutcome,
     SendIntent,
+    VerificationOutcome,
     has_address,
 )
 from celine.provisioning.models import OrganizationSpec
@@ -172,6 +178,18 @@ class NoEmail(Conflict):
     code = "no_email"
 
 
+class EmailTaken(Conflict):
+    """Another account already holds the address an update asked for.
+
+    Compared case-insensitively. Checked before anything is written, and again
+    by Keycloak itself on a realm that refuses duplicate addresses (its `409`
+    lands here too), so two accounts never end up sharing one address through
+    this service. A `409`.
+    """
+
+    code = "email_taken"
+
+
 class InvitationCooldown(ProvisioningError):
     """The same account was sent an email too recently. A `429` on the route,
     `invitation: cooldown` on the upsert."""
@@ -236,6 +254,24 @@ class DisableResult:
 
 
 @dataclass(frozen=True)
+class UpdateResult:
+    """The account after `update_participant`, and what the call changed.
+
+    `changed` names the fields written (`first_name`, `last_name`, `email`), in
+    that order; empty when every value given was already the account's.
+    """
+
+    username: str
+    keycloak_id: str
+    first_name: str | None
+    last_name: str | None
+    email: str | None
+    email_verified: bool
+    changed: tuple[str, ...] = ()
+    verification: VerificationOutcome = "not_requested"
+
+
+@dataclass(frozen=True)
 class ReconcileResult:
     community: str
     members: int
@@ -245,7 +281,7 @@ class ReconcileResult:
 
 
 class ProvisioningService:
-    """The four operations, over an admin client it opens per call.
+    """The five operations, over an admin client it opens per call.
 
     **Stateless, and the connection is not an exception to that.** A client per
     call costs one token request and buys a service that cannot hold a stale
@@ -271,6 +307,10 @@ class ProvisioningService:
       sent a reset: the route's caller names the email (`intent`) and a
       mismatch is refused before any send or cooldown;
     - an account with no email address is never sent anything (`no_email`).
+
+    **The one send outside that rule** is the verification of a changed address
+    (`update_account`): it goes to a new recipient, only because the address
+    changed in that call, so it neither waits for nor starts the cooldown.
 
     The slot is claimed before Keycloak is called and released if nothing went
     out, so two concurrent calls for one account cannot both send.
@@ -590,6 +630,212 @@ class ProvisioningService:
                 username=username, keycloak_id=user["id"], changed=changed
             )
 
+    # -- correcting what an account says about its person ------------------
+
+    async def update_participant(
+        self,
+        *,
+        community: str,
+        key: str,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        email: str | None = None,
+    ) -> UpdateResult:
+        """Correct a member's names or address, on the account they already have.
+
+        `(community, key)` resolves through the registry exactly as the other
+        lifecycle calls do, so a member of another community, or one that is not
+        active, is `MemberNotFound`; the work is `update_account`, which a caller
+        that already knows the username (a member's own session, later) uses
+        directly.
+        """
+        username = await self._username_of(community, key)
+        return await self.update_account(
+            username,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            who=f"{community}/{key}",
+        )
+
+    async def update_account(
+        self,
+        username: str,
+        *,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        email: str | None = None,
+        who: str | None = None,
+    ) -> UpdateResult:
+        """Write the names and the address of the account `username`.
+
+        **Finds, never creates, never renames.** The username is the stable
+        identity the registry and the identity registry key on; it is read and
+        sent back unchanged, so an address change keeps the same account and the
+        same DID. A field passed as `None` is not touched.
+
+        **An address change is unverified until the person proves it**:
+        `emailVerified` is reset and Keycloak emails a `VERIFY_EMAIL` link **to
+        the new address only** — nothing goes to the old one. An address equal
+        to the current one, ignoring case and surrounding space, is not a change:
+        nothing is reset and nothing is sent.
+
+        Refuses, in this order and before anything is written: an account that
+        does not exist (`AccountNotFound`), a disabled one (`AccountDisabled`),
+        and an address another account holds (`EmailTaken`). A dev-mode address
+        off the list is written and not emailed (`not_on_dev_list`). A send
+        Keycloak did not complete **puts the account back as it was read** and
+        raises `SendFailed`, so a retry of the same call is a fresh change that
+        sends again rather than a no-op that never will.
+
+        The verification send is **outside the invitation cooldown**, checked
+        and started: it is guarded by the change itself (repeating the call
+        sends nothing), it goes to a different recipient than anything sent
+        before, and an operator correcting the address of somebody whose
+        invitation went astray must not be told to wait.
+
+        Logs name the fields, never their values.
+        """
+        who = who or username
+
+        async with KeycloakAdminClient(self._keycloak_settings) as kc:
+            await kc.authenticate()
+            provisioner = Provisioner(kc)
+
+            found = await provisioner.find_by_username(username)
+            if not found:
+                raise AccountNotFound(
+                    f"{who} is registered as '{username}', and the realm has no "
+                    f"such account. Nothing was changed."
+                )
+            keycloak_id = found["id"]
+            # A copy: the pre-image is what a failed send puts back, and must
+            # not follow the write.
+            before = dict(await provisioner.find_by_id(keycloak_id) or found)
+
+            if not before.get("enabled", True):
+                raise AccountDisabled(
+                    f"{who} ('{username}') is disabled; nothing was changed"
+                )
+
+            new_first = (
+                first_name
+                if first_name is not None and first_name != before.get("firstName")
+                else None
+            )
+            new_last = (
+                last_name
+                if last_name is not None and last_name != before.get("lastName")
+                else None
+            )
+            new_email = (
+                email.strip()
+                if email is not None and not _same_address(email, before.get("email"))
+                else None
+            )
+
+            if new_email is not None:
+                holders = await provisioner.find_all_by_email(new_email)
+                if any(u.get("id") != keycloak_id for u in holders):
+                    raise EmailTaken(
+                        f"another account already holds the address asked for "
+                        f"{who}; nothing was changed"
+                    )
+
+            changed = tuple(
+                name
+                for name, value in (
+                    ("first_name", new_first),
+                    ("last_name", new_last),
+                    ("email", new_email),
+                )
+                if value is not None
+            )
+            if not changed:
+                return _update_result(username, keycloak_id, before, ())
+
+            try:
+                after = await provisioner.update_profile(
+                    keycloak_id,
+                    first_name=new_first,
+                    last_name=new_last,
+                    email=new_email,
+                    email_verified=False if new_email is not None else None,
+                )
+            except KeycloakConflictError as e:
+                if new_email is not None:
+                    raise EmailTaken(
+                        f"Keycloak refused the address asked for {who}: another "
+                        f"account holds it; nothing was changed"
+                    ) from e
+                raise ProvisioningError(f"Keycloak refused the update of {who}: {e}") from e
+            except (KeycloakError, httpx.HTTPError) as e:
+                raise ProvisioningError(f"Keycloak did not update {who}: {e}") from e
+
+            logger.info("Updated %s ('%s'): %s", who, username, ",".join(changed))
+
+            verification: VerificationOutcome = "not_requested"
+            if new_email is not None:
+                verification = await self._verify_new_address(
+                    provisioner,
+                    who=who,
+                    keycloak_id=keycloak_id,
+                    address=new_email,
+                    before=before,
+                )
+
+            return _update_result(
+                username, keycloak_id, after, changed, verification=verification
+            )
+
+    async def _verify_new_address(
+        self,
+        provisioner: Provisioner,
+        *,
+        who: str,
+        keycloak_id: str,
+        address: str,
+        before: dict,
+    ) -> VerificationOutcome:
+        """Email the `VERIFY_EMAIL` link to the address just written.
+
+        Keycloak sends to the account's address, which is now the new one, so
+        the old address cannot receive it. On a failed send the account is put
+        back as `before` and `SendFailed` is raised.
+        """
+        if not self._settings.email_policy.allows(address):
+            self._settings.email_policy.refuse(who)
+            return "not_on_dev_list"
+        try:
+            await provisioner.send_actions_email(
+                keycloak_id,
+                VERIFY_ACTIONS,
+                lifespan=self._settings.invite_lifespan,
+                client_id=self._settings.invite_client_id,
+                redirect_uri=self._settings.invite_redirect_uri,
+            )
+        except (KeycloakError, httpx.HTTPError) as e:
+            logger.warning(
+                "Keycloak did not email %s the verification (%s); putting the "
+                "account back as it was",
+                who,
+                getattr(e, "status_code", None) or type(e).__name__,
+            )
+            try:
+                await provisioner.restore(keycloak_id, before)
+            except (KeycloakError, httpx.HTTPError) as undo:
+                raise ProvisioningError(
+                    f"Keycloak did not email {who} the verification, and the "
+                    f"account could not be put back: it now carries the new, "
+                    f"unverified address. ({undo})"
+                ) from e
+            raise SendFailed(
+                f"Keycloak did not email {who} the verification; the account was "
+                f"put back as it was: {e}"
+            ) from e
+        logger.info("Emailed %s a verification of the new address", who)
+        return "sent"
+
     # -- the sweep ---------------------------------------------------------
 
     async def reconcile(self, community: str) -> ReconcileResult:
@@ -744,6 +990,31 @@ class ProvisioningService:
                 f"expected exactly one"
             )
         return documents[0]
+
+
+def _same_address(a: str | None, b: str | None) -> bool:
+    """Whether two addresses are one, ignoring case and surrounding space."""
+    return (a or "").strip().lower() == (b or "").strip().lower()
+
+
+def _update_result(
+    username: str,
+    keycloak_id: str,
+    user: dict,
+    changed: tuple[str, ...],
+    *,
+    verification: VerificationOutcome = "not_requested",
+) -> UpdateResult:
+    return UpdateResult(
+        username=username,
+        keycloak_id=keycloak_id,
+        first_name=user.get("firstName"),
+        last_name=user.get("lastName"),
+        email=user.get("email"),
+        email_verified=bool(user.get("emailVerified")),
+        changed=changed,
+        verification=verification,
+    )
 
 
 def _username_from(email: str) -> str:

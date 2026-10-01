@@ -92,6 +92,21 @@ scopes:
   # DID or status. members.write and .admin also satisfy it (the registry's rule).
   - name: rec-registry.members.profile.write
     description: Change one member's role and area, nothing else
+  # Per-field member writes, one scope per field route (rec-registry plan
+  # "member writes are granted per field"): `rec-registry.members.<field>.write`,
+  # the order profile.write already uses, so `.admin` keeps covering them. The
+  # registry also accepts members.write (and profile.write for role and area)
+  # for each, so no caller breaks; never user_id, DID or status, which stay
+  # members.write. A new field is a route there, a rule in its access.rego and
+  # a line here.
+  - name: rec-registry.members.name.write
+    description: Change one member's name, nothing else
+  - name: rec-registry.members.role.write
+    description: Change one member's role, nothing else
+  - name: rec-registry.members.area.write
+    description: Change one member's area, nothing else
+  - name: rec-registry.members.delivery_points.write
+    description: Add, replace and remove one member's delivery points, nothing else
   - name: rec-registry.community.write
     description: Update community metadata, areas and topology
   - name: rec-registry.import
@@ -120,6 +135,8 @@ scopes:
     description: Edit submission fields and operator notes
   - name: onboarding.submissions.review
     description: Drive the review state machine (take in charge, approve, reject, reopen)
+  - name: onboarding.submissions.revise
+    description: Correct a submission's POD, names or email by tracked revision
   # Separate from .review on purpose, mirroring rec-registry.members.purge:
   # rejecting somebody is recoverable, erasing them is not, and the two must not
   # become grantable together by accident.
@@ -415,6 +432,14 @@ clients:
       # supply points to any export.
       - rec-registry.members.write
       - rec-registry.lookup
+      # **The per-field member writes** (rec-registry plan "member writes are
+      # granted per field"): an operator's correction of a member's name and
+      # delivery point propagates through the registry's narrow routes. Default,
+      # like members.write, which already satisfies both and stays because
+      # creating a member, its user_id, DID and status need it. No new audience:
+      # the registry is already addressed.
+      - rec-registry.members.name.write
+      - rec-registry.members.delivery_points.write
       # **The Digital Twin's boundary lookups** (ADR-0011, REQ-0004): resolving a
       # supply address to the boundary it falls in, at save, submit and
       # approval, and validating a template's boundary ids at import. A read,
@@ -524,6 +549,12 @@ clients:
       # DID and status.
       - rec-registry.assets.write
       - rec-registry.members.profile.write
+      # The per-field successors of profile.write (rec-registry plan "member
+      # writes are granted per field"), optional for the same reason: role and
+      # area each on their own route. profile.write stays until the BFF has
+      # moved to them; removing it first would break the profile dialog.
+      - rec-registry.members.role.write
+      - rec-registry.members.area.write
 
   - client_id: svc-webapp
     name: Webapp BFF Service

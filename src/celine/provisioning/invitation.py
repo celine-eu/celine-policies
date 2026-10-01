@@ -58,6 +58,12 @@ VERIFY_EMAIL = "VERIFY_EMAIL"
 INVITE_ACTIONS: tuple[str, ...] = (UPDATE_PASSWORD, VERIFY_EMAIL)
 #: An account that has a password: replace it.
 RESET_ACTIONS: tuple[str, ...] = (UPDATE_PASSWORD,)
+#: An account whose address was just changed: prove the new inbox. Sent to the
+#: new address only, by `PATCH /participants/{community}/{key}`.
+VERIFY_ACTIONS: tuple[str, ...] = (VERIFY_EMAIL,)
+
+#: What an address change did about verifying the new address.
+VerificationOutcome = Literal["not_requested", "sent", "not_on_dev_list"]
 
 
 def parse_recipients(value: str | Iterable[str] | None) -> frozenset[str]:

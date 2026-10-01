@@ -46,3 +46,23 @@ A manager who is also a participant onboards with the address their manager acco
 and approval files that same account
 ([ADR-0010](../decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)).
 Losing `managers` there would lock the manager out of their own dashboard.
+
+### REQ-0007 — a correction of names or address keeps the account and its username
+
+`PATCH /participants/{community}/{key}` with any of `first_name`, `last_name`, `email`
+writes them on the account the registry names for `(community, key)`, and on no other:
+
+- **It finds the account by its registry username and never creates one**; a member the
+  community does not have, or whose account does not exist, is `404` and nothing is written.
+- **The username is unchanged**, and a body naming one is `422`.
+- **An address another account holds is `409 email_taken`**, compared case-insensitively,
+  and nothing is written.
+- **An address change resets `emailVerified`, and the `VERIFY_EMAIL` link goes to the new
+  address only.** An unchanged address resets nothing and sends nothing; a names-only update
+  leaves the address and its verification as they were.
+- It needs `provisioning.participants.write` (or `provisioning.admin`), like every other
+  participant write.
+
+Onboarding calls it to propagate an operator's correction of a member's declared data; the
+same rules serve the member's own self-service later, through the service's
+`update_account(username, …)`.

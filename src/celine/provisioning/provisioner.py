@@ -214,7 +214,41 @@ class Provisioner:
         """
         return await self._kc.get_user_by_email(email)
 
+    async def find_all_by_email(self, email: str) -> list[dict]:
+        """Every account holding this address, case-insensitively.
+
+        For "is this address taken by somebody else": the caller excludes its
+        own account from the answer.
+        """
+        return await self._kc.get_users_by_email(email)
+
     # -- lifecycle ---------------------------------------------------------
+
+    async def update_profile(
+        self,
+        keycloak_id: str,
+        *,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        email: str | None = None,
+        email_verified: bool | None = None,
+    ) -> dict:
+        """Write names, address and the verified flag; `None` leaves a field.
+
+        Never the username: it is the stable identity the registry and the
+        identity registry key on, and it is sent back exactly as read.
+        """
+        return await self._kc.update_user_profile(
+            keycloak_id,
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            email_verified=email_verified,
+        )
+
+    async def restore(self, keycloak_id: str, representation: dict) -> None:
+        """Put back a representation read before a change, undoing it."""
+        await self._kc.put_user(keycloak_id, representation)
 
     async def ensure_locale(self, keycloak_id: str, locale: str) -> bool:
         """Give an existing account a locale if it has none. Returns whether it wrote."""

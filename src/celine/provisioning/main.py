@@ -6,7 +6,7 @@ before this process starts and stay CLI commands. `docker-compose.yaml` says so
 with a dependency; there is nothing this app can do about it at startup beyond
 failing to authenticate, which it will.
 
-**There is deliberately no route beyond the four and `/health`.** The argument
+**There is deliberately no route beyond the five and `/health`.** The argument
 that a service holding `manage-users` and `manage-realm` is safe rests entirely
 on nothing outside the network reaching it — see ADR-0007. A route added here by
 accident converts that credential into an internet-facing one, and the guard
@@ -43,6 +43,8 @@ def create_app() -> FastAPI:
             "The only writer of participant accounts in the celine realm. "
             "Internal: no public route, and authorization by provisioning.* scopes."
         ),
+        # 1.4.0: `PATCH /participants/{community}/{key}` corrects names and
+        # address (`409 email_taken`); additive.
         # 1.3.0: `POST …/invitation` requires `{"intent": "invitation" |
         # "password_reset"}` and refuses a mismatch (`409 has_password` /
         # `no_password`); `no_email` on both the upsert (`invitation`) and the
@@ -52,7 +54,7 @@ def create_app() -> FastAPI:
         # 1.1.0: `…/password-reset` replaced by `…/invitation`, and the upsert
         # gained `locale`, `invite` and `invitation`. Bumped so the SDK's spec
         # snapshot is a new version rather than an overwrite in place.
-        version="1.3.0",
+        version="1.4.0",
         docs_url="/docs",
         redoc_url="/redoc",
     )

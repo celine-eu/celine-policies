@@ -24,6 +24,8 @@ the provisioner.
 
 **Endpoints:** `PUT /participants/{community}/{key}` (ensure the account, its REC
 organization and its org group, and optionally invite the person),
+`PATCH /participants/{community}/{key}` (correct the names or the address on the existing
+account, never the username; an address change is verified by a link to the new address),
 `POST /participants/{community}/{key}/invitation` (email an invitation or a password
 reset, as the body's `intent` names), `POST /participants/{community}/{key}/disable`,
 `POST /reconcile/{community}`, `/health`.

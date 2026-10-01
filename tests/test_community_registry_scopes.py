@@ -1,4 +1,4 @@
-"""The manager dashboard's registry writes: two optional scopes, and no wider one.
+"""The manager dashboard's registry writes: optional scopes, and no wider one.
 
 `svc-community` attaches and detaches a member's meter and changes a member's
 role and area by writing to the registry with its own token (ADR-0011). Every
@@ -29,7 +29,14 @@ DS_HOST_YAML = ROOT / "clients.ds-host.yaml"
 COMMUNITY = "svc-community"
 ASSETS_WRITE = "rec-registry.assets.write"
 PROFILE_WRITE = "rec-registry.members.profile.write"
-WRITES = {ASSETS_WRITE, PROFILE_WRITE}
+ROLE_WRITE = "rec-registry.members.role.write"
+AREA_WRITE = "rec-registry.members.area.write"
+NAME_WRITE = "rec-registry.members.name.write"
+DELIVERY_POINTS_WRITE = "rec-registry.members.delivery_points.write"
+#: The per-field member scopes (rec-registry plan "member writes are granted
+#: per field"); the names are the registry's.
+PER_FIELD = {NAME_WRITE, ROLE_WRITE, AREA_WRITE, DELIVERY_POINTS_WRITE}
+WRITES = {ASSETS_WRITE, PROFILE_WRITE, ROLE_WRITE, AREA_WRITE}
 
 
 def _base() -> KeycloakConfig:
@@ -55,6 +62,51 @@ def test_the_profile_scope_is_declared_in_the_registry_family():
     assert PROFILE_WRITE in declared
     assert declared[PROFILE_WRITE].description
     assert config.build_prefix_to_client_map()["rec-registry"] == "svc-rec-registry"
+
+
+def test_the_per_field_member_scopes_are_declared_in_the_registry_family():
+    """@verifies REQ-0008"""
+    config = _base()
+    declared = {s.name: s for s in config.scopes}
+
+    for scope in PER_FIELD:
+        assert scope in declared, scope
+        assert declared[scope].description
+    prefix_map = config.build_prefix_to_client_map()
+    assert prefix_map["rec-registry"] == "svc-rec-registry"
+
+
+@CONFIGS
+def test_svc_community_holds_role_and_area_and_keeps_profile_write(load):
+    """Role and area move to their own routes; `profile.write` stays until the
+    BFF has moved, so the profile dialog keeps working (registry plan F4). Never
+    name or delivery points: a manager does not correct those here.
+
+    @verifies REQ-0008
+    """
+    community = _client(load(), COMMUNITY)
+
+    assert {ROLE_WRITE, AREA_WRITE, PROFILE_WRITE} <= set(community.optional_scopes)
+    held = set(community.default_scopes) | set(community.optional_scopes)
+    assert not {NAME_WRITE, DELIVERY_POINTS_WRITE} & held
+
+
+@CONFIGS
+def test_svc_onboarding_holds_name_and_delivery_points_and_keeps_members_write(load):
+    """Onboarding propagates an operator's correction of a member's name and
+    delivery point through the narrow routes, and still creates members, which
+    only `members.write` allows. Default scopes, like `members.write`, which
+    already satisfies both: nothing wider than before.
+
+    @verifies REQ-0008
+    """
+    onboarding = _client(load(), "svc-onboarding")
+
+    assert {NAME_WRITE, DELIVERY_POINTS_WRITE, "rec-registry.members.write"} <= set(
+        onboarding.default_scopes
+    )
+    held = set(onboarding.default_scopes) | set(onboarding.optional_scopes)
+    assert not {ROLE_WRITE, AREA_WRITE} & held
 
 
 @CONFIGS
@@ -95,6 +147,8 @@ def test_svc_community_never_holds_members_write_or_admin(load):
         "rec-registry.read",
         ASSETS_WRITE,
         PROFILE_WRITE,
+        ROLE_WRITE,
+        AREA_WRITE,
     }
 
 
@@ -107,7 +161,7 @@ def test_a_sync_plans_the_writes_as_optional_assignments():
         for a in plan.scope_assignments_to_add
         if a.client_id == COMMUNITY and a.scope_name in WRITES
     }
-    assert assignments == {(ASSETS_WRITE, "optional"), (PROFILE_WRITE, "optional")}
+    assert assignments == {(scope, "optional") for scope in WRITES}
 
 
 def test_the_writes_keep_the_audience_onto_the_registry():
