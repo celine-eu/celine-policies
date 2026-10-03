@@ -323,6 +323,13 @@ services:
 
       KC_PROXY: edge
       KC_PROXY_HEADERS: forwarded
+
+      # Footer links of the `rec` login and email theme (`themes/rec/*/theme.properties`).
+      # `#` hides them, which is the default. A deployment with a legal host points them
+      # at its pages listing every community's terms and privacy notice: a login page
+      # does not know its reader's community.
+      TERMS_URL: ${TERMS_URL:-#}
+      PRIVACY_URL: ${PRIVACY_URL:-#}
     volumes:
       # **No volume for the database, because the database is not here.** A
       # `keycloak-data:/opt/keycloak/data/h2` volume stood here for a few hours

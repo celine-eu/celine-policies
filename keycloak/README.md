@@ -25,6 +25,11 @@ docker run -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD=admin \
 | `TERMS_URL` | No | URL for the Terms link in the login footer. Hidden when unset. |
 | `PRIVACY_URL` | No | URL for the Privacy link in the login footer. Hidden when unset. |
 
+`docker-compose.yaml` passes both through (`${TERMS_URL:-#}`, so hidden by default). A
+deployment with a legal host sets them to its pages listing every community's documents,
+`<legal host>/terms/` and `<legal host>/privacy/`: the login page cannot know its reader's
+community.
+
 ## Theme
 
 The `themes/rec` directory contains a custom login theme matching the REC webapp design system, and an email theme for the three emails a participant receives. See [`themes/README.md`](themes/README.md) for customisation details.
