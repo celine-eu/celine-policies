@@ -6,7 +6,7 @@ from celine.sdk.policies import CachedPolicyEngine, DecisionCache, PolicyEngine
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from celine.mqtt_auth.config import MqttAuthSettings
+from celine.mqtt_auth.config import MqttAuthSettings, check_posture
 from celine.mqtt_auth.routes import get_engine, get_settings, router
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,15 @@ def create_app() -> FastAPI:
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper()),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    # Posture first: a hardened deployment with dev settings fails here, before
+    # any policy is loaded or request served.
+    guard = check_posture(settings)
+    logger.info(
+        "Validating MQTT client tokens: issuer=%s audience=%s",
+        settings.oidc.base_url,
+        settings.oidc.audience or "<none: any client's token is accepted>",
     )
 
     # Initialize policy engine
@@ -73,14 +82,17 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # Add CORS middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS only in dev. The callers are mosquitto-go-auth's HTTP backend
+    # (/user, /acl, /superuser) and health probes, none of them a browser, so a
+    # hardened deployment answers no cross-origin request at all.
+    if not guard.hardened:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # Store settings and engine in app state
     app.state.settings = settings

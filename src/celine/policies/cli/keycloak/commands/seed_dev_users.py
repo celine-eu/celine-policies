@@ -5,7 +5,7 @@ Usage:
 
 The development users the dev realm import carried (admin, manager, editor, viewer), for a
 realm that did not come from that import (requester, 2026-09-14). Users level, and
-development only: it refuses unless ENV names a non-production environment, because every
+development only: it refuses unless ENV is exactly `dev`, because every
 password in the file is public.
 
 Idempotent. An absent user is created with its password, verified email and group; an
@@ -87,7 +87,7 @@ def seed_dev_users(
     if KeycloakSettings().is_production:
         typer.secho(
             "Error: seed-dev-users runs only on a development realm: its passwords are "
-            "public. Set ENV=dev (or local, test, ci) if this is one.",
+            "public. Set ENV=dev if this is one.",
             fg=typer.colors.RED,
             err=True,
         )

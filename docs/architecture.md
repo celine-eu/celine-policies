@@ -79,7 +79,7 @@ run instead of writing them:
   file them in the groups `clients.yaml` declares a service account may administer.
   Local development only: on a deployed realm members arrive through onboarding
   ([ADR-0010](decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)),
-  and it refuses unless `ENV=dev` (or `local`, `test`, `ci`), as `seed-dev-users` does.
+  and it refuses unless `ENV=dev` (exactly `dev`), as `seed-dev-users` does.
   `--invite` creates them with no password and invites each account it created in that
   run, under the provisioning service's email settings
 - `sync-orgs` — create Keycloak organizations from an `owners.yaml`

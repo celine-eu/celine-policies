@@ -6,8 +6,8 @@ production realm the same fallback silently installs a client credential that
 anyone can derive from the client list, and nothing downstream ever objects:
 the sync succeeds, the services authenticate, and the secret is public.
 
-So the default is strict. `ENV` must *say* it is a development environment for
-the placeholders to be accepted; unset, misspelled, or absent means production.
+So the default is strict. `ENV` must *say* `dev` for the placeholders to be
+accepted; unset, misspelled, absent or any other name means production.
 That direction matters — being strict in dev costs one export, the other way
 round costs a credential rotation across nineteen clients.
 
@@ -53,13 +53,21 @@ class TestEnvironmentResolution:
         assert settings.env == "prod"
         assert settings.is_production is True
 
-    @pytest.mark.parametrize("value", ["dev", "development", "local", "test", "ci"])
-    def test_known_development_names_opt_out(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ):
-        monkeypatch.setenv("ENV", value)
+    def test_dev_opts_out(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ENV", "dev")
 
         assert KeycloakSettings().is_production is False
+
+    @pytest.mark.parametrize("value", ["development", "local", "test", "ci"])
+    def test_only_dev_opts_out(self, monkeypatch: pytest.MonkeyPatch, value: str):
+        """The platform rule (`celine.sdk.posture`): exactly `dev` relaxes.
+
+        These four used to relax too; a CI job or a "local" deployment that
+        means development exports `dev` instead.
+        """
+        monkeypatch.setenv("ENV", value)
+
+        assert KeycloakSettings().is_production is True
 
     @pytest.mark.parametrize("value", ["DEV", "Dev", " dev ", "dev\n"])
     def test_the_comparison_is_forgiving_about_shape(

@@ -70,6 +70,10 @@ services:
       - ./policies:/app/policies:ro
     environment:
       - CELINE_POLICIES_DATA_DIR=/app/policies
+      # Posture (REQ-0009): passed through with no default, so an unset value is
+      # hardened and refuses the SDK's local OIDC defaults and a missing
+      # CELINE_OIDC_AUDIENCE. `CELINE_ENV=dev docker compose up` for local use.
+      - CELINE_ENV=${CELINE_ENV:-}
     healthcheck:
       test:
         [

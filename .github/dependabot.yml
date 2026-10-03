@@ -1,0 +1,43 @@
+# Dependabot version updates. Same shape as the other celine-eu service repos,
+# plus one docker entry per Dockerfile directory (service image, Keycloak image).
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps): "
+      prefix-development: "chore(deps-dev): "
+    groups:
+      development-dependencies:
+        dependency-type: development
+      runtime-dependencies:
+        dependency-type: production
+        update-types:
+          - "patch"
+    versioning-strategy: increase-if-necessary
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci: "
+    groups:
+      actions:
+        patterns:
+          - "*"
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(docker): "
+  - package-ecosystem: docker
+    directory: "/keycloak"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(docker): "

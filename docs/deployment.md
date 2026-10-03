@@ -198,7 +198,10 @@ Environment variables with `CELINE_` prefix:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CELINE_OIDC_*` | (from celine-sdk) | OIDC/JWT validation |
+| `CELINE_ENV` | unset (hardened) | Posture signal (`celine.sdk.posture`, then `ENVIRONMENT`); **only `dev` relaxes** |
+| `CELINE_OIDC_AUDIENCE` | unset | Audience every MQTT token must carry. **Required outside dev** ([REQ-0009](specifications/mqtt-auth.md)); enforced whenever set |
+| `CELINE_OIDC_BASE_URL`, `CELINE_OIDC_JWKS_URI` | local Keycloak (SDK) | Issuer and JWKS; the SDK default is refused outside dev |
+| `CELINE_OIDC_*` | (from celine-sdk) | Other OIDC/JWT validation settings |
 | `CELINE_POLICIES_DIR` | `./policies` | Rego policy directory |
 | `CELINE_POLICIES_DATA_DIR` | `None` | Policy data JSON directory |
 | `CELINE_POLICIES_CACHE_ENABLED` | `true` | Decision cache on/off |
@@ -207,6 +210,16 @@ Environment variables with `CELINE_` prefix:
 | `CELINE_MQTT_POLICY_PACKAGE` | `celine.mqtt.acl` | Rego package for ACL |
 | `CELINE_MQTT_SUPERUSER_SCOPE` | `mqtt.admin` | Superuser scope name |
 | `CELINE_LOG_LEVEL` | `INFO` | Log level |
+
+Outside `CELINE_ENV=dev` the service refuses to start without an audience or on the SDK's
+OIDC defaults, and installs no CORS middleware (its only callers are mosquitto-go-auth and
+health probes). **No MQTT audience exists in the realm yet** — see `.env.example` — so a
+hardened deployment needs an audience mapper onto one MQTT audience for every broker client
+first. The image needs the celine-sdk release that ships `celine.sdk.posture`.
+
+The `/superuser` check accepts the `admin` and `mqtt.admin` groups from the **merged** realm
+and organization group claims (`extract_groups`), so an organization-level `admin` group is an
+MQTT superuser wherever `auth_opt_disable_superuser` is off.
 
 ### Keycloak CLI
 
@@ -246,9 +259,9 @@ the **registry** reconciles what is true. Both are supported **for local
 development**: a developer's realm is set up before the registry holds anything,
 and an offline run is a real case there.
 
-**`sync-users` runs only with `ENV=dev`** (or `local`, `test`, `ci`: the guard
-`seed-dev-users` uses, `KeycloakSettings.is_production`). Unset, `prod`, `staging` or
-any other value, it exits 1 before it reads a source or asks Keycloak anything,
+**`sync-users` runs only with `ENV=dev`** (exactly `dev`: the guard `seed-dev-users`
+uses, `KeycloakSettings.is_production`). Unset, `prod`, `staging`, `development`,
+`local`, `test`, `ci` or any other value, it exits 1 before it reads a source or asks Keycloak anything,
 `--dry-run` and `--check` included, and says to set `ENV=dev` if the realm is a
 development one. `CELINE_KEYCLOAK_ENV` and `CELINE_ENV` outrank `ENV`.
 

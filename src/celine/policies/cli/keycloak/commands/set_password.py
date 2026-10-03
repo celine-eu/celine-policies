@@ -77,8 +77,8 @@ def set_password(
 
     if KeycloakSettings().is_production:
         typer.secho(
-            "Error: set-password runs only on a development realm. Set ENV=dev (or "
-            "local, test, ci) if this is one; otherwise send the account an "
+            "Error: set-password runs only on a development realm. Set ENV=dev "
+            "if this is one; otherwise send the account an "
             "invitation or a password reset.",
             fg=typer.colors.RED,
             err=True,

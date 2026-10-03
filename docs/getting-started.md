@@ -71,7 +71,7 @@ environment; `--additive` / `--no-additive` override it.
 
 Local development only: on a deployed realm members arrive through onboarding
 ([ADR-0010](decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)).
-`sync-users` runs only with `ENV=dev` (or `local`, `test`, `ci`), the guard `seed-dev-users`
+`sync-users` runs only with `ENV=dev` (exactly `dev`), the guard `seed-dev-users`
 uses: unset, `prod`, `staging` or anything else, it refuses before it reads a source or
 asks Keycloak anything, `--dry-run` and `--check` included. `task keycloak:sync-users*`
 and the compose stack's `sync-users` service set it.

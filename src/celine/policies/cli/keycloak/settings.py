@@ -30,10 +30,13 @@ DEFAULT_SECRETS_FILE = Path(".client.secrets.yaml")
 #: credential the pruning run is authenticated with.
 DEFAULT_ADMIN_CLIENT_ID = "celine-admin-cli"
 
-# Values of ENV that mean "the clients.yaml fallbacks are what I want".
-# Everything else — including a typo and including nothing at all — is treated
+# The values of ENV that mean "the clients.yaml fallbacks are what I want":
+# exactly `dev`, the platform rule (`celine.sdk.posture.DEV`). Everything else —
+# `development`, `local`, `test`, `ci`, a typo and nothing at all — is treated
 # as production, so the safety checks are on unless someone opted out on purpose.
-NON_PRODUCTION_ENVS = frozenset({"dev", "development", "local", "test", "ci"})
+# Kept local rather than imported so the operator CLI does not need the unreleased
+# celine-sdk posture module; the semantics must stay identical to it.
+NON_PRODUCTION_ENVS = frozenset({"dev"})
 
 
 def _load_secret_from_file(
@@ -137,7 +140,7 @@ class KeycloakSettings(BaseSettings):
     # `brute_force_protected`.
     brute_force_enabled: bool | None = Field(
         default=None,
-        description="Realm brute-force protection: on unless ENV is non-production",
+        description="Realm brute-force protection: on unless ENV=dev",
     )
 
     # `keycloak sync --additive` from the environment, for a run that cannot be
@@ -177,8 +180,9 @@ class KeycloakSettings(BaseSettings):
     def is_production(self) -> bool:
         """Whether to apply production safety checks.
 
-        True unless ENV names a known non-production environment. An unset or
-        misspelled value is production: the failure mode of being strict in dev
+        True unless ENV is exactly `dev` (case-insensitive). An unset, misspelled
+        or other value — `test`, `local`, `ci`, `development` included — is
+        production: the failure mode of being strict in dev
         is a one-line export, the other way round it is a guessable secret in a
         live realm.
         """

@@ -9,9 +9,13 @@ commands are described in [architecture.md](../architecture.md) and
 ### REQ-0006 — `sync-users` runs only in a development environment
 
 `celine-policies keycloak sync-users` **refuses to run unless the environment names a
-development one**: `ENV` (or `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`, which outrank it) is `dev`,
-`development`, `local`, `test` or `ci` — the guard `seed-dev-users` uses. Unset, `prod`,
-`staging` or any other value exits `1` with a message that names `ENV=dev`.
+development one**: `ENV` (or `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`, which outrank it) is
+exactly `dev` — the guard `seed-dev-users` uses. Unset, `prod`, `staging`, `development`,
+`local`, `test`, `ci` or any other value exits `1` with a message that names `ENV=dev`.
+
+> Until 2026-10 `development`, `local`, `test` and `ci` relaxed it too. The platform rule
+> (`celine.sdk.posture`) is that only `dev` relaxes, and ADR-0010's wording "`ENV=dev`" now
+> means exactly that value.
 
 The refusal comes **before a source is read or Keycloak is asked anything**, and holds for
 `--dry-run` and `--check` too.

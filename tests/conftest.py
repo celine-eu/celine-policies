@@ -39,7 +39,7 @@ CLIENTS_YAML = repo_root / "clients.yaml"
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip `CELINE_*` and `ENV` from the environment.
+    """Strip `CELINE_*`, `ENV` and `ENVIRONMENT` from the environment.
 
     Every settings class in this repo reads env vars, so a developer's shell
     (or a `.env` exported before `task test`) would otherwise decide what the
@@ -55,6 +55,9 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         if key.startswith("CELINE_"):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("ENV", raising=False)
+    # The posture signal's second name (`celine.sdk.posture`): an inherited
+    # `ENVIRONMENT=dev` would relax the hardened-mode tests just as `ENV` would.
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +193,10 @@ def app(monkeypatch: pytest.MonkeyPatch):
     its own `MqttAuthSettings`, and this is the same path a container uses.
     """
     monkeypatch.setenv("CELINE_POLICIES_DIR", str(POLICIES_DIR))
+    # The dev posture: the test tokens carry no audience and the OIDC settings
+    # are the SDK's local defaults, both of which a hardened start refuses
+    # (tests/test_mqtt_auth_posture.py covers that side).
+    monkeypatch.setenv("CELINE_ENV", "dev")
 
     from celine.mqtt_auth.main import create_app
 

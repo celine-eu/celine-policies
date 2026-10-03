@@ -4,8 +4,8 @@ What this repository must do, stated so that a test can name it.
 
 This directory started on 2026-09-27 with the provisioning service's part in a community
 that starts clean ([ADR-0010](../decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md)).
-It does not yet describe the rest of the repository: the Keycloak CLI, the MQTT auth backend
-and the Rego policies are described in [`docs/`](../architecture.md) and pinned by their
+It does not yet describe the rest of the repository: the Keycloak CLI, most of the MQTT auth
+backend and the Rego policies are described in [`docs/`](../architecture.md) and pinned by their
 tests, and gain requirements here when a change needs one.
 
 ## Planned and implemented
@@ -54,6 +54,7 @@ naming a requirement that does not exist is a typo.
 | REQ-0001 – REQ-0003, REQ-0007 | [provisioning](provisioning.md) — who may call the provisioning service, what it creates for a community, and how it corrects an account |
 | REQ-0004 – REQ-0005, REQ-0008 | [client grants](client-grants.md) — which scopes a client holds as default and which as optional, where a decision fixed it |
 | REQ-0006 | [Keycloak CLI](keycloak-cli.md) — what a `celine-policies keycloak` command may do, where a decision fixed it |
+| REQ-0009 – REQ-0010 | [MQTT auth](mqtt-auth.md) — what the MQTT auth backend refuses outside dev |
 
 ## What is not here
 

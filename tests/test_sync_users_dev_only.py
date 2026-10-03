@@ -3,9 +3,9 @@
 On a deployed realm members arrive through onboarding, and a community's
 organization through the provisioning reconcile. A YAML seed run there is how
 accounts nobody signs in with arrived in the first place, so the command refuses
-unless ENV names a development environment, with the same guard
-`seed-dev-users` uses (`KeycloakSettings.is_production`: unset, a typo or
-`staging` is production).
+unless ENV is exactly `dev`, with the same guard
+`seed-dev-users` uses (`KeycloakSettings.is_production`: unset, a typo,
+`staging`, `test`, `local`, `ci` or `development` is production).
 
 The refusal comes before anything is read or asked: no source is resolved and no
 Keycloak client is made, for `--dry-run` and `--check` too. `clean_env` strips
@@ -47,7 +47,10 @@ def reached(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return calls
 
 
-@pytest.mark.parametrize("env", [None, "prod", "production", "staging"])
+@pytest.mark.parametrize(
+    "env",
+    [None, "prod", "production", "staging", "development", "local", "test", "ci"],
+)
 @pytest.mark.parametrize(
     "args",
     [[], ["example-rec.yaml"], ["--dry-run"], ["--check"], ["--from-registry"]],
@@ -66,7 +69,7 @@ def test_it_refuses_outside_development(monkeypatch, reached, env, args):
     assert reached == []
 
 
-@pytest.mark.parametrize("env", ["dev", "development", "local", "test", "ci"])
+@pytest.mark.parametrize("env", ["dev", "DEV", " dev "])
 def test_it_runs_in_a_development_environment(monkeypatch, reached, env):
     """@verifies REQ-0006"""
     monkeypatch.setenv("ENV", env)

@@ -3,8 +3,8 @@
 Usage:
     ENV=dev celine-policies keycloak sync-users [rec_yaml]
 
-Local development only (ADR-0010): it refuses unless ENV names a non-production
-environment, like seed-dev-users. On a deployed realm members arrive through
+Local development only (ADR-0010): it refuses unless ENV is exactly `dev`, like
+seed-dev-users. On a deployed realm members arrive through
 onboarding and a community's organization through the provisioning reconcile.
 """
 
@@ -447,7 +447,7 @@ def sync_users(
 ) -> None:
     """Ensure Keycloak users exist for every participant in a REC registry YAML.
 
-    Local development only: refuses unless ENV=dev (or local, test, ci).
+    Local development only: refuses unless ENV=dev.
 
     Reads the REC YAML, checks each participant's user_id against Keycloak,
     and creates any missing users with a temporary password (forced reset on
@@ -512,7 +512,7 @@ def sync_users(
         typer.secho(
             "Error: sync-users runs only on a development realm: on a deployed "
             "realm members arrive through onboarding (ADR-0010). Set ENV=dev "
-            "(or local, test, ci) if this is one.",
+            "if this is one.",
             fg=typer.colors.RED,
             err=True,
         )

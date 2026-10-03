@@ -629,6 +629,7 @@ class TestAppWiring:
         """A cached decision outlives a revoked grant, so it must be switchable."""
         monkeypatch.setenv("CELINE_POLICIES_DIR", POLICIES_DIR)
         monkeypatch.setenv("CELINE_POLICIES_CACHE_ENABLED", "false")
+        monkeypatch.setenv("CELINE_ENV", "dev")  # see the `app` fixture
 
         from celine.mqtt_auth.main import create_app
 

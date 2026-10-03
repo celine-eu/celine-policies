@@ -4,7 +4,7 @@ Authentication, authorization, and identity management for the CELINE platform.
 
 This repository provides three services:
 
-1. **`mqtt_auth`** — A FastAPI HTTP backend for [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth) that validates JWTs and evaluates OPA (Rego) policies to control MQTT topic access.
+1. **`mqtt_auth`** — A FastAPI HTTP backend for [mosquitto-go-auth](https://github.com/iegomez/mosquitto-go-auth) that validates JWTs and evaluates OPA (Rego) policies to control MQTT topic access. Outside `CELINE_ENV=dev` it requires `CELINE_OIDC_AUDIENCE` and an explicit issuer/JWKS ([REQ-0009](docs/specifications/mqtt-auth.md)).
 2. **`provisioning`** — A FastAPI service that is the **only writer of participant accounts** in the celine realm: it ensures an account, its REC organization and its org group, and it sweeps a community from the registry. It holds realm-wide Keycloak administration and therefore has **no public route** — see [ADR-0007](docs/decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
 3. **`celine-policies` CLI** — A typer-based CLI that performs idempotent synchronization of OAuth scopes, service clients, users, and organizations into Keycloak.
 
@@ -128,8 +128,9 @@ SVC_DATASET_SECRET=... celine-policies keycloak sync   # or supply real secrets
 
 `taskfile.yaml` exports `ENV=dev` for the whole file, so `task keycloak:sync` and
 friends behave as before. Resolution order is `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`,
-then plain `ENV`; `dev`, `development`, `local`, `test` and `ci` disable the
-check, and **anything else — including a typo or nothing at all — is production**.
+then plain `ENV`; only `dev` disables the check (the platform rule,
+`celine.sdk.posture`), and **anything else — `test`, `local`, `ci`,
+`development`, a typo or nothing at all — is production**.
 Declaring no `secret:` at all is always accepted: Keycloak then generates one,
 which is the recommended production shape.
 

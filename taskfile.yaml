@@ -22,7 +22,7 @@ tasks:
   run:
     desc: "Run development server"
     cmds:
-      - .venv/bin/uvicorn celine.mqtt_auth.main:create_app --reload --host 0.0.0.0 --port 8009
+      - CELINE_ENV=${CELINE_ENV:-dev} .venv/bin/uvicorn celine.mqtt_auth.main:create_app --reload --host 0.0.0.0 --port 8009
 
   # **The provisioning service from source**, on the port its container uses.
   # `run` above is mqtt_auth (:8009), not this. The defaults are the compose
@@ -40,12 +40,13 @@ tasks:
         CELINE_PROVISIONING_EMAIL_MODE="${CELINE_PROVISIONING_EMAIL_MODE:-dev}"
         EMAIL_DEV_RECIPIENTS="${EMAIL_DEV_RECIPIENTS:-}"
         CELINE_PROVISIONING_INVITE_REDIRECT_URI="${CELINE_PROVISIONING_INVITE_REDIRECT_URI:-http://webapp.celine.localhost/}"
+        CELINE_ENV="${CELINE_ENV:-dev}"
         .venv/bin/uvicorn celine.provisioning.main:create_app --factory --reload --host 0.0.0.0 --port 8010
 
   debug:
     desc: "Run development server with debugger"
     cmds:
-      - DEBUG_ATTACH=nowait DEBUG_PORT=48009 .venv/bin/uvicorn celine.mqtt_auth.main:create_app --reload --host 0.0.0.0 --port 8009
+      - CELINE_ENV=${CELINE_ENV:-dev} DEBUG_ATTACH=nowait DEBUG_PORT=48009 .venv/bin/uvicorn celine.mqtt_auth.main:create_app --reload --host 0.0.0.0 --port 8009
 
   test:
     desc: "Run test"
