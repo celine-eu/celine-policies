@@ -705,6 +705,48 @@ class KeycloakAdminClient:
             json=mapper,
         )
 
+    async def reconcile_scope_audience(self, scope_id: str, audience: str | None) -> str:
+        """Make the scope's own audience mapper say `audience`, or remove it.
+
+        Only a mapper named with AUDIENCE_MAPPER_PREFIX is ours; anything else on
+        the scope is left as found. Returns "created", "updated", "removed" or
+        "unchanged".
+        """
+        ours = [
+            m
+            for m in await self.get_scope_protocol_mappers(scope_id)
+            if m.get("protocolMapper") == "oidc-audience-mapper"
+            and str(m.get("name", "")).startswith(AUDIENCE_MAPPER_PREFIX)
+        ]
+        if audience is None:
+            for mapper in ours:
+                await self._delete(
+                    f"/client-scopes/{scope_id}/protocol-mappers/models/{mapper['id']}"
+                )
+            return "removed" if ours else "unchanged"
+        config = {
+            "included.custom.audience": audience,
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+        }
+        if ours:
+            mapper = ours[0]
+            if mapper.get("config", {}).get("included.custom.audience") == audience:
+                return "unchanged"
+            mapper = {**mapper, "name": f"{AUDIENCE_MAPPER_PREFIX}{audience}", "config": config}
+            await self.update_scope_protocol_mapper(scope_id, mapper)
+            return "updated"
+        await self._post(
+            f"/client-scopes/{scope_id}/protocol-mappers/models",
+            json={
+                "name": f"{AUDIENCE_MAPPER_PREFIX}{audience}",
+                "protocol": "openid-connect",
+                "protocolMapper": "oidc-audience-mapper",
+                "config": config,
+            },
+        )
+        return "created"
+
     async def ensure_org_client_scope(self) -> tuple[str, bool]:
         """Ensure the 'organization' client scope exists with its required mappers.
 

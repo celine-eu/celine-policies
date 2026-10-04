@@ -58,7 +58,10 @@ def _loaded_the_way_it_used_to_be(path: Path) -> KeycloakConfig:
     compatibility assertions below are made against.
     """
     raw = yaml.safe_load(path.read_text())
-    return KeycloakConfig.model_validate(_resolve_env(raw))
+    config = KeycloakConfig.model_validate(_resolve_env(raw))
+    # The derived broker-scope grant (REQ-0017) is part of loading either way.
+    config.grant_broker_scope()
+    return config
 
 
 # ---------------------------------------------------------------------------

@@ -109,14 +109,15 @@ def test_the_service_owns_the_family_and_holds_only_its_own_admin():
 def test_svc_community_holds_no_provisioning_scope():
     """Reverted 2026-09-14. The manager dashboard does not call the provisioning
     service; onboarding is the single point of access."""
-    community = _client(_merged(), "svc-community")
+    config = _merged()
+    community = _client(config, "svc-community")
 
     assert _provisioning_scopes(community) == set()
     # Its optional scopes: onboarding's, which is how it reaches the
     # provisioning service instead, and the two registry writes of the manager
     # dialogs (ADR-0011, REQ-0005), with role and area per field (REQ-0008).
-    # Nothing else.
-    assert community.optional_scopes == [
+    # Nothing else, besides the derived broker scope (REQ-0017).
+    assert [s for s in community.optional_scopes if s != config.broker_scope] == [
         "onboarding.members.invite",
         "rec-registry.assets.write",
         "rec-registry.members.profile.write",

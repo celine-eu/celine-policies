@@ -430,7 +430,9 @@ class TestShippedClientsYaml:
     # the target in `extra_audiences` instead.
     # `mqtt` was the one (`mqtt.admin`, the superuser scope) until REQ-0014 removed the MQTT
     # superuser and the scope with it.
-    UNOWNED_SCOPE_FAMILIES: set[str] = set()
+    # `mqtt` (REQ-0017) carries a custom audience on the scope itself, so it needs
+    # no owning client to derive one from.
+    UNOWNED_SCOPE_FAMILIES: set[str] = {"mqtt"}
 
     def test_scope_families_are_owned_or_knowingly_unowned(self, config: KeycloakConfig):
         """A new unowned family is almost always a missing `scopes_prefix`.

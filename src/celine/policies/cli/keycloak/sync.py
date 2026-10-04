@@ -854,10 +854,14 @@ def compute_sync_plan(
                     audience,
                 )
 
-        # Warn about unresolvable foreign scope prefixes
+        # Warn about unresolvable foreign scope prefixes. A scope that carries its
+        # own audience (the broker scope, REQ-0017) needs no owner to derive one.
+        self_addressed = {
+            client_config.scope_prefix_of(s.name) for s in config.scopes if s.audience
+        }
         if client_config.scopes_prefix is not None:
             for prefix in client_config.foreign_scope_prefixes():
-                if prefix not in prefix_to_client:
+                if prefix not in prefix_to_client and prefix not in self_addressed:
                     logger.warning(
                         "Client %s references scope prefix '%s' but no client owns it — "
                         "skipping audience mapper for that prefix.",
@@ -1146,7 +1150,20 @@ def _scope_needs_update(config: ScopeConfig, current: dict[str, Any]) -> bool:
     if config.include_in_token_scope != include_in_token:
         return True
 
+    if config.audience != _scope_audience(current):
+        return True
+
     return False
+
+
+def _scope_audience(current: dict[str, Any]) -> str | None:
+    """The custom audience the scope's own (prefixed) audience mapper adds, if any."""
+    for mapper in current.get("protocolMappers") or []:
+        if mapper.get("protocolMapper") == "oidc-audience-mapper" and str(
+            mapper.get("name", "")
+        ).startswith(AUDIENCE_MAPPER_PREFIX):
+            return mapper.get("config", {}).get("included.custom.audience")
+    return None
 
 
 def _client_needs_update(config: ClientConfig, current: dict[str, Any]) -> bool:
@@ -1317,6 +1334,8 @@ async def apply_sync_plan(
                 include_in_token_scope=scope.include_in_token_scope,
             )
             scope_ids[scope.name] = scope_id
+            if scope.audience:
+                await client.reconcile_scope_audience(scope_id, scope.audience)
             result.scopes_created.append(scope.name)
         except KeycloakConflictError:
             logger.warning("Scope already exists (race condition?): %s", scope.name)
@@ -1347,6 +1366,7 @@ async def apply_sync_plan(
                 protocol=scope.protocol,
                 include_in_token_scope=scope.include_in_token_scope,
             )
+            await client.reconcile_scope_audience(scope_id, scope.audience)
             result.scopes_updated.append(scope.name)
         except Exception as e:
             result.errors.append(f"Failed to update scope {scope.name}: {e}")

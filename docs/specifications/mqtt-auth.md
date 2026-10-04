@@ -50,3 +50,21 @@ The MQTT auth backend under the two-level model ([REQ-0011](keycloak-cli.md)):
 
 A person's token therefore reaches no topic: the broker's clients are services, each holding
 its declared `<service>.<resource>.<verb>` scopes.
+
+### REQ-0017 — a broker token is a token requested for the broker
+
+`CELINE_OIDC_AUDIENCE` (REQ-0009) is `svc-mqtt`, and only a token **requested with the scope
+`mqtt`** carries it:
+
+- `clients.yaml` declares the scope `mqtt` with `audience: svc-mqtt`; `sync` keeps one audience
+  mapper (`included.custom.audience`) on that client scope. The scope grants nothing — topic
+  access is still the token's `<service>.<resource>.<verb>` and `<service>.admin` scopes.
+- `broker_scope: mqtt` makes `sync` grant it as an **optional** scope to every service-account
+  client holding a scope the ACL can grant a topic with. Nobody lists it by hand, and a browser
+  client never gets it.
+- celine-sdk's `MqttBroker` asks its client-credentials provider for `scope=mqtt`
+  (`MqttConfig.token_scope`). Tokens a service mints for HTTP calls do not carry `svc-mqtt`,
+  so a service that receives another service's token cannot replay it to the broker.
+
+> Before 2026-10 the deployed broker required `svc-celine-policies`, an audience no client's
+> token carried, so every MQTT client was refused outside dev (NIS2 review finding R24).

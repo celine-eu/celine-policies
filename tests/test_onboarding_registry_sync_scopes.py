@@ -79,9 +79,11 @@ def test_the_optional_scopes_are_exactly_the_two_writes(load):
 
     @verifies REQ-0004
     """
-    onboarding = _client(load(), ONBOARDING)
+    config = load()
+    onboarding = _client(config, ONBOARDING)
 
-    assert set(onboarding.optional_scopes) == WRITES
+    # The broker scope is derived, not argued per client (REQ-0017).
+    assert set(onboarding.optional_scopes) - {config.broker_scope} == WRITES
 
 
 @CONFIGS

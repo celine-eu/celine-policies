@@ -27,6 +27,12 @@ realm: celine
 # service audiences and pass audience validation on each service.
 oauth2_proxy_client: oauth2_proxy
 
+# The scope a service requests for its MQTT broker token (celine-sdk
+# MqttConfig.token_scope). `sync` grants it as an OPTIONAL scope to every
+# service-account client holding a scope the MQTT ACL can grant a topic with
+# (`<service>.admin`, `<service>.<resource>.read|write`), so nobody lists it by hand.
+broker_scope: mqtt
+
 # =============================================================================
 # SCOPES
 # =============================================================================
@@ -212,8 +218,15 @@ scopes:
   - name: mlflow.read
     description: Read-only access to MLflow (experiments, runs, artifacts)
 
-  # MQTT: no scope. There is no MQTT superuser (REQ-0014); a broker client holds the
-  # `<service>.<resource>.<verb>` scopes of the topics it uses. `mqtt.admin` was removed.
+  # MQTT: no grant scope. There is no MQTT superuser (REQ-0014); a broker client holds
+  # the `<service>.<resource>.<verb>` scopes of the topics it uses. `mqtt.admin` was
+  # removed. `mqtt` below grants nothing: it binds a token to the broker. It adds the
+  # audience mqtt_auth requires (CELINE_OIDC_AUDIENCE=svc-mqtt), and it is only in a
+  # token that asked for it (`broker_scope` above), so an HTTP token cannot be replayed
+  # to the broker.
+  - name: mqtt
+    description: Request a token for the MQTT broker (audience svc-mqtt; grants nothing)
+    audience: svc-mqtt
 
   # Provisioning
   # The service that writes participant accounts into the realm, and the only

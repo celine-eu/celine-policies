@@ -103,6 +103,16 @@ def _resolve_env(value: Any) -> Any:
     return value
 
 
+def is_topic_grant_scope(name: str) -> bool:
+    """True for a scope `policies/celine/mqtt` can grant a topic with:
+    `<service>.admin`, or `<service>.<resource>.read|write` (and the
+    `<service>.<resource>.*` wildcard)."""
+    parts = name.split(".")
+    if len(parts) == 2:
+        return parts[1] == "admin"
+    return len(parts) == 3 and parts[2] in {"read", "write", "*"}
+
+
 class ScopeConfig(BaseModel):
     """Configuration for a client scope."""
 
@@ -116,6 +126,16 @@ class ScopeConfig(BaseModel):
     include_in_token_scope: bool = Field(
         default=True,
         description="Whether to include scope in access token",
+    )
+
+    # An audience this scope adds to the tokens that carry it — a custom
+    # audience string, not a client. It is what binds a token to a consumer
+    # that is not a client of the realm: the MQTT broker requires
+    # `aud=<audience>`, and only a token *requested with* this scope has it,
+    # so a token minted for an HTTP call cannot be replayed to the broker.
+    audience: str | None = Field(
+        default=None,
+        description="Custom audience added to tokens carrying this scope (audience mapper on the scope)",
     )
 
 
@@ -829,6 +849,19 @@ class KeycloakConfig(BaseModel):
         ),
     )
 
+    # The scope a client requests for its MQTT broker token (`broker_scope`).
+    # Granted automatically as an OPTIONAL scope to every service-account client
+    # holding a scope the MQTT ACL can grant a topic with — `<service>.admin` or
+    # `<service>.<resource>.read|write` (policies/celine/mqtt). Optional, so it
+    # is in a token only when asked for: HTTP tokens never carry its audience.
+    broker_scope: str | None = Field(
+        default=None,
+        description=(
+            "Name of the scope MQTT clients request for broker tokens; auto-granted "
+            "as an optional scope to every service client that can hold a topic grant."
+        ),
+    )
+
     # Declarations a sync of this file cannot be correct without, by the name
     # each of them gives itself in its own `overlay:` key. Enforced by
     # `from_yaml_files`, not by `from_yaml` — see `_check_completeness`.
@@ -916,6 +949,7 @@ class KeycloakConfig(BaseModel):
 
         config = cls.model_validate(resolved)
         config._raw_secrets = raw_secrets
+        config.grant_broker_scope()
 
         malformed = config.malformed_admin_permissions()
         if malformed:
@@ -976,6 +1010,30 @@ class KeycloakConfig(BaseModel):
             scopes.update(client.default_scopes)
             scopes.update(client.optional_scopes)
         return scopes
+
+    def grant_broker_scope(self) -> list[str]:
+        """Add `broker_scope` as an optional scope to every MQTT-capable client.
+
+        A client qualifies when it has a service account (a person's token
+        reaches no topic, REQ-0014) and holds a scope the MQTT ACL can grant a
+        topic with. Returns the client ids it was added to. Idempotent.
+        """
+        if not self.broker_scope:
+            return []
+        if self.broker_scope not in self.get_scope_names():
+            raise MergeError(
+                f"broker_scope {self.broker_scope!r} names no declared scope; declare it "
+                "under `scopes:` with its `audience`"
+            )
+        granted = []
+        for client in self.clients:
+            held = set(client.default_scopes) | set(client.optional_scopes)
+            if self.broker_scope in held or not client.service_account_enabled:
+                continue
+            if any(is_topic_grant_scope(s) for s in held):
+                client.optional_scopes.append(self.broker_scope)
+                granted.append(client.client_id)
+        return granted
 
     def get_service_client_ids(self) -> set[str]:
         """Return client_ids of all service clients (those with a scopes_prefix).

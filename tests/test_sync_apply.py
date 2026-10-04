@@ -50,6 +50,7 @@ from celine.policies.cli.keycloak.sync import (
 WRITE_METHODS = [
     "create_client_scope",
     "update_client_scope",
+    "reconcile_scope_audience",
     "delete_client_scope",
     "create_client",
     "update_client",
@@ -71,6 +72,7 @@ def kc() -> MagicMock:
     client = MagicMock(spec=KeycloakAdminClient)
     client.create_client_scope = AsyncMock(return_value="scope-new")
     client.update_client_scope = AsyncMock()
+    client.reconcile_scope_audience = AsyncMock(return_value="unchanged")
     client.delete_client_scope = AsyncMock()
     client.create_client = AsyncMock(return_value=("uuid-new", "secret-new"))
     client.update_client = AsyncMock()

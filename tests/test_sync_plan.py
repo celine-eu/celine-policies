@@ -36,14 +36,24 @@ from celine.policies.cli.keycloak.sync import (
 )
 
 
-def kc_scope(name: str, description: str = "", in_token: bool = True) -> dict:
+def kc_scope(
+    name: str, description: str = "", in_token: bool = True, audience: str | None = None
+) -> dict:
     """A client scope as the Keycloak admin API returns it."""
-    return {
+    scope = {
         "id": f"uuid-{name}",
         "name": name,
         "description": description,
         "attributes": {"include.in.token.scope": "true" if in_token else "false"},
     }
+    if audience:
+        scope["protocolMappers"] = [{
+            "id": f"mapper-{name}",
+            "name": f"aud-{audience}",
+            "protocolMapper": "oidc-audience-mapper",
+            "config": {"included.custom.audience": audience},
+        }]
+    return scope
 
 
 def kc_client(
@@ -758,7 +768,10 @@ class TestIdempotenceOnTheRealConfig:
     def realm_in_sync(self, config: KeycloakConfig) -> CurrentState:
         prefix_map = config.build_prefix_to_client_map()
         state = CurrentState(
-            scopes={s.name: kc_scope(s.name, s.description) for s in config.scopes},
+            scopes={
+                s.name: kc_scope(s.name, s.description, audience=s.audience)
+                for s in config.scopes
+            },
             clients={
                 c.client_id: kc_client(
                     c.client_id, c.name, c.description, c.service_account_enabled
