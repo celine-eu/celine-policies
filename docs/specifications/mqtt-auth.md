@@ -31,3 +31,22 @@ audience is optional and the findings above are logged as one warning.
 In `dev` the service answers cross-origin requests from any origin. In a hardened environment it
 installs no CORS middleware: its callers are mosquitto-go-auth's HTTP backend and health probes,
 never a browser.
+
+### REQ-0014 — no MQTT superuser, no group grant, and a service is what its token says it is
+
+The MQTT auth backend under the two-level model ([REQ-0011](keycloak-cli.md)):
+
+- **`/superuser` always answers `403`**, for every token: no scope, group or role makes a
+  client an MQTT superuser. A realm `platform-admin` is not one either.
+- **User or service is decided by the token's kind** (`celine-sdk`'s `is_service_account`),
+  never by whether the token holds a group. A service account is judged by its scopes; a
+  person's token is a user whatever scopes it carries.
+- **No group grants anything on the broker.** The policy input carries no groups at all: no
+  realm `groups`, no organization group, no merge of the two. A group named like a grant
+  (`admin`, `mqtt.admin`, `<service>.admin`, `<service>.<resource>.<verb>`) in either place is
+  inert.
+- **A platform role grants nothing on the broker either.** `platform-admin` is not an MQTT
+  grant, and no role reaches the policy through `groups`.
+
+A person's token therefore reaches no topic: the broker's clients are services, each holding
+its declared `<service>.<resource>.<verb>` scopes.

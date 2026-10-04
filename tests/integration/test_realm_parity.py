@@ -12,8 +12,8 @@ repository's `keycloak` image). `.github/workflows/test.yaml` starts them.
 
 Realm A is the import converged by `bootstrap`. Realm B is created and converged by
 `bootstrap`. Every platform-level value is compared: each key `platform.yaml` declares,
-`bruteForceProtected`, and the role groups with their realm roles, read from a partial
-export as the master admin. A second `bootstrap --check` on each must find nothing.
+`bruteForceProtected`, the `platform-admin` role and the absence of every retired realm group
+and role (ADR-0012), read from a partial export as the master admin. A second `bootstrap --check` on each must find nothing.
 
 One client is compared: the built-in `account-console`, whose default client scopes
 `bootstrap` converges (an imported realm has none, and the account console answers 403).
@@ -75,6 +75,9 @@ def bootstrap(base: str, tmp_path: Path, *extra: str):
             "--admin-user", "admin", "--admin-password", "admin",
             "--secrets-file", str(tmp_path / "secrets.yaml"), *extra,
         ],
+        # Outside dev `bootstrap` hardens master (REQ-0016), which is global to the Keycloak
+        # and needs the bootstrap client; this test is about the realm.
+        env={"ENV": "dev"},
     )
 
 
@@ -85,14 +88,13 @@ def platform_level(base: str) -> dict:
     for key in [*declared["realm_settings"], "bruteForceProtected"]:
         value = export.get(key)
         values[key] = sorted(value) if key == "supportedLocales" and value else value
-    values["role_groups"] = {
-        g["path"]: sorted(g.get("realmRoles") or []) for g in export.get("groups", [])
-        if g["path"] in {rg["path"] for rg in declared["role_groups"]}
-    }
-    values["realm_roles"] = sorted(
-        r["name"] for r in export.get("roles", {}).get("realm", [])
-        if r["name"] in {rg["realm_role"] for rg in declared["role_groups"]}
+    retired = declared.get("retired") or {}
+    values["retired_groups_present"] = sorted(
+        g["path"] for g in export.get("groups", []) if g["path"] in retired.get("realm_groups", [])
     )
+    realm_roles = {r["name"] for r in export.get("roles", {}).get("realm", [])}
+    values["retired_roles_present"] = sorted(realm_roles & set(retired.get("realm_roles", [])))
+    values["platform_admin_role"] = declared["platform_admin"]["role"] in realm_roles
     return values
 
 
@@ -123,7 +125,8 @@ def test_both_match_the_declaration(converged):
         for key, value in declared["realm_settings"].items():
             expected = sorted(value) if key == "supportedLocales" else value
             assert values[key] == expected, (base, key)
-        assert values["role_groups"] == {rg["path"]: [rg["realm_role"]] for rg in declared["role_groups"]}
+        assert values["retired_groups_present"] == [] and values["retired_roles_present"] == []
+        assert values["platform_admin_role"] is True
 
 
 @pytest.mark.parametrize("which", ["imported", "empty"])

@@ -47,9 +47,6 @@ class MqttAuthSettings(BaseSettings):
     mqtt_policy_package: str = Field(
         default="celine.mqtt.acl", description="Policy package for MQTT ACL checks"
     )
-    mqtt_superuser_scope: str = Field(
-        default="mqtt.admin", description="OAuth scope required for MQTT superuser"
-    )
 
     # Service settings
     log_level: str = Field(default="INFO", description="Logging level")

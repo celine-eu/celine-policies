@@ -61,7 +61,7 @@ tasks:
 
   keycloak:bootstrap:
     cmds:
-      - uv run celine-policies keycloak bootstrap --admin-user admin --admin-password admin
+      - uv run celine-policies keycloak bootstrap --overlay config/keycloak/platform.dev.yaml --admin-user admin --admin-password admin
 
   keycloak:sync:
     deps: [keycloak:bootstrap]
@@ -73,7 +73,7 @@ tasks:
 
   keycloak:dev-users:
     deps: [keycloak:bootstrap]
-    desc: "Create the development users (admin, manager, editor, viewer)"
+    desc: "Create the development users (admin: platform-admin; org-admin, org-viewer: example_rec). Needs the example REC (keycloak:sync-users) first"
     cmds:
       - uv run celine-policies keycloak seed-dev-users
 

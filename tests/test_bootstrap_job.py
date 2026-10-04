@@ -28,18 +28,28 @@ from celine.policies.cli.keycloak.platform import (
 )
 from celine.policies.cli.keycloak.settings import KeycloakSettings
 from celine.policies.cli.main import app
+from keycloak_flows_fake import FlowsFake
 from test_platform_declaration import PLATFORM_YAML, FakeRealm
 
 runner = CliRunner()
 
 
-class JobRealm(FakeRealm):
-    """`FakeRealm`, plus the calls `_async_bootstrap` makes around the converge."""
+class JobRealm(FlowsFake, FakeRealm):
+    """`FakeRealm`, plus the calls `_async_bootstrap` makes around the converge: the browser
+    flow (Keycloak's own, bound) and signing in."""
 
     def __init__(self, *args, exists: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
+        self.init_flows()
         self.exists = exists
         self.order: list[str] = []
+        self.identity = None
+
+    async def authenticate_admin_user(self):
+        pass
+
+    def adopt_session(self, other):
+        pass
 
     async def __aenter__(self):
         return self
@@ -92,8 +102,8 @@ def converged() -> dict:
     return settings
 
 
-ROLES = {"admin", "manager", "editor", "viewer"}
-GROUPS = {"/admins": {"admin"}, "/managers": {"manager"}, "/editors": {"editor"}, "/viewers": {"viewer"}}
+ROLES = {"platform-admin"}
+GROUPS: dict[str, set[str]] = {}
 
 
 @pytest.fixture
@@ -172,7 +182,7 @@ class TestTheDestructiveGuard:
             return PlatformResult(), ("", False)
 
         monkeypatch.setattr(bootstrap_module, "_async_bootstrap", fake)
-        monkeypatch.setenv("CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET", "x")
+        monkeypatch.setenv("CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET", "b" * 40)
         args = ["keycloak", "bootstrap", str(PLATFORM_YAML), "-u", "http://kc"]
 
         runner.invoke(app, args)
@@ -195,6 +205,7 @@ class TestTheRealmIsCreatedWhenAbsent:
         assert kc.order[0] == "create_realm"
         assert kc.realm["organizationsEnabled"] is True
         assert kc.groups == GROUPS
+        assert kc.roles == ROLES
 
     @pytest.mark.asyncio
     async def test_as_the_admin_cli_client_it_is_refused(self, settings, monkeypatch):
@@ -240,7 +251,7 @@ class TestCheck:
             return holder["result"], ("", False)
 
         monkeypatch.setattr(bootstrap_module, "_async_bootstrap", fake)
-        monkeypatch.setenv("CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET", "x")
+        monkeypatch.setenv("CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET", "b" * 40)
         return holder
 
     def invoke(self):

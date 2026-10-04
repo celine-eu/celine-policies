@@ -18,49 +18,12 @@
   "roles": {
     "realm": [
       {
-        "name": "admin"
-      },
-      {
-        "name": "manager"
-      },
-      {
-        "name": "editor"
-      },
-      {
-        "name": "viewer"
+        "name": "platform-admin",
+        "description": "The only platform-wide grant (ADR-0012)"
       }
     ]
   },
-  "groups": [
-    {
-      "name": "admins",
-      "path": "/admins",
-      "realmRoles": [
-        "admin"
-      ]
-    },
-    {
-      "name": "managers",
-      "path": "/managers",
-      "realmRoles": [
-        "manager"
-      ]
-    },
-    {
-      "name": "editors",
-      "path": "/editors",
-      "realmRoles": [
-        "editor"
-      ]
-    },
-    {
-      "name": "viewers",
-      "path": "/viewers",
-      "realmRoles": [
-        "viewer"
-      ]
-    }
-  ],
+  "groups": [],
   "clients": [
     {
       "clientId": "oauth2_proxy",
@@ -82,7 +45,8 @@
         "basic",
         "profile",
         "email",
-        "organization"
+        "organization",
+        "roles"
       ],
       "optionalClientScopes": [
         "offline_access"
@@ -158,18 +122,6 @@
             "introspection.token.claim": "true",
             "lightweight.claim": "false"
           }
-        },
-        {
-          "name": "groups",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-group-membership-mapper",
-          "config": {
-            "claim.name": "groups",
-            "full.path": "false",
-            "access.token.claim": "true",
-            "id.token.claim": "true",
-            "userinfo.token.claim": "true"
-          }
         }
       ]
     }
@@ -190,65 +142,8 @@
           "temporary": false
         }
       ],
-      "groups": [
-        "/admins"
-      ]
-    },
-    {
-      "id": "22222222-2222-2222-2222-222222222222",
-      "username": "manager",
-      "enabled": true,
-      "emailVerified": true,
-      "firstName": "Manager",
-      "lastName": "User",
-      "email": "manager@celine.localhost",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "manager",
-          "temporary": false
-        }
-      ],
-      "groups": [
-        "/managers"
-      ]
-    },
-    {
-      "id": "33333333-3333-3333-3333-333333333333",
-      "username": "editor",
-      "enabled": true,
-      "emailVerified": true,
-      "firstName": "Editor",
-      "lastName": "User",
-      "email": "editor@celine.localhost",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "editor",
-          "temporary": false
-        }
-      ],
-      "groups": [
-        "/editors"
-      ]
-    },
-    {
-      "id": "44444444-4444-4444-4444-444444444444",
-      "username": "viewer",
-      "enabled": true,
-      "emailVerified": true,
-      "firstName": "Viewer",
-      "lastName": "User",
-      "email": "viewer@celine.localhost",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "viewer",
-          "temporary": false
-        }
-      ],
-      "groups": [
-        "/viewers"
+      "realmRoles": [
+        "platform-admin"
       ]
     }
   ],
@@ -486,22 +381,6 @@
             "id.token.claim": "true",
             "access.token.claim": "true",
             "claim.name": "upn",
-            "jsonType.label": "String"
-          }
-        },
-        {
-          "id": "8c6e13de-579a-4865-af6c-4660adee9a70",
-          "name": "groups",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-realm-role-mapper",
-          "consentRequired": false,
-          "config": {
-            "introspection.token.claim": "true",
-            "multivalued": "true",
-            "user.attribute": "foo",
-            "id.token.claim": "true",
-            "access.token.claim": "true",
-            "claim.name": "groups",
             "jsonType.label": "String"
           }
         }

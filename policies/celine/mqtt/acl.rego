@@ -60,6 +60,9 @@ is_valid_topic_format if {
 
 
 # ---- allow rules ----
+#
+# Service accounts only, on their scopes (REQ-0014). A user token is allowed nothing: no
+# group reaches this policy and no role is an MQTT grant.
 
 allow if {
   valid_action
@@ -69,32 +72,8 @@ allow if {
 
 allow if {
   valid_action
-  is_service_only
-  data.celine.scopes.user_is_admin
-}
-
-allow if {
-  valid_action
-  is_service_only
-  data.celine.scopes.user_is_service_admin(service)
-}
-
-allow if {
-  valid_action
   is_service_level_wildcard
   data.celine.scopes.has_scope_service_admin(service)
-}
-
-allow if {
-  valid_action
-  is_service_level_wildcard
-  data.celine.scopes.user_is_admin
-}
-
-allow if {
-  valid_action
-  is_service_level_wildcard
-  data.celine.scopes.user_is_service_admin(service)
 }
 
 allow if {
@@ -102,13 +81,6 @@ allow if {
   is_valid_topic_format
   data.celine.scopes.service_allowed(required, service, resource)
 }
-
-allow if {
-  valid_action
-  is_valid_topic_format
-  data.celine.scopes.user_allowed(required, service, resource, verb)
-}
-
 
 # ---- reason rules (separate from allow, using same conditions) ----
 
@@ -118,34 +90,10 @@ reason = "service admin scope" if {
   data.celine.scopes.has_scope_service_admin(service)
 }
 
-reason = "user global admin" if {
-  valid_action
-  is_service_only
-  data.celine.scopes.user_is_admin
-}
-
-reason = "user service admin" if {
-  valid_action
-  is_service_only
-  data.celine.scopes.user_is_service_admin(service)
-}
-
 reason = "service admin wildcard" if {
   valid_action
   is_service_level_wildcard
   data.celine.scopes.has_scope_service_admin(service)
-}
-
-reason = "user global admin wildcard" if {
-  valid_action
-  is_service_level_wildcard
-  data.celine.scopes.user_is_admin
-}
-
-reason = "user service admin wildcard" if {
-  valid_action
-  is_service_level_wildcard
-  data.celine.scopes.user_is_service_admin(service)
 }
 
 reason = "service scope" if {
@@ -153,13 +101,6 @@ reason = "service scope" if {
   is_valid_topic_format
   data.celine.scopes.service_allowed(required, service, resource)
 }
-
-reason = "user group" if {
-  valid_action
-  is_valid_topic_format
-  data.celine.scopes.user_allowed(required, service, resource, verb)
-}
-
 
 # ---- denial reasons (mutually exclusive) ----
 
@@ -179,6 +120,4 @@ reason = "service-level wildcard denied" if {
   valid_action
   is_service_level_wildcard
   not data.celine.scopes.has_scope_service_admin(service)
-  not data.celine.scopes.user_is_admin
-  not data.celine.scopes.user_is_service_admin(service)
 }

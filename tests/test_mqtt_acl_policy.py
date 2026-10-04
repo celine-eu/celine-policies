@@ -6,8 +6,8 @@ them over. Rego is untyped and a rule that silently stops matching (a renamed
 helper, a changed `parts` index) does not fail to load; it just returns
 `false`, or worse, `true`.
 
-So this file walks the topic grammar and both authority models — service scopes
-and user groups — against the real engine. Reasons are asserted alongside
+So this file walks the topic grammar and the one authority model — a service's
+scopes; no group and no user grants anything (REQ-0014) — against the real engine. Reasons are asserted alongside
 decisions: they are the only diagnostic the broker log carries, and a denial
 arriving with the wrong reason means a different rule fired than the one the
 test believes it is exercising.
@@ -72,7 +72,7 @@ def service(decide):
 
 @pytest.fixture
 def user(decide):
-    """A human subject, authorised only by group membership."""
+    """A human subject. Nothing authorises one on the broker (REQ-0014)."""
 
     def _user(topic: str, action: str = "subscribe", *groups: str):
         return decide(topic, action, subject_type=SubjectType.USER, groups=list(groups))
@@ -254,78 +254,60 @@ class TestServiceScopeAuthority:
 
 
 # ---------------------------------------------------------------------------
-# User authority: groups, in both naming conventions
+# User authority: none (REQ-0014, ADR-0012)
 # ---------------------------------------------------------------------------
 
+#: Every group name the policy used to grant on. The backend sends no group any more; the
+#: policy grants nothing on one either, should a group ever reach it.
+FORMER_GROUP_GRANTS = [
+    "pipelines.runs.read",
+    "mqtt:pipelines:runs:read",
+    "pipelines.runs.*",
+    "mqtt:pipelines:runs:*",
+    "admin",
+    "mqtt.admin",
+    "pipelines.admin",
+    "mqtt:pipelines:admin",
+    "/admins",
+    "admins",
+]
 
-class TestUserGroupAuthority:
-    """Two conventions are supported: dotted, and colon-separated `mqtt:` paths.
 
-    Both are in use — dotted mirrors scope names, `mqtt:` mirrors Keycloak group
-    paths — so dropping either would lock out whichever realm uses it.
-    """
+class TestNoGroupGrantsAnything:
+    """A group reached this policy from a merge of realm and organization groups, so an
+    organization could name one of its groups like a broker grant and hold it."""
 
-    def test_a_dotted_group_grants_its_resource_and_verb(self, user):
-        decision = user("celine/pipelines/runs/j", "subscribe", "pipelines.runs.read")
-        assert decision.allowed is True
-        assert decision.reason == "user group"
+    @pytest.mark.parametrize("group", FORMER_GROUP_GRANTS)
+    @pytest.mark.parametrize("topic", ["celine/pipelines/runs/j", "celine/pipelines", "celine/pipelines/#"])
+    def test_a_user_group_grants_nothing(self, user, group: str, topic: str):
+        """@verifies REQ-0014"""
+        for action in ("subscribe", "publish"):
+            assert user(topic, action, group).allowed is False
 
-    def test_an_mqtt_path_group_grants_the_same(self, user):
-        assert (
-            user(
-                "celine/pipelines/runs/j", "subscribe", "mqtt:pipelines:runs:read"
-            ).allowed
-            is True
-        )
-
-    def test_a_dotted_resource_wildcard_group_grants_both_verbs(self, user):
-        assert (
-            user("celine/pipelines/runs/j", "publish", "pipelines.runs.*").allowed is True
-        )
-
-    def test_an_mqtt_path_resource_wildcard_group_grants_both_verbs(self, user):
-        assert (
-            user("celine/pipelines/runs/j", "publish", "mqtt:pipelines:runs:*").allowed
-            is True
-        )
-
-    def test_a_read_group_does_not_grant_publish(self, user):
-        assert (
-            user("celine/pipelines/runs/j", "publish", "pipelines.runs.read").allowed
-            is False
-        )
-
-    def test_the_admin_group_grants_everything(self, user):
-        assert user("celine/dt/simulation/s", "publish", "admin").allowed is True
-
-    def test_the_mqtt_admin_group_grants_everything(self, user):
-        assert user("celine/dt/simulation/s", "publish", "mqtt.admin").allowed is True
-
-    @pytest.mark.parametrize("group", ["pipelines.admin", "mqtt:pipelines:admin"])
-    def test_a_service_admin_group_grants_one_service(self, user, group: str):
-        assert user("celine/pipelines/anything/j", "publish", group).allowed is True
-
-    def test_a_service_admin_group_does_not_cross_services(self, user):
-        assert user("celine/dt/simulation/s", "subscribe", "pipelines.admin").allowed is False
-
-    def test_scopes_do_not_authorise_a_user(self, decide):
-        """`user_allowed` never consults scopes.
-
-        A browser token carries whatever scopes oauth2-proxy requested, which
-        says nothing about what the human may do — that is the group's job.
-        """
+    @pytest.mark.parametrize("group", FORMER_GROUP_GRANTS)
+    def test_a_service_group_grants_nothing_either(self, decide, group: str):
+        """@verifies REQ-0014"""
         decision = decide(
-            "celine/pipelines/runs/j",
-            "subscribe",
-            subject_type=SubjectType.USER,
-            scopes=["pipelines.admin", "pipelines.runs.read"],
+            "celine/pipelines/runs/j", "subscribe", subject_type=SubjectType.SERVICE, groups=[group]
         )
         assert decision.allowed is False
 
-    def test_an_unrelated_group_grants_nothing(self, user):
-        assert user("celine/pipelines/runs/j", "subscribe", "viewers").allowed is False
+    @pytest.mark.parametrize("topic", ["celine/pipelines/runs/j", "celine/pipelines", "celine/pipelines/#"])
+    def test_scopes_do_not_authorise_a_user(self, decide, topic: str):
+        """A browser token carries whatever scopes its client requested, which says nothing
+        about what the person may do on the broker. The admin scope included.
 
-    def test_a_user_with_no_groups_is_denied(self, user):
+        @verifies REQ-0014
+        """
+        decision = decide(
+            topic,
+            "subscribe",
+            subject_type=SubjectType.USER,
+            scopes=["pipelines.admin", "pipelines.runs.read", "pipelines.runs.*"],
+        )
+        assert decision.allowed is False
+
+    def test_a_user_with_nothing_is_denied(self, user):
         assert user("celine/pipelines/runs/j", "subscribe").allowed is False
 
 
@@ -365,26 +347,6 @@ class TestServiceWideTopics:
         decision = service("celine/pipelines/#", "subscribe", "dt.admin")
         assert decision.allowed is False
         assert decision.reason == "service-level wildcard denied"
-
-    def test_a_user_admin_group_opens_the_service_topic(self, user):
-        decision = user("celine/pipelines", "subscribe", "admin")
-        assert decision.allowed is True
-        assert decision.reason == "user global admin"
-
-    def test_a_user_service_admin_group_opens_the_service_topic(self, user):
-        decision = user("celine/pipelines", "subscribe", "pipelines.admin")
-        assert decision.allowed is True
-        assert decision.reason == "user service admin"
-
-    def test_a_user_admin_group_opens_a_service_wildcard(self, user):
-        decision = user("celine/pipelines/#", "publish", "admin")
-        assert decision.allowed is True
-        assert decision.reason == "user global admin wildcard"
-
-    def test_a_user_service_admin_group_opens_a_service_wildcard(self, user):
-        decision = user("celine/pipelines/+", "publish", "pipelines.admin")
-        assert decision.allowed is True
-        assert decision.reason == "user service admin wildcard"
 
     def test_a_user_resource_group_does_not_open_a_service_wildcard(self, user):
         decision = user("celine/pipelines/#", "subscribe", "pipelines.runs.read")

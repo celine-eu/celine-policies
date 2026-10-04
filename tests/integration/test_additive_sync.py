@@ -12,7 +12,7 @@ is enough; no theme is needed.
 The sequence, and why it is in this order: a plain sync creates the declared client; a
 scope is then made and assigned to it by hand, as an operator would. `sync --additive` must
 leave that assignment in place and name it as held back, twice in a row, and leave the
-`groups` claim scope on the realm default list where it was put back by hand. Only then does a
+`organization` claim scope on the realm default list where it was put back by hand. Only then does a
 plain `sync` run, and it must remove both — which is what proves the additive run
 was really handed a removal and declined it, rather than planning nothing.
 """
@@ -106,8 +106,8 @@ def test_t14_a_hand_made_assignment_survives_additive_and_not_a_full_sync(realm,
 
     # And puts a realm claim scope back on the realm's default list, which the
     # claim-scope step of every full sync takes it off (T11, live).
-    groups_id = next(s["id"] for s in kc.get(f"/{REALM}/client-scopes").json() if s["name"] == "groups")
-    kc.put(f"/{REALM}/default-default-client-scopes/{groups_id}").raise_for_status()
+    org_id = next(s["id"] for s in kc.get(f"/{REALM}/client-scopes").json() if s["name"] == "organization")
+    kc.put(f"/{REALM}/default-default-client-scopes/{org_id}").raise_for_status()
 
     for _ in range(2):
         additive = sync(tmp_path, "--additive")
@@ -115,13 +115,13 @@ def test_t14_a_hand_made_assignment_survives_additive_and_not_a_full_sync(realm,
         assert "  = svc-alpha <- hand.made (default)" in additive.output
         assert "Scope assignments to remove" not in additive.output
         assert "hand.made" in default_scopes_of(kc, "svc-alpha")
-        assert "  = groups (realm default)" in additive.output
-        assert "groups" in realm_default_scopes(kc)
+        assert "  = organization (realm default)" in additive.output
+        assert "organization" in realm_default_scopes(kc)
 
     dry = sync(tmp_path, "--additive", "--dry-run")
     assert dry.exit_code == 0, dry.output
     assert "  = svc-alpha <- hand.made (default)" in dry.output
-    assert "  = groups (realm default)" in dry.output
+    assert "  = organization (realm default)" in dry.output
 
     refused = sync(tmp_path, "--additive", "--prune")
     assert refused.exit_code == 2
@@ -130,4 +130,4 @@ def test_t14_a_hand_made_assignment_survives_additive_and_not_a_full_sync(realm,
     assert full.exit_code == 0, full.output
     assert "  - svc-alpha <- hand.made (default)" in full.output
     assert "hand.made" not in default_scopes_of(kc, "svc-alpha")
-    assert "groups" not in realm_default_scopes(kc)
+    assert "organization" not in realm_default_scopes(kc)

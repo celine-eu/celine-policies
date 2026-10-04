@@ -29,6 +29,13 @@ DEFAULT_SECRETS_FILE = Path(".client.secrets.yaml")
 #: declaration does not mention is an orphan, and pruning this one deletes the
 #: credential the pruning run is authenticated with.
 DEFAULT_ADMIN_CLIENT_ID = "celine-admin-cli"
+#: The master-realm client `bootstrap` signs in to master with (REQ-0016, ADR-0014). Its
+#: secret is never generated: it is `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET`, a value the
+#: deployment configures, converged onto the client on every run.
+DEFAULT_BOOTSTRAP_CLIENT_ID = "svc-celine-policies-bootstrap"
+#: Outside dev, a shorter bootstrap client secret is refused: the client administers master,
+#: and Keycloak is public.
+BOOTSTRAP_CLIENT_SECRET_MIN_LENGTH = 32
 
 # The values of ENV that mean "the clients.yaml fallbacks are what I want":
 # exactly `dev`, the platform rule (`celine.sdk.posture.DEV`). Everything else —
@@ -136,11 +143,30 @@ class KeycloakSettings(BaseSettings):
         description="Admin service client secret",
     )
 
+    # The master realm (REQ-0016, ADR-0014). `bootstrap` signs in to master as this
+    # client first, and as the admin user only when that fails; outside dev the
+    # secret is required. Never generated, never printed.
+    bootstrap_client_id: str = Field(
+        default=DEFAULT_BOOTSTRAP_CLIENT_ID,
+        description="Master-realm client bootstrap signs in with",
+    )
+    bootstrap_client_secret: SecretStr | None = Field(
+        default=None,
+        description="Its secret, from the deployment's secrets; required unless ENV=dev",
+    )
+
     # Platform activation (bootstrap). Unset means the environment decides; see
     # `brute_force_protected`.
     brute_force_enabled: bool | None = Field(
         default=None,
         description="Realm brute-force protection: on unless ENV=dev",
+    )
+
+    # The platform admin's second factor (REQ-0015, ADR-0013). Unset means the
+    # environment decides; see `admin_mfa`.
+    admin_mfa_required: bool | None = Field(
+        default=None,
+        description="Platform admins sign in with a second factor: on unless ENV=dev",
     )
 
     # `keycloak sync --additive` from the environment, for a run that cannot be
@@ -151,7 +177,7 @@ class KeycloakSettings(BaseSettings):
         description="keycloak sync adds and updates only: true or false; unset is false",
     )
 
-    @field_validator("sync_additive", mode="before")
+    @field_validator("sync_additive", "admin_mfa_required", "bootstrap_client_secret", mode="before")
     @classmethod
     def _empty_is_unset(cls, value: Any) -> Any:
         """An empty value is unset, not an error.
@@ -175,6 +201,64 @@ class KeycloakSettings(BaseSettings):
         if self.brute_force_enabled is not None:
             return self.brute_force_enabled
         return self.is_production
+
+    @property
+    def admin_mfa(self) -> bool:
+        """Whether platform admins need a second factor on this run (REQ-0015).
+
+        On by default and off in dev (requester, 2026-10-04), like `brute_force_protected`:
+        a deployment that says nothing gets it, and a developer's local realm does not.
+        `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED` overrides either way.
+        """
+        if self.admin_mfa_required is not None:
+            return self.admin_mfa_required
+        return self.is_production
+
+    @property
+    def master_hardened(self) -> bool:
+        """Whether `bootstrap` hardens the master realm on this run (REQ-0016).
+
+        Either switch on is enough: brute force and the second factor are then both
+        converged on master, each to its own value, and only with the bootstrap client.
+        In dev, with the defaults, neither is on and master is left alone.
+        """
+        return self.brute_force_protected or self.admin_mfa
+
+    @property
+    def bootstrap_secret(self) -> str | None:
+        """The bootstrap client's secret, or None when it is not configured."""
+        if self.bootstrap_client_secret is None:
+            return None
+        return self.bootstrap_client_secret.get_secret_value() or None
+
+    def bootstrap_secret_problem(self) -> str | None:
+        """Why this run may not go on with the bootstrap client's secret as configured.
+
+        Outside dev the master realm is hardened, and only the bootstrap client may do it
+        (REQ-0016), so its secret is required and must not be guessable. In dev it is
+        optional. None means fine.
+        """
+        if not self.master_hardened:
+            return None
+        secret = self.bootstrap_secret
+        if not secret:
+            return (
+                "hardening the master realm (brute force, admin second factor) runs only as "
+                f"the bootstrap client {self.bootstrap_client_id}, whose secret "
+                "CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET is not set. Set it from the "
+                "deployment's secrets, or ENV=dev for a local realm"
+            )
+        if self.is_production and len(secret) < BOOTSTRAP_CLIENT_SECRET_MIN_LENGTH:
+            return (
+                f"CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET is shorter than "
+                f"{BOOTSTRAP_CLIENT_SECRET_MIN_LENGTH} characters; the client administers "
+                f"the master realm of a public Keycloak"
+            )
+        return None
+
+    def for_realm(self, realm: str) -> "KeycloakSettings":
+        """The same connection and credentials, aimed at another realm (master)."""
+        return self.model_copy(update={"realm": realm})
 
     @property
     def is_production(self) -> bool:
@@ -228,6 +312,9 @@ class KeycloakSettings(BaseSettings):
         return KeycloakSettings(
             env=self.env,
             brute_force_enabled=self.brute_force_enabled,
+            admin_mfa_required=self.admin_mfa_required,
+            bootstrap_client_id=self.bootstrap_client_id,
+            bootstrap_client_secret=self.bootstrap_client_secret,
             sync_additive=self.sync_additive,
             base_url=base_url or self.base_url,
             realm=realm or self.realm,
@@ -332,10 +419,11 @@ class RealmAdminSettings(BaseSettings):
         CELINE_KEYCLOAK_REALM_ADMIN_FIRST_NAME  default Celine
         CELINE_KEYCLOAK_REALM_ADMIN_LAST_NAME   default Admin
         CELINE_KEYCLOAK_REALM_ADMIN_PASSWORD    required to create the account; never re-sent
-        CELINE_KEYCLOAK_REALM_ADMIN_GROUP       default /admins
 
-    One operator account. It is created once and kept in its group. Its password is not
-    reset on later runs: an operator who changed it keeps the new one.
+    One operator account. It is created once and holds the realm role `platform-admin`
+    directly (ADR-0012, REQ-0011): realm groups carry no authority any more, so there is no
+    group to put it in. Its password is not reset on later runs: an operator who changed it
+    keeps the new one.
 
     The names default to what infra's import used, and must not be empty: the realm's user
     profile requires both, and without them Keycloak refuses the sign-in with
@@ -349,7 +437,6 @@ class RealmAdminSettings(BaseSettings):
     first_name: str = "Celine"
     last_name: str = "Admin"
     password: SecretStr = SecretStr("")
-    group: str = "/admins"
 
     @property
     def configured(self) -> bool:
@@ -365,7 +452,8 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
     Environment variables:
         CELINE_SYNC_USERS_REC_YAML          Path to REC registry YAML
         CELINE_SYNC_USERS_GROUPS            Space-separated realm group paths
-                                            to also assign, e.g. /admins.
+                                            to also assign, e.g. /community-x.
+                                            A realm group grants nothing (ADR-0012).
                                             default: none (org-level only)
         CELINE_SYNC_USERS_TEMP_PASSWORD     Fixed temp password for all users.
                                             Unset → random password per user.

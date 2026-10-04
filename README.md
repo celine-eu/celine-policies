@@ -13,7 +13,7 @@ not how often it changes:
 
 | Level | Written by | Declared in |
 |---|---|---|
-| **platform**: realm features (Organizations, fine-grained admin permissions), sign-in settings, languages, themes, token lifespans, brute force, `smtpServer`, the realm role groups | `keycloak bootstrap` | [`platform.yaml`](platform.yaml), `CELINE_KEYCLOAK_PLATFORM_*` overrides, `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `CELINE_KEYCLOAK_SMTP_*` |
+| **platform**: realm features (Organizations, fine-grained admin permissions), sign-in settings, languages, themes, token lifespans, brute force, `smtpServer`, the realm role `platform-admin` and its holders, the retired realm groups and roles (ADR-0012) | `keycloak bootstrap` | [`platform.yaml`](platform.yaml), `CELINE_KEYCLOAK_PLATFORM_*` overrides, `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED`, `CELINE_KEYCLOAK_SMTP_*`; the master realm through `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` (ADR-0014) |
 | **clients**: clients, scopes, scope bindings, audience mappers, realm claim scopes, service-account grants | `keycloak sync` | `clients.yaml` |
 | **organizations and users**: REC organizations, org groups, participants, memberships | the provisioning service (`POST /reconcile/{community}` creates a REC's organization, org roles and groups, even with no members; `PUT /participants` files a participant, `PATCH /participants` corrects their names or address), `keycloak set-user-organization` (a manager's `managers` or `admins` group, run by a platform admin), `keycloak sync-orgs`; `keycloak sync-users` in local development only — see [ADR-0010](docs/decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md) | the registry, owners and REC YAML |
 
@@ -59,7 +59,7 @@ celine-policies/
 ├── src/celine/
 │   ├── mqtt_auth/          # FastAPI MQTT auth service
 │   │   ├── main.py         # App factory (create_app)
-│   │   ├── routes.py       # /user, /acl, /superuser endpoints
+│   │   ├── routes.py       # /user, /acl, /superuser (always 403) endpoints
 │   │   ├── models.py       # Pydantic request/response models
 │   │   └── config.py       # MqttAuthSettings (pydantic-settings)
 │   ├── provisioning/       # The only writer of participant accounts

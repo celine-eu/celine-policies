@@ -557,7 +557,6 @@ class TestHeldBackIsReported:
 def http_client() -> KeycloakAdminClient:
     client = KeycloakAdminClient(KeycloakSettings(env="dev"))
     client.ensure_org_client_scope = AsyncMock(return_value=("org-id", False))
-    client._ensure_groups_client_scope = AsyncMock(return_value=("grp-id", False))
     client._ensure_dataspace_claim_scope = AsyncMock(return_value=("ds-id", False))
     client.get_client_by_client_id = AsyncMock(return_value={"id": "proxy-uuid"})
     client._ensure_scope_default_on_client = AsyncMock(return_value=True)
@@ -593,12 +592,10 @@ class TestTheRealmClaimScopeStep:
         client._ensure_dataspace_claim_scope.assert_awaited_once()
         assert [c.args[1] for c in client._ensure_scope_default_on_client.await_args_list] == [
             "organization",
-            "groups",
             "dataspace",
         ]
         assert kept == [
             "organization (realm default)",
-            "groups (realm default)",
             "dataspace (realm optional)",
         ]
         assert changed is True  # the proxy assignment is still a change
@@ -611,7 +608,6 @@ class TestTheRealmClaimScopeStep:
         deleted = [c.args[0] for c in client._delete.await_args_list]
         assert deleted == [
             "/default-default-client-scopes/org-id",
-            "/default-default-client-scopes/grp-id",
             "/default-optional-client-scopes/ds-id",
         ]
 
@@ -620,7 +616,6 @@ class TestTheRealmClaimScopeStep:
 
         assert await client.realm_claim_scopes_on_realm_lists() == [
             "organization (realm default)",
-            "groups (realm default)",
             "dataspace (realm optional)",
         ]
         client._delete.assert_not_awaited()
@@ -634,11 +629,22 @@ class TestTheRealmClaimScopeStep:
 class FakeKc:
     """Enough of the admin client for `_async_sync` to run end to end."""
 
-    def __init__(self, current: CurrentState, on_lists: list[str] | None = None):
+    def __init__(
+        self,
+        current: CurrentState,
+        on_lists: list[str] | None = None,
+        groups_claim: list[str] | None = None,
+    ):
         self.current = current
         self.on_lists = on_lists or []
+        self.groups_claim = groups_claim or []
         self.claim_calls: list[tuple[tuple, dict]] = []
+        self.retire_calls: list[bool] = []
         self.authenticated = False
+
+    async def retire_groups_claim(self, remove=True):
+        self.retire_calls.append(remove)
+        return list(self.groups_claim)
 
     async def __aenter__(self):
         return self
@@ -720,6 +726,54 @@ class TestTheCommand:
 
         assert len(fake.claim_calls) == 2
         assert all(kw.get("remove_realm_defaults") is False for _, kw in fake.claim_calls)
+
+    @pytest.mark.parametrize(
+        ("dry_run", "additive", "remove", "line"),
+        [
+            (False, False, True, "  - groups claim: client oauth2_proxy: mapper groups (removed)"),
+            (True, False, False, "  - groups claim: client oauth2_proxy: mapper groups (would be removed)"),
+        ],
+    )
+    async def test_a_full_run_retires_the_groups_claim_and_a_dry_run_says_so(
+        self, monkeypatch, capsys, dry_run, additive, remove, line
+    ):
+        """REQ-0013. *Red:* never call the step, or call it with remove on a dry run.
+
+        @verifies REQ-0013
+        """
+        import celine.policies.cli.keycloak.commands.sync as sync_command
+
+        fake = FakeKc(CurrentState(), groups_claim=["client oauth2_proxy: mapper groups"])
+        monkeypatch.setattr(sync_command, "KeycloakAdminClient", lambda *a, **k: fake)
+
+        async def apply(**kwargs):
+            return SyncResult()
+
+        monkeypatch.setattr(sync_command, "apply_sync_plan", apply)
+        config = KeycloakConfig(scopes=SCOPES, clients=[svc()])
+
+        await sync_command._async_sync(KeycloakSettings(env="dev"), config, dry_run, False, additive=additive)
+
+        assert fake.retire_calls == [remove]
+        assert line in capsys.readouterr().out
+
+    async def test_additive_keeps_the_groups_claim_and_names_it(self, monkeypatch):
+        """@verifies REQ-0013"""
+        import celine.policies.cli.keycloak.commands.sync as sync_command
+
+        fake = FakeKc(
+            realm(client_default_scopes={"svc-alpha": {"hand.made"}}),
+            groups_claim=["client scope groups"],
+        )
+        monkeypatch.setattr(sync_command, "KeycloakAdminClient", lambda *a, **k: fake)
+        config = KeycloakConfig(scopes=SCOPES, clients=[svc()])
+
+        result = await sync_command._async_sync(
+            KeycloakSettings(env="dev"), config, True, False, additive=True
+        )
+
+        assert fake.retire_calls == [False]
+        assert "  = groups claim: client scope groups" in result.held_back
 
     def test_t13_additive_and_prune_are_refused_before_authenticating(
         self, monkeypatch, tmp_path: Path

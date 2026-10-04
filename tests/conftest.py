@@ -122,6 +122,11 @@ def mint_token(signing_key: dict[str, Any]) -> Callable[..., str]:
     `scope` is the space-separated string Keycloak issues, not a list, so the
     splitting in `_extract_subject_from_token` is exercised rather than
     bypassed. `groups` entries may carry the leading slash Keycloak emits.
+
+    A `sub` starting with `svc-` is minted the way Keycloak mints a client-credentials
+    token for that client: `preferred_username: service-account-<client>`, `azp` and
+    `client_id`. That is what `is_service_account` reads, and what decides user or
+    service (REQ-0014). Any other `sub` is a person's token.
     """
 
     def _mint(
@@ -142,6 +147,10 @@ def mint_token(signing_key: dict[str, Any]) -> Callable[..., str]:
             "iat": now,
             "exp": now + expires_in,
         }
+        if isinstance(sub, str) and sub.startswith("svc-"):
+            claims.update(
+                {"preferred_username": f"service-account-{sub}", "azp": sub, "client_id": sub}
+            )
         if scope is not None:
             claims["scope"] = scope
         if groups is not None:

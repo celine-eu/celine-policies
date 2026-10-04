@@ -15,7 +15,6 @@ from celine.mqtt_auth.models import (
     MqttSuperuserRequest,
 )
 from celine.sdk.auth import JwtUser
-from celine.sdk.auth.jwt import extract_groups
 from celine.sdk.policies import (
     Action,
     CachedPolicyEngine,
@@ -56,6 +55,12 @@ def _extract_subject_from_token(
     """Extract subject from JWT token.
 
     Returns None if token is invalid.
+
+    User or service is the token's kind (`is_service_account`), never whether it holds
+    a group (REQ-0014). The subject carries **no groups**: a realm group grants nothing,
+    an organization group counts only inside its organization and a topic names none, so
+    no group of either level reaches the MQTT policy (ADR-0012). A service is judged by
+    its scopes; a person's token is a user whatever scopes it carries.
     """
     try:
         # Validate JWT if JWKS URI is configured
@@ -68,18 +73,12 @@ def _extract_subject_from_token(
         elif not isinstance(scopes, list):
             scopes = []
 
-        groups = extract_groups(user.claims)
-
-        subject_type = SubjectType.ANONYMOUS
-        if groups:
-            subject_type = SubjectType.USER
-        elif scopes:
-            subject_type = SubjectType.SERVICE
+        subject_type = SubjectType.SERVICE if user.is_service_account else SubjectType.USER
 
         return Subject(
             id=user.sub,
             type=subject_type,
-            groups=groups,
+            groups=[],
             scopes=scopes,
             claims=user.claims,
         )
@@ -235,37 +234,13 @@ async def mqtt_superuser(
     request: MqttSuperuserRequest,
     response: Response,
     authorization: Annotated[str | None, Header()] = None,
-    settings: MqttAuthSettings = Depends(get_settings),
 ) -> MqttResponse:
-    """Check if client is MQTT superuser.
+    """There is no MQTT superuser: always 403 (REQ-0014, ADR-0012).
 
-    Superusers bypass all ACL checks.
-
-    Returns:
-    - 200 + ok=true if superuser
-    - 403 + ok=false if not superuser
+    mosquitto-go-auth may still be configured to ask (`auth_opt_disable_superuser false`
+    in a deployment's broker); every answer is no, so every operation goes through `/acl`.
+    No scope, group or role — `platform-admin` included — makes a client a superuser.
     """
-    token = _get_token_from_header(authorization)
-    if not token:
-        logger.debug("MQTT superuser check failed: missing token")
-        response.status_code = status.HTTP_403_FORBIDDEN
-        return MqttResponse(ok=False, reason="missing token")
-
-    subject = _extract_subject_from_token(token, settings)
-    if subject is None:
-        logger.debug("MQTT superuser check failed: invalid credentials")
-        response.status_code = status.HTTP_403_FORBIDDEN
-        return MqttResponse(ok=False, reason="invalid credentials")
-
-    # Check for superuser scope
-    if (
-        settings.mqtt_superuser_scope in subject.scopes
-        or "admin" in subject.groups
-        or "mqtt.admin" in subject.groups
-    ):
-        logger.info("MQTT superuser: user=%s", subject.id)
-        return MqttResponse(ok=True, reason="superuser")
-
-    logger.debug("MQTT superuser check failed: user=%s", subject.id)
+    logger.debug("MQTT superuser check: always denied (user=%s)", request.username)
     response.status_code = status.HTTP_403_FORBIDDEN
-    return MqttResponse(ok=False, reason="not superuser")
+    return MqttResponse(ok=False, reason="superuser disabled")

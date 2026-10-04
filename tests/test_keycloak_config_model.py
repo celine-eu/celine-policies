@@ -428,9 +428,9 @@ class TestShippedClientsYaml:
     # Families deliberately owned by nothing in this realm. An audience mapper
     # can never be derived for these, so anything referencing them must declare
     # the target in `extra_audiences` instead.
-    UNOWNED_SCOPE_FAMILIES = {
-        "mqtt",  # consumed by the mqtt_auth service, which is not a KC client
-    }
+    # `mqtt` was the one (`mqtt.admin`, the superuser scope) until REQ-0014 removed the MQTT
+    # superuser and the scope with it.
+    UNOWNED_SCOPE_FAMILIES: set[str] = set()
 
     def test_scope_families_are_owned_or_knowingly_unowned(self, config: KeycloakConfig):
         """A new unowned family is almost always a missing `scopes_prefix`.

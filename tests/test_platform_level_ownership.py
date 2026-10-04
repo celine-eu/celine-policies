@@ -57,13 +57,18 @@ runner = CliRunner()
 PLATFORM_WRITES = {
     "update_realm_settings",
     "create_realm_role",
+    "delete_realm_role",
     "add_group_realm_role",
+    "remove_group_realm_role",
+    "remove_role_composite_realm_role",
+    "add_user_realm_role",
     "create_group",
+    "delete_group",
     "ensure_group",
 }
 
 #: The clients-level writes the organization and user commands used to repeat (Phase 3).
-CLIENT_LEVEL_WRITES = {"ensure_realm_claim_scopes", "ensure_audience_mapper"}
+CLIENT_LEVEL_WRITES = {"ensure_realm_claim_scopes", "retire_groups_claim", "ensure_audience_mapper"}
 
 
 class RecordingKeycloak:
@@ -79,6 +84,7 @@ class RecordingKeycloak:
             "ensure_organization": ("org-1", True),
             "ensure_org_group": ("orggrp-1", True),
             "ensure_realm_claim_scopes": False,
+            "retire_groups_claim": [],
             "get_client_by_client_id": None,
             "get_user_by_username": None,
             "get_group_by_path": None,
@@ -294,14 +300,20 @@ class TestOneWriterOfTheRealmRepresentation:
         ):
             assert not hasattr(KeycloakAdminClient, name), name
 
-    def test_only_the_platform_module_writes_the_realm_representation(self):
+    def test_only_the_platform_modules_write_the_realm_representation(self):
+        """`bootstrap`'s modules: the platform settings, the admin second factor's browser
+        flow binding (REQ-0015), and the master realm (REQ-0016)."""
         writers = {
             str(path.relative_to(SRC))
             for path in SRC.rglob("*.py")
             if re.search(r"\bupdate_realm_settings\(", path.read_text())
             and path.name != "client.py"
         }
-        assert writers == {"policies/cli/keycloak/platform.py"}
+        assert writers == {
+            "policies/cli/keycloak/platform.py",
+            "policies/cli/keycloak/admin_mfa.py",
+            "policies/cli/keycloak/master.py",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -309,12 +321,16 @@ class TestOneWriterOfTheRealmRepresentation:
 # ---------------------------------------------------------------------------
 
 SECRET = "s3cr3t-value-for-the-admin-cli"
+#: Outside dev, every run needs the bootstrap client's secret (REQ-0016); these tests are
+#: about other things, so it is set for them.
+BOOTSTRAP_SECRET = "b" * 40
 
 
 @pytest.fixture
 def fake_bootstrap(monkeypatch):
     run = AsyncMock(return_value=(PlatformResult(), (SECRET, True)))
     monkeypatch.setattr(bootstrap_module, "_async_bootstrap", run)
+    monkeypatch.setenv("CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET", BOOTSTRAP_SECRET)
     return run
 
 
@@ -376,9 +392,13 @@ class TestBootstrapKeepsTheSecretOutOfTheOutput:
 
 
 class TestBootstrapWithTheClientsOwnCredentials:
+    """Without master: only where master is not hardened, so in dev (REQ-0016)."""
+
     def test_it_converges_the_platform_and_skips_the_admin_client(
         self, monkeypatch, tmp_path, fake_bootstrap
     ):
+        monkeypatch.setenv("ENV", "dev")
+        monkeypatch.delenv("CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET")
         monkeypatch.setenv("CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET", "from-env")
 
         result = invoke_bootstrap("--secrets-file", str(tmp_path / "s.yaml"))
@@ -389,6 +409,8 @@ class TestBootstrapWithTheClientsOwnCredentials:
         assert not (tmp_path / "s.yaml").exists()
 
     def test_with_no_credentials_at_all_it_refuses(self, monkeypatch, tmp_path, fake_bootstrap):
+        monkeypatch.setenv("ENV", "dev")
+        monkeypatch.delenv("CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET")
         monkeypatch.chdir(tmp_path)
 
         result = invoke_bootstrap("--secrets-file", str(tmp_path / "absent.yaml"))

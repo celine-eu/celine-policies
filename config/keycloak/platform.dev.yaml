@@ -1,0 +1,8 @@
+# Development overlay for `keycloak bootstrap` (`--overlay config/keycloak/platform.dev.yaml`).
+#
+# The local realm's platform administrators: the generic dev user `admin` only
+# (config/keycloak/dev-users.yaml). A deployment lists its own in its own overlay; the image's
+# platform.yaml names nobody. A user listed here who does not exist yet is reported by
+# bootstrap and granted the role on its first run after the user exists.
+platform_admin:
+  users: [admin]

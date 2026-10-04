@@ -91,26 +91,18 @@ class TestGetTokenFromHeader:
 
 
 class TestSubjectExtraction:
-    """`type` selects the rule family: `service_allowed` vs `user_allowed`.
+    """`type` selects the rule family, and it is the token's kind (REQ-0014).
 
-    Get it wrong and a token is judged against scopes it was never granted, or
-    against groups it does not have — so the derivation is pinned directly.
+    User or service comes from `is_service_account`, never from whether the token holds
+    a group; and no group of either level reaches the subject.
     """
 
     @pytest.fixture
     def settings(self) -> MqttAuthSettings:
         return MqttAuthSettings()
 
-    def test_groups_make_it_a_user(self, mint_token, settings):
-        subject = _extract_subject_from_token(
-            mint_token("u-1", groups=["/pipelines.runs.read"]), settings
-        )
-        assert subject is not None
-        assert subject.type is SubjectType.USER
-        # the leading slash Keycloak emits is stripped, or no group ever matches
-        assert subject.groups == ["pipelines.runs.read"]
-
-    def test_scopes_without_groups_make_it_a_service(self, mint_token, settings):
+    def test_a_service_account_is_a_service(self, mint_token, settings):
+        """@verifies REQ-0014"""
         subject = _extract_subject_from_token(
             mint_token("svc-pipelines", scope="pipelines.runs.read"), settings
         )
@@ -118,19 +110,51 @@ class TestSubjectExtraction:
         assert subject.type is SubjectType.SERVICE
         assert subject.scopes == ["pipelines.runs.read"]
 
-    def test_groups_win_over_scopes(self, mint_token, settings):
-        """A human token that also carries scopes is still judged as a user."""
+    def test_a_person_is_a_user_whatever_scopes_it_carries(self, mint_token, settings):
+        """A browser token carries the scopes its client requested; it stays a user.
+
+        Before REQ-0014 a person's token holding no group was judged as a service.
+
+        @verifies REQ-0014
+        """
         subject = _extract_subject_from_token(
-            mint_token("u-2", scope="pipelines.admin", groups=["/viewers"]), settings
+            mint_token("u-2", scope="pipelines.admin", preferred_username="alice", email="a@x"),
+            settings,
         )
         assert subject is not None
         assert subject.type is SubjectType.USER
+        assert subject.scopes == ["pipelines.admin"]
 
-    def test_neither_makes_it_anonymous(self, mint_token, settings):
-        """No scope and no group: valid signature, zero authority."""
+    def test_a_service_account_holding_a_group_is_still_a_service(self, mint_token, settings):
+        """"Has any group" no longer decides. @verifies REQ-0014"""
+        subject = _extract_subject_from_token(
+            mint_token("svc-pipelines", scope="pipelines.runs.read", groups=["/viewers"]),
+            settings,
+        )
+        assert subject is not None
+        assert subject.type is SubjectType.SERVICE
+        assert subject.groups == []
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"groups": ["/admins", "admins", "/pipelines.runs.read", "mqtt.admin"]},
+            {"organization": {"example-rec": {"groups": ["/pipelines.runs.read", "/admins"]}}},
+            {"realm_access": {"roles": ["platform-admin"]}},
+        ],
+    )
+    def test_no_group_of_either_level_reaches_the_subject(self, mint_token, settings, claims):
+        """@verifies REQ-0014"""
+        subject = _extract_subject_from_token(mint_token("u-3", **claims), settings)
+        assert subject is not None
+        assert subject.type is SubjectType.USER
+        assert subject.groups == []
+
+    def test_neither_scope_nor_group_is_a_user_with_nothing(self, mint_token, settings):
+        """Valid signature, zero authority."""
         subject = _extract_subject_from_token(mint_token("nobody"), settings)
         assert subject is not None
-        assert subject.type is SubjectType.ANONYMOUS
+        assert subject.type is SubjectType.USER
         assert subject.scopes == []
         assert subject.groups == []
 
@@ -140,23 +164,6 @@ class TestSubjectExtraction:
         )
         assert subject is not None
         assert subject.scopes == ["a.read", "b.write", "c.admin"]
-
-    def test_org_groups_are_picked_up(self, mint_token, settings):
-        """REC membership arrives under `organization.<alias>.groups`.
-
-        Users provisioned by `sync-users` get their groups this way, so missing
-        them would deny every REC operator.
-        """
-        subject = _extract_subject_from_token(
-            mint_token(
-                "u-3",
-                organization={"example-rec": {"groups": ["/pipelines.runs.read"]}},
-            ),
-            settings,
-        )
-        assert subject is not None
-        assert subject.type is SubjectType.USER
-        assert subject.groups == ["pipelines.runs.read"]
 
     def test_a_list_valued_scope_claim_is_taken_as_is(self, mint_token, settings):
         """Not every issuer emits the space-separated string Keycloak does."""
@@ -171,7 +178,7 @@ class TestSubjectExtraction:
         subject = _extract_subject_from_token(mint_token("svc-x", scope=42), settings)
         assert subject is not None
         assert subject.scopes == []
-        assert subject.type is SubjectType.ANONYMOUS
+        assert subject.type is SubjectType.SERVICE
 
     @pytest.mark.parametrize("token", ["", "   ", "not-a-jwt", "a.b.c"])
     def test_malformed_tokens_return_none(self, token: str, settings):
@@ -311,12 +318,25 @@ class TestAclEndpoint:
 
         assert response.status_code == 403
 
-    def test_a_user_subscribes_via_group_membership(self, client: TestClient, bearer):
-        response = self._acl(
-            client, bearer("u-1", groups=["/pipelines.runs.read"]), acc=4
-        )
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"groups": ["/pipelines.runs.read"]},
+            {"groups": ["/admins", "admins", "admin", "mqtt.admin"]},
+            {"organization": {"example-rec": {"groups": ["/pipelines.runs.read", "/admins"]}}},
+            {"realm_access": {"roles": ["platform-admin"]}},
+            {"scope": "pipelines.runs.read pipelines.admin", "email": "a@x"},
+        ],
+    )
+    @pytest.mark.parametrize("topic", [TOPIC, "celine/pipelines", "celine/pipelines/#"])
+    def test_a_person_reaches_no_topic(self, client: TestClient, bearer, claims, topic):
+        """No group (realm or organization), no role and no scope grants a user anything.
 
-        assert response.status_code == 200
+        @verifies REQ-0014
+        """
+        response = self._acl(client, bearer("u-1", **claims), topic=topic, acc=4)
+
+        assert response.status_code == 403
 
     def test_an_authenticated_token_with_no_authority_is_denied(
         self, client: TestClient, bearer
@@ -484,7 +504,7 @@ class TestAclEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# POST /superuser — bypasses every ACL check, so it is checked narrowly
+# POST /superuser — there is none (REQ-0014)
 # ---------------------------------------------------------------------------
 
 
@@ -492,77 +512,40 @@ class TestSuperuserEndpoint:
     def _superuser(self, client: TestClient, headers: dict[str, str]):
         return client.post("/superuser", headers=headers, json={"username": "any"})
 
-    def test_the_configured_scope_grants_superuser(self, client: TestClient, bearer):
-        response = self._superuser(client, bearer("svc-admin", scope="mqtt.admin"))
+    @pytest.mark.parametrize(
+        ("sub", "claims"),
+        [
+            ("svc-admin", {"scope": "mqtt.admin"}),
+            ("svc-pipelines", {"scope": "pipelines.admin"}),
+            ("u-admin", {"groups": ["/admin"]}),
+            ("u-admin", {"groups": ["/mqtt.admin"]}),
+            ("u-admin", {"groups": ["/admins", "admins"]}),
+            ("u-admin", {"organization": {"example-rec": {"groups": ["/admin", "/mqtt.admin"]}}}),
+            ("u-admin", {"realm_access": {"roles": ["platform-admin"]}}),
+            ("u-1", {"scope": "mqtt.admin", "groups": ["/mqtt.admin"]}),
+        ],
+    )
+    def test_nobody_is_a_superuser(self, client: TestClient, bearer, sub, claims):
+        """No scope, group or role — a platform admin included.
 
-        assert response.status_code == 200
-        assert response.json() == {"ok": True, "reason": "superuser"}
-
-    def test_the_admin_group_grants_superuser(self, client: TestClient, bearer):
-        response = self._superuser(client, bearer("u-admin", groups=["/admin"]))
-
-        assert response.status_code == 200
-        assert response.json()["ok"] is True
-
-    def test_the_mqtt_admin_group_grants_superuser(self, client: TestClient, bearer):
-        response = self._superuser(client, bearer("u-admin", groups=["/mqtt.admin"]))
-
-        assert response.status_code == 200
-
-    def test_an_ordinary_service_is_not_a_superuser(self, client: TestClient, bearer):
-        response = self._superuser(
-            client, bearer("svc-pipelines", scope="pipelines.runs.read")
-        )
-
-        assert response.status_code == 403
-        assert response.json() == {"ok": False, "reason": "not superuser"}
-
-    def test_a_service_admin_scope_is_not_superuser(self, client: TestClient, bearer):
-        """`pipelines.admin` is broad inside one service, not across the broker."""
-        response = self._superuser(
-            client, bearer("svc-pipelines", scope="pipelines.admin")
-        )
-
-        assert response.status_code == 403
-
-    def test_an_admin_scope_is_not_the_admin_group(self, client: TestClient, bearer):
-        """`mqtt.admin` as a *group* on a token that also has scopes.
-
-        Groups make the subject a user; the group check must still fire.
+        @verifies REQ-0014
         """
-        response = self._superuser(
-            client,
-            bearer("u-1", scope="pipelines.runs.read", groups=["/mqtt.admin"]),
-        )
-
-        assert response.status_code == 200
-
-    def test_a_missing_header_is_rejected(self, client: TestClient):
-        response = self._superuser(client, {})
+        response = self._superuser(client, bearer(sub, **claims))
 
         assert response.status_code == 403
-        assert response.json()["reason"] == "missing token"
+        assert response.json() == {"ok": False, "reason": "superuser disabled"}
 
-    def test_an_invalid_token_is_rejected(self, client: TestClient):
-        response = self._superuser(client, {"Authorization": "Bearer not.a.jwt"})
+    @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer not.a.jwt"}])
+    def test_no_token_and_a_bad_token_are_refused_too(self, client: TestClient, headers):
+        """@verifies REQ-0014"""
+        response = self._superuser(client, headers)
 
         assert response.status_code == 403
-        assert response.json()["reason"] == "invalid credentials"
+        assert response.json()["ok"] is False
 
-    def test_the_superuser_scope_is_configurable(
-        self, client: TestClient, app, bearer
-    ):
-        """Deployments rename it; the endpoint must read settings, not a literal."""
-        app.state.settings = app.state.settings.model_copy(
-            update={"mqtt_superuser_scope": "broker.root"}
-        )
-
-        assert self._superuser(
-            client, bearer("svc-admin", scope="broker.root")
-        ).status_code == 200
-        assert self._superuser(
-            client, bearer("svc-admin", scope="mqtt.admin")
-        ).status_code == 403
+    def test_the_superuser_scope_setting_is_gone(self):
+        """Nothing left to configure. @verifies REQ-0014"""
+        assert "mqtt_superuser_scope" not in MqttAuthSettings.model_fields
 
 
 # ---------------------------------------------------------------------------

@@ -212,9 +212,8 @@ scopes:
   - name: mlflow.read
     description: Read-only access to MLflow (experiments, runs, artifacts)
 
-  # MQTT
-  - name: mqtt.admin
-    description: MQTT superuser access
+  # MQTT: no scope. There is no MQTT superuser (REQ-0014); a broker client holds the
+  # `<service>.<resource>.<verb>` scopes of the topics it uses. `mqtt.admin` was removed.
 
   # Provisioning
   # The service that writes participant accounts into the realm, and the only
@@ -298,7 +297,9 @@ clients:
     service_account_enabled: false
     # What infra's import gave it. The dev import gave only profile and email, so its tokens
     # carried no realm_access; this aligns the local realm with the deployed ones. `basic` is
-    # on both already. organization, groups and dataspace are `sync`'s realm claim scopes.
+    # on both already. organization and dataspace are `sync`'s realm claim scopes; the realm
+    # `groups` claim is retired (ADR-0012). `roles` is required of every browser client
+    # (REQ-0013): it is how `platform-admin` reaches the token, in realm_access.roles.
     default_scopes:
       - web-origins
       - acr
@@ -306,8 +307,8 @@ clients:
       - roles
       - email
       # Browser intent for the REC Manager Dashboard. These scopes never grant
-      # a human on their own: celine-community also requires `/admins` at realm
-      # level or `/admins`/`/managers` inside the matching REC organization.
+      # a human on their own: celine-community also requires the realm role
+      # `platform-admin` or `admins`/`managers` inside the matching REC organization.
       - community.read
       - community.devices.read
       - community.nudging.read
@@ -453,7 +454,8 @@ clients:
       # A read, so a default scope; svc-community holds the same one.
       - rec-registry.read
     # **Optional, requested per call** (ADR-0011, REQ-0004): the two writes of the
-    # registry sync a realm admin starts from the console or the onboarding CLI.
+    # registry sync a platform admin (realm role `platform-admin`) starts from the
+    # console or the onboarding CLI.
     # Not default, because a default-scope token of this client must carry no
     # community write and no sweep.
     #
@@ -640,7 +642,6 @@ clients:
       - pipelines.admin
       - dataset.admin
       - mlflow.admin
-      - mqtt.admin
       - rec-registry.admin
       - nudging.admin
       - onboarding.admin

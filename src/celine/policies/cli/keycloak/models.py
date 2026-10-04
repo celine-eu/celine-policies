@@ -63,7 +63,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 
 
 # Pattern for ${VAR} and ${VAR:-default} interpolation
@@ -392,6 +392,22 @@ class ClientConfig(BaseModel):
         if not v and info.data.get("client_id"):
             return info.data["client_id"]
         return v or ""
+
+    @model_validator(mode="after")
+    def a_sign_in_client_carries_realm_roles(self) -> "ClientConfig":
+        """A client people sign in through holds `roles` as a default scope (REQ-0013).
+
+        The platform-wide grant is the realm role `platform-admin`, read from
+        `realm_access.roles` (ADR-0012), and that claim reaches a token only through the
+        `roles` scope. The realm gives a new client no default scope, so a browser client
+        without it would sign everyone in as a non-administrator, silently.
+        """
+        if self.browser is not None and "roles" not in self.default_scopes:
+            raise ValueError(
+                f"client {self.client_id!r} signs people in (browser:) and must hold `roles` "
+                f"as a default scope, or its tokens carry no realm_access.roles"
+            )
+        return self
 
     def login_representation(self) -> dict[str, Any]:
         """The flow, redirect and attribute keys `sync` writes on this client."""

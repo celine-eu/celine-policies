@@ -7,7 +7,8 @@ none of them:
   `browser:` block `sync` manages;
 - an **operator realm admin**, in every environment: now `bootstrap`, from
   `CELINE_KEYCLOAK_REALM_ADMIN_*`;
-- the **four development users**: now `seed-dev-users`, which refuses outside dev.
+- the **development users**: now `seed-dev-users`, which refuses outside dev. Since
+  ADR-0012 they are a `platform-admin` and two organization users, in no realm group.
 
 Keycloak is faked. The run against a real 26.7.3 is in the plan's work directory.
 """
@@ -41,6 +42,7 @@ PROXY = ClientConfig(
     client_id="oauth2_proxy",
     secret="s",
     service_account_enabled=False,
+    default_scopes=["roles"],
     browser=BrowserLogin(
         redirect_uris=["http://sso.x/*", "http://webapp.x/*"],
         implicit_flow=True,
@@ -134,26 +136,11 @@ class TestABrowserClientConverges:
 
 
 class AdminRealm(FakeRealm):
+    """A converged realm (the platform role exists) whose users are given as name -> roles."""
+
     def __init__(self, *args, users: dict[str, set[str]] | None = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.users = {name: set(g) for name, g in (users or {}).items()}
-        self.created_with: dict[str, dict] = {}
-
-    async def get_user_by_username(self, username):
-        return {"id": f"uid-{username}", "username": username} if username in self.users else None
-
-    async def get_user_groups(self, user_id):
-        return [{"path": p} for p in self.users[user_id.removeprefix("uid-")]]
-
-    async def ensure_user(self, username, **kwargs):
-        self.writes.append(("user", username))
-        self.created_with[username] = kwargs
-        self.users[username] = set()
-        return f"uid-{username}", True
-
-    async def add_user_to_group(self, user_id, group_id):
-        self.writes.append(("member", user_id, group_id))
-        self.users[user_id.removeprefix("uid-")].add(group_id.removeprefix("id"))
+        kwargs.setdefault("roles", {"platform-admin"})
+        super().__init__(*args, users=users, **kwargs)
 
 
 @pytest.fixture
@@ -183,21 +170,33 @@ class TestBootstrapCreatesTheRealmAdmin:
         kc = AdminRealm()
         result = await converge(kc, realm_admin=RealmAdminSettings())
         assert result.realm_admin_created is None
-        assert not [w for w in kc.writes if w[0] in ("user", "member")]
+        assert not [w for w in kc.writes if w[0] in ("user", "grant")]
 
     @pytest.mark.asyncio
-    async def test_it_is_created_verified_with_a_permanent_password_in_its_group(self, admin_env):
+    async def test_it_is_created_verified_with_a_permanent_password_holding_platform_admin(self, admin_env):
+        """@verifies REQ-0011"""
         kc = AdminRealm()
 
         result = await converge(kc, realm_admin=admin_env())
 
         assert result.realm_admin_created == "celine-admin"
-        assert kc.users["celine-admin"] == {"/admins"}
+        assert result.platform_admins_granted == ["celine-admin"]
+        assert kc.users["celine-admin"] == {"platform-admin"}
         made = kc.created_with["celine-admin"]
         assert made["temporary_password"] == "pw" and made["temporary"] is False
         assert made["email_verified"] is True
         # Without both names Keycloak refuses the sign-in: "Account is not fully set up".
         assert made["first_name"] == "Celine" and made["last_name"] == "Admin"
+
+    @pytest.mark.asyncio
+    async def test_on_a_new_realm_the_role_exists_before_the_admin_is_granted_it(self, admin_env):
+        """@verifies REQ-0011"""
+        kc = AdminRealm(roles=set())
+
+        await converge(kc, realm_admin=admin_env())
+
+        order = [w[0] for w in kc.writes if w[0] in ("role", "user", "grant")]
+        assert order == ["role", "user", "grant"]
 
     @pytest.mark.asyncio
     async def test_empty_names_are_refused_before_any_write(self, admin_env):
@@ -218,15 +217,33 @@ class TestBootstrapCreatesTheRealmAdmin:
         assert len(kc.writes) == writes
 
     @pytest.mark.asyncio
-    async def test_an_existing_account_outside_the_group_is_put_back(self, admin_env):
+    async def test_an_existing_account_without_the_role_is_given_it(self, admin_env):
+        """@verifies REQ-0011"""
         kc = AdminRealm(users={"celine-admin": set()})
 
         result = await converge(kc, realm_admin=admin_env(PASSWORD=""))
 
         assert result.realm_admin_created is None
-        assert result.realm_admin_group_added == ("celine-admin", "/admins")
-        assert kc.users["celine-admin"] == {"/admins"}
+        assert result.platform_admins_granted == ["celine-admin"]
+        assert kc.users["celine-admin"] == {"platform-admin"}
         assert ("user", "celine-admin") not in kc.writes
+
+    @pytest.mark.asyncio
+    async def test_an_old_realm_admin_in_admins_ends_with_the_role_and_no_group(self, admin_env):
+        """The state every deployed realm is in: the operator account in `/admins`.
+
+        @verifies REQ-0011
+        @verifies REQ-0012
+        """
+        kc = AdminRealm(
+            roles={"admin"}, groups={"/admins": {"admin"}}, users={"celine-admin": set()}
+        )
+
+        await converge(kc, realm_admin=admin_env(PASSWORD=""))
+
+        assert kc.groups == {}
+        assert kc.roles == {"platform-admin"}
+        assert kc.users["celine-admin"] == {"platform-admin"}
 
     @pytest.mark.asyncio
     async def test_creating_it_without_a_password_is_refused_before_any_write(self, admin_env):
@@ -235,12 +252,12 @@ class TestBootstrapCreatesTheRealmAdmin:
             await converge(kc, realm_admin=admin_env(PASSWORD=""))
         assert kc.writes == []
 
-    @pytest.mark.asyncio
-    async def test_a_group_nobody_declares_is_refused(self, admin_env):
-        kc = AdminRealm()
-        with pytest.raises(PlatformDeclarationError, match="/operators"):
-            await converge(kc, realm_admin=admin_env(GROUP="/operators"))
-        assert kc.writes == []
+    def test_a_group_setting_no_longer_exists(self, admin_env):
+        """Realm groups carry no authority: nothing to put the account in.
+
+        @verifies REQ-0011
+        """
+        assert "group" not in RealmAdminSettings.model_fields
 
     @pytest.mark.asyncio
     async def test_a_dry_run_reports_and_writes_nothing(self, admin_env):
@@ -254,20 +271,73 @@ class TestBootstrapCreatesTheRealmAdmin:
 # ---------------------------------------------------------------------------
 
 
+class OrgRealm(AdminRealm):
+    """AdminRealm plus organizations and their groups, as seed-dev-users reads them."""
+
+    def __init__(self, *args, orgs: dict[str, set[str]] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # alias -> its group names; memberships as (alias, group, username)
+        self.orgs = {alias: set(groups) for alias, groups in (orgs or {}).items()}
+        self.memberships: set[tuple[str, str, str]] = set()
+
+    async def get_organization_by_alias(self, alias):
+        return {"id": f"org-{alias}", "alias": alias} if alias in self.orgs else None
+
+    async def get_org_group_by_name(self, org_id, name):
+        alias = org_id.removeprefix("org-")
+        return {"id": f"{alias}/{name}", "name": name} if name in self.orgs[alias] else None
+
+    async def is_user_in_org_group(self, org_id, group_id, user_id):
+        alias, group = group_id.split("/")
+        return (alias, group, user_id.removeprefix("uid-")) in self.memberships
+
+    async def ensure_user_in_organization(self, org_id, user_id):
+        self.writes.append(("org-member", org_id, user_id))
+        return True
+
+    async def ensure_user_in_org_group(self, org_id, group_id, user_id):
+        alias, group = group_id.split("/")
+        self.writes.append(("org-group", alias, group, user_id))
+        self.memberships.add((alias, group, user_id.removeprefix("uid-")))
+        return True
+
+
+DEV_USERS = REPO_ROOT / "config/keycloak/dev-users.yaml"
+
+
 class TestTheDevelopmentUsers:
-    def test_the_shipped_file_is_the_import_s_four_users(self):
+    def test_the_shipped_file_has_a_platform_admin_an_org_admin_and_an_org_viewer(self):
+        """ADR-0012: one platform admin; an organization admin who is NOT one; a member.
+
+        @verifies REQ-0011
+        """
+        users = {u["username"]: u for u in seed_module.load_dev_users(DEV_USERS)}
+        assert users["admin"]["realm_roles"] == ["platform-admin"]
+        assert users["org-admin"]["realm_roles"] == []
+        assert users["org-admin"]["organizations"] == {"example_rec": "admins"}
+        assert users["org-viewer"]["realm_roles"] == []
+        assert users["org-viewer"]["organizations"] == {"example_rec": "viewers"}
+
+    def test_the_dev_overlay_declares_exactly_the_dev_platform_admins(self):
+        """The local realm's declared list: generic dev users only, the ones that hold the role.
+
+        @verifies REQ-0011
+        """
+        users = seed_module.load_dev_users(DEV_USERS)
+        declaration = load_platform(PLATFORM_YAML, [REPO_ROOT / "config/keycloak/platform.dev.yaml"])
+        assert declaration.platform_admins == [
+            u["username"] for u in users if "platform-admin" in u["realm_roles"]
+        ] == ["admin"]
+
+    def test_the_import_s_users_are_seeded_users_with_the_same_realm_roles(self):
+        """The import carries the users it can (no organization exists at import time)."""
         import json
 
-        users = seed_module.load_dev_users(REPO_ROOT / "config/keycloak/dev-users.yaml")
+        users = {u["username"]: u for u in seed_module.load_dev_users(DEV_USERS)}
         imported = json.loads((REPO_ROOT / "config/keycloak/import/realm-celine.json").read_text())
-        assert {(u["username"], u["group"]) for u in users} == {
-            (u["username"], u["groups"][0]) for u in imported["users"]
-        }
-
-    def test_every_group_is_a_role_group_bootstrap_creates(self):
-        users = seed_module.load_dev_users(REPO_ROOT / "config/keycloak/dev-users.yaml")
-        declared = {g.path for g in load_platform(PLATFORM_YAML).role_groups}
-        assert {u["group"] for u in users} <= declared
+        for user in imported["users"]:
+            assert "groups" not in user
+            assert user.get("realmRoles", []) == users[user["username"]]["realm_roles"]
 
     @pytest.mark.parametrize("env", [None, "prod", "staging"])
     def test_it_refuses_outside_development(self, monkeypatch, env):
@@ -282,7 +352,14 @@ class TestTheDevelopmentUsers:
 
     @pytest.mark.parametrize(
         "text",
-        ["users: []", "users:\n  - username: a\n    group: /admins", "users:\n  - username: a\n    password: a\n    group: admins", "users:\n  - {username: a, password: a, group: /admins, role: x}"],
+        [
+            "users: []",
+            "users:\n  - username: a\n    realm_roles: [platform-admin]",
+            "users:\n  - {username: a, password: a, group: /admins}",
+            "users:\n  - {username: a, password: a, realm_roles: [admin]}",
+            "users:\n  - {username: a, password: a, organizations: {example_rec: owners}}",
+            "users:\n  - {username: a, password: a, role: x}",
+        ],
     )
     def test_a_bad_file_is_refused(self, tmp_path, text):
         path = tmp_path / "u.yaml"
@@ -292,32 +369,58 @@ class TestTheDevelopmentUsers:
 
     @pytest.mark.asyncio
     async def test_it_creates_then_changes_nothing(self, monkeypatch):
-        kc = AdminRealm(groups={"/admins": {"admin"}, "/viewers": {"viewer"}})
+        """@verifies REQ-0011"""
+        kc = OrgRealm(orgs={"example_rec": {"admins", "viewers"}})
         kc.authenticate = AsyncMock()
         monkeypatch.setattr(seed_module, "KeycloakAdminClient", lambda *a, **k: _Ctx(kc))
-        users = [
-            {"username": "admin", "password": "admin", "group": "/admins"},
-            {"username": "viewer", "password": "viewer", "group": "/viewers"},
-        ]
+        users = seed_module.load_dev_users(DEV_USERS)
+        users[0]["organizations"].pop("example_dso")
 
         created, joined = await seed_module._async_seed(KeycloakSettings(), users, dry_run=False)
         again = await seed_module._async_seed(KeycloakSettings(), users, dry_run=False)
 
-        assert created == ["admin", "viewer"] and len(joined) == 2
+        assert created == ["admin", "org-admin", "org-viewer"]
+        assert ("admin", "realm role platform-admin") in joined
         assert again == ([], [])
-        assert kc.users == {"admin": {"/admins"}, "viewer": {"/viewers"}}
+        assert kc.users == {"admin": {"platform-admin"}, "org-admin": set(), "org-viewer": set()}
+        assert kc.memberships == {
+            ("example_rec", "admins", "admin"),
+            ("example_rec", "admins", "org-admin"),
+            ("example_rec", "viewers", "org-viewer"),
+        }
 
     @pytest.mark.asyncio
-    async def test_a_missing_group_is_refused_before_any_write(self, monkeypatch):
-        kc = AdminRealm(groups={"/admins": {"admin"}})
+    async def test_an_existing_user_gains_what_it_lacks(self, monkeypatch):
+        kc = OrgRealm(orgs={"example_rec": {"admins"}}, users={"admin": set()})
+        kc.authenticate = AsyncMock()
+        monkeypatch.setattr(seed_module, "KeycloakAdminClient", lambda *a, **k: _Ctx(kc))
+        users = [{"username": "admin", "password": "admin", "realm_roles": ["platform-admin"],
+                  "organizations": {"example_rec": "admins"}}]
+
+        created, joined = await seed_module._async_seed(KeycloakSettings(), users, dry_run=False)
+
+        assert created == []
+        assert joined == [("admin", "realm role platform-admin"), ("admin", "example_rec/admins")]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("kc_kwargs", "match"),
+        [
+            (dict(roles=set(), orgs={"example_rec": {"admins", "viewers"}}), "keycloak bootstrap"),
+            (dict(orgs={}), "organization example_rec"),
+            (dict(orgs={"example_rec": {"viewers"}}), "no group admins"),
+        ],
+    )
+    async def test_anything_missing_is_refused_before_any_write(self, monkeypatch, kc_kwargs, match):
+        kc = OrgRealm(**kc_kwargs)
         kc.authenticate = AsyncMock()
         monkeypatch.setattr(seed_module, "KeycloakAdminClient", lambda *a, **k: _Ctx(kc))
         users = [
-            {"username": "admin", "password": "admin", "group": "/admins"},
-            {"username": "viewer", "password": "viewer", "group": "/viewers"},
+            {"username": "admin", "password": "admin", "realm_roles": ["platform-admin"],
+             "organizations": {"example_rec": "admins"}},
         ]
 
-        with pytest.raises(Exception, match="keycloak bootstrap"):
+        with pytest.raises(Exception, match=match):
             await seed_module._async_seed(KeycloakSettings(), users, dry_run=False)
 
         assert kc.writes == []
@@ -360,6 +463,9 @@ class TestOneSyncGivesANewProxyItsClaims:
             async def ensure_realm_claim_scopes(self, proxy):
                 calls.append(proxy)
                 return True
+
+            async def retire_groups_claim(self, remove=True):
+                return []
 
             async def fetch_current_state(self):
                 return CurrentState()

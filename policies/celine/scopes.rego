@@ -1,5 +1,13 @@
 package celine.scopes
 
+# Grants on the broker come from a service account's scopes, and from nothing else
+# (REQ-0014, ADR-0012). A person's token is a user and holds no MQTT grant: no group of
+# either level reaches this policy (the backend sends none), and no realm role is an MQTT
+# grant. The groups a user token used to be judged by (`admin`, `mqtt.admin`,
+# `<service>.admin`, `<service>.<resource>.<verb>`, `mqtt:<service>:...`) were read from a
+# merge of realm and organization groups, so an organization could name one of its groups
+# like a broker grant and hold it.
+
 default deny = true
 
 is_service if {
@@ -16,6 +24,7 @@ has_scope(required) if {
 }
 
 has_scope_service_admin(service) if {
+  is_service
   has_scope(sprintf("%s.admin", [service]))
 }
 
@@ -37,64 +46,3 @@ service_allowed(required, service, resource) if {
   is_service
   has_scope_resource_wildcard(service, resource)
 }
-
-# ---- user groups ----
-
-user_in_group(g) if {
-  some i
-  input.subject.groups[i] == g
-}
-
-user_is_admin if {
-  is_user
-  user_in_group("admin")
-}
-
-user_is_admin if {
-  is_user
-  user_in_group("mqtt.admin")
-}
-
-user_is_service_admin(service) if {
-  is_user
-  user_in_group(sprintf("%s.admin", [service]))
-}
-
-user_is_service_admin(service) if {
-  is_user
-  user_in_group(sprintf("mqtt:%s:admin", [service]))
-}
-
-# required is "<service>.<resource>.<verb>" (e.g. pipelines.runs.read)
-user_allowed(required, service, resource, verb) if {
-  is_user
-  user_in_group(required)
-}
-
-# Alternative group naming: "mqtt:<service>:<resource>:<verb>"
-user_allowed(required, service, resource, verb) if {
-  is_user
-  user_in_group(sprintf("mqtt:%s:%s:%s", [service, resource, verb]))
-}
-
-# Resource wildcard groups: "<service>.<resource>.*" or "mqtt:<service>:<resource>:*"
-user_allowed(required, service, resource, verb) if {
-  is_user
-  user_in_group(sprintf("%s.%s.*", [service, resource]))
-}
-
-user_allowed(required, service, resource, verb) if {
-  is_user
-  user_in_group(sprintf("mqtt:%s:%s:*", [service, resource]))
-}
-
-# Admin groups
-user_allowed(required, service, resource, verb) if {
-  user_is_admin
-}
-
-user_allowed(required, service, resource, verb) if {
-  user_is_service_admin(service)
-}
-
-

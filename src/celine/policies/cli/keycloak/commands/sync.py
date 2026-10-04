@@ -394,7 +394,7 @@ async def _async_sync(
         if config.clients_with_admin_permissions():
             await require_platform(client, admin_permissions=True)
 
-        # Provision realm claim scopes (organization, groups, dataspace) — idempotent.
+        # Provision realm claim scopes (organization, dataspace) — idempotent.
         # An additive run leaves them on the realm default/optional lists and
         # reports it; a dry run only reads, and only an additive one reports.
         kept_realm_claim_scopes: list[str] = []
@@ -412,9 +412,21 @@ async def _async_sync(
                     config.oauth2_proxy_client
                 )
             if claim_changed:
-                typer.echo("  ! realm claim scopes (organization, groups, dataspace) provisioned")
+                typer.echo("  ! realm claim scopes (organization, dataspace) provisioned")
         elif additive:
             kept_realm_claim_scopes = await client.realm_claim_scopes_on_realm_lists()
+
+        # The realm `groups` claim is retired (ADR-0012, REQ-0013): a full run deletes
+        # every mapper writing it and the `groups` scope; an additive run keeps them and
+        # says so; a dry run says what a full run would remove.
+        retire = not dry_run and not additive
+        groups_claim = await client.retire_groups_claim(remove=retire)
+        if additive:
+            kept_realm_claim_scopes += [f"groups claim: {line}" for line in groups_claim]
+        else:
+            verb = "removed" if retire else "would be removed"
+            for line in groups_claim:
+                typer.secho(f"  - groups claim: {line} ({verb})", fg=typer.colors.YELLOW)
 
         # Fetch current state
         typer.echo("Fetching current state...")
@@ -498,7 +510,7 @@ async def _async_sync(
         # The claim scopes were ensured before the plan, and their assignment to the
         # oauth2-proxy client skipped if it did not exist yet. On a realm without the
         # import this run is what created it (it is declared since 2026-09-14), and
-        # without this its tokens would carry no organization or groups claim until
+        # without this its tokens would carry no organization claim until
         # the next sync. Measured on a fresh 26.7.3.
         # An additive run passes the flag here too: this second call would
         # otherwise take the claim scopes off the realm lists the first one kept.

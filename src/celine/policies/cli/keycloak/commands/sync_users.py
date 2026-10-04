@@ -294,7 +294,7 @@ def sync_users(
             "-g",
             help=(
                 "Realm group path to also assign every participant (repeatable), "
-                "e.g. /admins. Default: none — participants get their org-level "
+                "e.g. /community-x; a realm group grants nothing. Default: none — participants get their org-level "
                 "group only.  [env: CELINE_SYNC_USERS_GROUPS]"
             ),
         ),

@@ -10,6 +10,7 @@ services:
     volumes:
       - ./clients.yaml:/app/clients.yaml:ro
       - ./platform.yaml:/app/platform.yaml:ro
+      - ./config/keycloak/platform.dev.yaml:/app/platform.dev.yaml:ro
     depends_on:
       keycloak:
         condition: service_healthy
@@ -25,7 +26,7 @@ services:
     entrypoint: [ "/bin/sh", "-euc" ]
     command:
       - |
-        celine-policies keycloak bootstrap --admin-user admin --admin-password admin && \
+        celine-policies keycloak bootstrap --overlay /app/platform.dev.yaml --admin-user admin --admin-password admin && \
         celine-policies keycloak sync --admin-user admin --admin-password admin --secrets-file /tmp/.secrets.yaml
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -39,6 +40,7 @@ services:
     restart: "no"
     volumes:
       - ../rec-registry/recs/rec-example.yaml:/app/rec-example.yaml:ro
+      - ./config/keycloak/dev-users.yaml:/app/dev-users.yaml:ro
     depends_on:
       keycloak-sync:
         condition: service_completed_successfully
@@ -49,10 +51,7 @@ services:
     command:
       - |
         celine-policies keycloak sync-users /app/rec-example.yaml --admin-user admin --admin-password admin --password test --no-temporary --mock && \
-        celine-policies keycloak set-user-organization admin  --admin-user admin --admin-password admin  --organization example_dso --group admins && \
-        celine-policies keycloak set-user-organization viewer --admin-user admin --admin-password admin  --organization example_dso --group viewers && \
-        celine-policies keycloak set-user-organization admin  --admin-user admin --admin-password admin  --organization example_rec --group admins && \
-        celine-policies keycloak set-user-organization viewer --admin-user admin --admin-password admin  --organization example_rec --group viewers
+        celine-policies keycloak seed-dev-users /app/dev-users.yaml --admin-user admin --admin-password admin
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "keycloak.celine.localhost:host-gateway"

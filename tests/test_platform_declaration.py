@@ -54,7 +54,27 @@ class TestTheShippedDeclaration:
     def test_it_loads(self):
         declaration = load_platform(PLATFORM_YAML)
         assert declaration.realm_settings
-        assert declaration.role_groups
+        assert declaration.platform_admin_role == "platform-admin"
+
+    def test_it_declares_the_sdk_s_platform_role_and_names_no_account(self):
+        """REQ-0011: the name every service reads; the image lists nobody.
+
+        @verifies REQ-0011
+        """
+        from celine.sdk.auth import PLATFORM_ADMIN_ROLE
+
+        declaration = load_platform(PLATFORM_YAML)
+        assert declaration.platform_admin_role == PLATFORM_ADMIN_ROLE
+        assert declaration.platform_admins == []
+
+    def test_it_retires_the_old_role_groups_and_roles(self):
+        """REQ-0012: exactly the four groups and four roles the platform used to declare.
+
+        @verifies REQ-0012
+        """
+        declaration = load_platform(PLATFORM_YAML)
+        assert declaration.retired_groups == ["/admins", "/managers", "/editors", "/viewers"]
+        assert declaration.retired_roles == ["admin", "manager", "editor", "viewer"]
 
     def test_it_carries_the_invitation_settings(self):
         """The keys `a-participant-is-invited-and-sets-their-own-password` fixes."""
@@ -80,14 +100,24 @@ class TestTheShippedDeclaration:
         assert settings["ssoSessionIdleTimeout"] == 86400
         assert settings["ssoSessionMaxLifespan"] == 86400
 
-    def test_the_role_groups_carry_the_roles_the_imports_map(self):
+    def test_the_import_carries_the_platform_role_and_no_retired_object(self):
+        """A fresh local realm starts where bootstrap would leave it: no realm group, no
+        retired role, the platform role, and no mapper writing a `groups` claim.
+
+        @verifies REQ-0012
+        @verifies REQ-0013
+        """
         import json
 
-        imported = {
-            g["path"]: g["realmRoles"] for g in json.loads(IMPORT_JSON.read_text())["groups"]
-        }
-        declared = {g.path: [g.realm_role] for g in load_platform(PLATFORM_YAML).role_groups}
-        assert declared == imported
+        imported = json.loads(IMPORT_JSON.read_text())
+        declaration = load_platform(PLATFORM_YAML)
+        assert imported["groups"] == []
+        assert {r["name"] for r in imported["roles"]["realm"]} == {declaration.platform_admin_role}
+        mappers = [m for c in imported["clients"] for m in c.get("protocolMappers", [])]
+        mappers += [m for sc in imported["clientScopes"] for m in sc.get("protocolMappers", [])]
+        assert not [m for m in mappers if m.get("config", {}).get("claim.name") == "groups"]
+        assert not [m for m in mappers if m["protocolMapper"] == "oidc-group-membership-mapper"]
+        assert "groups" not in {sc["name"] for sc in imported["clientScopes"]}
 
     def test_the_import_file_does_not_carry_the_bootstrap_keys(self):
         """P3: an import reaches new realms only; these keys belong to bootstrap."""
@@ -170,18 +200,57 @@ class TestWhatADeclarationMaySay:
             load_platform(path)
 
     @pytest.mark.parametrize("group", ["admins", "/a/b", "/"])
-    def test_a_role_group_path_must_be_top_level(self, tmp_path, group):
+    def test_a_retired_group_path_must_be_top_level(self, tmp_path, group):
+        """@verifies REQ-0012"""
         path = write(
-            tmp_path, "platform.yaml", f"role_groups:\n  - path: {group!r}\n    realm_role: admin\n"
+            tmp_path, "platform.yaml",
+            PLATFORM_ADMIN_BLOCK + f"retired:\n  realm_groups: [{group!r}]\n",
         )
         with pytest.raises(PlatformDeclarationError, match="top-level"):
+            load_platform(path)
+
+    @pytest.mark.parametrize(
+        "role", ["platform-admin", "offline_access", "uma_authorization", "default-roles-celine"]
+    )
+    def test_the_platform_role_or_a_keycloak_role_cannot_be_retired(self, tmp_path, role):
+        """@verifies REQ-0012"""
+        path = write(
+            tmp_path, "platform.yaml", PLATFORM_ADMIN_BLOCK + f"retired:\n  realm_roles: [{role}]\n"
+        )
+        with pytest.raises(PlatformDeclarationError, match=role):
+            load_platform(path)
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            "",
+            "platform_admin:\n  role: admin\n",
+            "platform_admin:\n  role: platform-admins\n",
+            "platform_admin:\n  role: platform-admin\n  users: alice\n",
+            "platform_admin:\n  role: platform-admin\n  users: [alice, alice]\n",
+            "platform_admin:\n  role: platform-admin\n  group: /admins\n",
+        ],
+    )
+    def test_the_platform_role_must_be_declared_by_the_sdk_s_name(self, tmp_path, block):
+        """@verifies REQ-0011"""
+        path = write(tmp_path, "platform.yaml", "realm_settings:\n  failureFactor: 5\n" + block)
+        with pytest.raises(PlatformDeclarationError, match="platform_admin"):
+            load_platform(path)
+
+    def test_role_groups_are_no_longer_accepted(self, tmp_path):
+        """@verifies REQ-0012"""
+        path = write(
+            tmp_path, "platform.yaml",
+            PLATFORM_ADMIN_BLOCK + "role_groups:\n  - path: /admins\n    realm_role: admin\n",
+        )
+        with pytest.raises(PlatformDeclarationError, match="role_groups"):
             load_platform(path)
 
     def test_a_default_locale_outside_the_supported_ones_is_refused(self, tmp_path):
         path = write(
             tmp_path,
             "platform.yaml",
-            "realm_settings:\n  supportedLocales: [en, es]\n  defaultLocale: it\n",
+            "realm_settings:\n  supportedLocales: [en, es]\n  defaultLocale: it\n" + PLATFORM_ADMIN_BLOCK,
         )
         with pytest.raises(PlatformDeclarationError, match="defaultLocale"):
             load_platform(path)
@@ -213,7 +282,8 @@ class TestAnOverlayNarrowsTheLanguagesAndNothingElse:
         assert all(
             src == str(PLATFORM_YAML) for k, src in merged.sources.items() if k != "supportedLocales"
         )
-        assert merged.role_groups == base.role_groups
+        assert merged.platform_admins == base.platform_admins
+        assert merged.retired_groups == base.retired_groups
 
     def test_the_last_overlay_wins(self, tmp_path):
         first = write(tmp_path, "a.yaml", "realm_settings:\n  supportedLocales: [it, en]\n")
@@ -252,6 +322,30 @@ class TestAnOverlayNarrowsTheLanguagesAndNothingElse:
     def test_role_groups_are_refused(self, tmp_path):
         overlay = write(tmp_path, "o.yaml", "role_groups: []\n")
         with pytest.raises(PlatformDeclarationError, match="role_groups"):
+            load_platform(PLATFORM_YAML, [overlay])
+
+    def test_it_may_list_the_deployment_s_platform_admins(self, tmp_path):
+        """@verifies REQ-0011"""
+        overlay = write(tmp_path, "o.yaml", "platform_admin:\n  users: [alice, bob]\n")
+
+        merged = load_platform(PLATFORM_YAML, [overlay])
+
+        assert merged.platform_admins == ["alice", "bob"]
+        assert merged.sources["platform_admin.users"] == str(overlay)
+        assert merged.platform_admin_role == "platform-admin"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "platform_admin:\n  role: admin\n  users: [alice]\n",
+            "platform_admin:\n  role: platform-admin\n",
+            "retired:\n  realm_groups: []\n",
+        ],
+    )
+    def test_it_may_not_rename_the_role_or_change_what_is_retired(self, tmp_path, text):
+        """@verifies REQ-0011"""
+        overlay = write(tmp_path, "o.yaml", text)
+        with pytest.raises(PlatformDeclarationError, match="overlay"):
             load_platform(PLATFORM_YAML, [overlay])
 
     def test_dropping_the_default_locale_is_refused_naming_both_files(self, tmp_path):
@@ -318,7 +412,11 @@ class TestTheThemeCheck:
 
 
 class FakeRealm:
-    """The Admin API calls `converge_platform` makes, against an in-memory realm."""
+    """The Admin API calls `converge_platform` makes, against an in-memory realm.
+
+    Realm groups are top-level (no `parentId`); organization groups carry one and share the
+    `/admins`-style paths, as on Keycloak 26.7.3. Users hold realm roles directly.
+    """
 
     def __init__(
         self,
@@ -326,6 +424,9 @@ class FakeRealm:
         *,
         roles: set[str] | None = None,
         groups: dict[str, set[str]] | None = None,
+        org_groups: dict[str, tuple[str, set[str]]] | None = None,
+        composites: dict[str, set[str]] | None = None,
+        users: dict[str, set[str]] | None = None,
         themes: dict[str, list[str]] | None = None,
         sticky: bool = True,
         console_scopes: set[str] | None = None,
@@ -341,8 +442,16 @@ class FakeRealm:
         self.realm_scopes = set(ACCOUNT_CONSOLE_DEFAULT_SCOPES) if realm_scopes is None else set(realm_scopes)
         self.has_console = has_console
         self.roles = set(roles or ())
-        # path -> realm roles mapped onto it
+        # path -> realm roles mapped onto it (top-level realm groups)
         self.groups = {path: set(r) for path, r in (groups or {}).items()}
+        # id -> (path, realm roles): organization groups, which have a parent
+        self.org_groups = {gid: (path, set(r)) for gid, (path, r) in (org_groups or {}).items()}
+        # composite role name -> the realm roles inside it
+        self.composites = {name: set(r) for name, r in (composites or {}).items()}
+        self.roles |= set(self.composites)
+        # username -> realm roles held directly
+        self.users = {name: set(r) for name, r in (users or {}).items()}
+        self.created_with: dict[str, dict] = {}
         self.themes = themes or {"login": ["keycloak", "rec"], "email": ["keycloak", "rec"]}
         self.sticky = sticky
         self.puts: list[dict[str, Any]] = []
@@ -367,12 +476,45 @@ class FakeRealm:
     async def get_admin_permissions_client_uuid(self):
         return "uuid-ap" if self.realm.get("adminPermissionsEnabled") else None
 
+    # --- realm roles ---
+
     async def get_realm_role(self, name):
         return {"id": f"role-{name}", "name": name} if name in self.roles else None
 
     async def create_realm_role(self, name):
         self.writes.append(("role", name))
         self.roles.add(name)
+
+    async def delete_realm_role(self, name):
+        self.writes.append(("delete-role", name))
+        self.roles.discard(name)
+        self.composites.pop(name, None)
+        for held in [*self.groups.values(), *(r for _, r in self.org_groups.values()),
+                     *self.composites.values(), *self.users.values()]:
+            held.discard(name)
+
+    async def list_realm_roles(self):
+        return [
+            {"id": f"role-{n}", "name": n, "composite": bool(self.composites.get(n))}
+            for n in sorted(self.roles)
+        ]
+
+    async def get_role_composite_realm_role_names(self, role_id):
+        return set(self.composites.get(role_id.removeprefix("role-"), set()))
+
+    async def remove_role_composite_realm_role(self, composite_id, role):
+        name = composite_id.removeprefix("role-")
+        self.writes.append(("unmap-composite", name, role))
+        self.composites[name].discard(role)
+
+    async def get_realm_role_groups(self, name):
+        # Realm groups only: Keycloak 26.7.3 does not list an organization group here.
+        return [{"id": f"id{p}", "path": p} for p, r in self.groups.items() if name in r]
+
+    async def get_realm_role_users(self, name):
+        return [{"id": f"uid-{u}", "username": u} for u, r in self.users.items() if name in r]
+
+    # --- groups ---
 
     async def get_group_by_path(self, path):
         return {"id": f"id{path}", "path": path} if path in self.groups else None
@@ -382,12 +524,46 @@ class FakeRealm:
         self.groups[f"/{name}"] = set()
         return f"id/{name}"
 
+    async def delete_group(self, group_id):
+        path = group_id.removeprefix("id")
+        assert path in self.groups, "only a realm group is ever deleted"
+        self.writes.append(("delete-group", path))
+        del self.groups[path]
+
     async def get_group_realm_role_names(self, group_id):
         return set(self.groups[group_id.removeprefix("id")])
 
     async def add_group_realm_role(self, group_id, role):
         self.writes.append(("mapping", group_id.removeprefix("id"), role))
         self.groups[group_id.removeprefix("id")].add(role)
+
+    async def remove_group_realm_role(self, group_id, role):
+        self.writes.append(("unmap-group", group_id, role))
+        if group_id in self.org_groups:
+            self.org_groups[group_id][1].discard(role)
+        else:
+            self.groups[group_id.removeprefix("id")].discard(role)
+
+    # --- users ---
+
+    async def get_user_by_username(self, username):
+        return {"id": f"uid-{username}", "username": username} if username in self.users else None
+
+    async def get_user_realm_role_names(self, user_id):
+        return set(self.users[user_id.removeprefix("uid-")])
+
+    async def add_user_realm_role(self, user_id, role):
+        name = user_id.removeprefix("uid-")
+        self.writes.append(("grant", name, role))
+        self.users[name].add(role)
+
+    async def ensure_user(self, username, **kwargs):
+        self.writes.append(("user", username))
+        self.created_with[username] = kwargs
+        self.users[username] = set()
+        return f"uid-{username}", True
+
+    # --- the account console ---
 
     async def get_client_by_client_id(self, client_id):
         if client_id == "account-console" and self.has_console:
@@ -407,12 +583,15 @@ class FakeRealm:
             self.console_scopes.add(scope_id.removeprefix("scope-"))
 
 
-def a_declaration(tmp_path: Path, settings: str = "", groups: str = ""):
+PLATFORM_ADMIN_BLOCK = "platform_admin:\n  role: platform-admin\n  users: []\n"
+
+
+def a_declaration(tmp_path: Path, settings: str = "", extra: str = ""):
+    """A declaration with the given realm settings, the platform role, and `extra` YAML."""
     text = ""
     if settings:
         text += "realm_settings:\n" + "".join(f"  {line}\n" for line in settings.splitlines())
-    if groups:
-        text += "role_groups:\n" + groups
+    text += extra or PLATFORM_ADMIN_BLOCK
     return load_platform(write(tmp_path, "platform.yaml", text))
 
 
@@ -466,7 +645,7 @@ class TestBootstrapWritesOnlyDeclaredKeys:
 
         result = await converge(kc, declaration, dry_run=True)
 
-        assert result.settings and result.roles_created and result.groups_created
+        assert result.settings and result.platform_admin_role_created
         assert kc.writes == []
 
     @pytest.mark.asyncio
@@ -499,32 +678,211 @@ class TestBootstrapWritesOnlyDeclaredKeys:
         assert kc.writes == []
 
 
-class TestTheRoleGroups:
-    GROUPS = "  - path: /admins\n    realm_role: admin\n  - path: /viewers\n    realm_role: viewer\n"
+# The realm as the old platform level left it: four role groups, each mapped onto its role.
+LEGACY_GROUPS = {"/admins": {"admin"}, "/managers": {"manager"}, "/editors": {"editor"}, "/viewers": {"viewer"}}
+LEGACY_ROLES = {"admin", "manager", "editor", "viewer"}
+#: An organization's own groups: same paths, a parent, never touched.
+ORG_GROUPS = {"org-admins": ("/admins", set()), "org-viewers": ("/viewers", set())}
+
+STARTING_STATES = {
+    "new realm": dict(),
+    "old platform level": dict(roles=LEGACY_ROLES, groups=LEGACY_GROUPS),
+    "groups without their roles": dict(groups={p: set() for p in LEGACY_GROUPS}),
+    "roles without their groups": dict(roles=LEGACY_ROLES),
+    "half of it": dict(roles={"admin", "viewer"}, groups={"/admins": {"admin"}, "/editors": set()}),
+    "already converged": dict(roles={"platform-admin"}),
+}
+
+
+def legacy_realm(state: str, **extra) -> FakeRealm:
+    kwargs = {k: (dict(v) if isinstance(v, dict) else set(v)) for k, v in STARTING_STATES[state].items()}
+    kwargs.setdefault("groups", {})
+    kwargs["groups"] = {p: set(r) for p, r in kwargs["groups"].items()}
+    kwargs.update(extra)
+    return FakeRealm({"bruteForceProtected": False}, org_groups={k: (p, set(r)) for k, (p, r) in ORG_GROUPS.items()}, **kwargs)
+
+
+class TestTheRetiredLevelIsRemovedFromAnyStart:
+    """REQ-0012: bootstrap deletes the old role groups and roles, whatever the realm holds."""
 
     @pytest.mark.asyncio
-    async def test_absent_groups_are_created_with_their_role(self, tmp_path):
-        kc = FakeRealm({"bruteForceProtected": False})
+    @pytest.mark.parametrize("state", sorted(STARTING_STATES))
+    async def test_it_converges_then_a_second_run_changes_nothing(self, state):
+        """@verifies REQ-0012
+        @verifies REQ-0011
+        """
+        kc = legacy_realm(state)
+        kc.users["someone"] = {"viewer"} & kc.roles
+        declaration = load_platform(PLATFORM_YAML)
 
-        await converge(kc, a_declaration(tmp_path, groups=self.GROUPS))
+        first = await converge(kc, declaration)
+        writes = len(kc.writes)
+        second = await converge(kc, declaration)
 
-        assert kc.roles == {"admin", "viewer"}
-        assert kc.groups == {"/admins": {"admin"}, "/viewers": {"viewer"}}
+        assert kc.groups == {}
+        assert kc.roles == {"platform-admin"}
+        assert kc.users["someone"] == set()
+        assert not second.changed
+        assert len(kc.writes) == writes
+        role_level = first.groups_removed or first.roles_removed or first.platform_admin_role_created
+        assert bool(role_level) is (state != "already converged")
 
     @pytest.mark.asyncio
-    async def test_an_existing_group_gains_the_missing_role_and_keeps_its_others(self, tmp_path):
-        """What a realm whose groups `sync-users` created looks like: no role on them."""
+    async def test_it_reports_exactly_what_it_removes(self):
+        """@verifies REQ-0012"""
+        kc = legacy_realm("half of it")
+
+        result = await converge(kc, load_platform(PLATFORM_YAML))
+
+        assert result.groups_removed == ["/admins", "/editors"]
+        assert result.roles_removed == ["admin", "viewer"]
+        assert result.platform_admin_role_created
+
+    @pytest.mark.asyncio
+    async def test_an_organization_s_group_of_the_same_name_is_never_touched(self):
+        """Its path is `/admins` too. Only a top-level realm group is deleted.
+
+        @verifies REQ-0012
+        """
+        kc = legacy_realm("old platform level")
+
+        await converge(kc, load_platform(PLATFORM_YAML))
+
+        assert set(kc.org_groups) == {"org-admins", "org-viewers"}
+        assert not [w for w in kc.writes if w[0] == "delete-group" and w[1] not in LEGACY_GROUPS]
+
+    @pytest.mark.asyncio
+    async def test_any_other_realm_group_and_role_stay(self):
+        """@verifies REQ-0012"""
+        kc = legacy_realm("old platform level")
+        kc.groups["/participants"] = {"custom"}
+        kc.roles.add("custom")
+
+        await converge(kc, load_platform(PLATFORM_YAML))
+
+        assert kc.groups == {"/participants": {"custom"}}
+        assert kc.roles == {"custom", "platform-admin"}
+
+    @pytest.mark.asyncio
+    async def test_it_is_not_gated_on_allow_destructive_and_a_dry_run_writes_nothing(self):
+        """The removal is the declaration: no SettingChange, so nothing for the guard.
+
+        @verifies REQ-0012
+        """
+        kc = legacy_realm("old platform level")
+
+        result = await converge(kc, load_platform(PLATFORM_YAML), dry_run=True)
+
+        assert result.groups_removed and result.roles_removed
+        assert result.destructive == []
+        assert kc.writes == []
+
+
+class TestThePlatformRole:
+    """REQ-0011: `platform-admin` exists, and is held directly by the declared users only."""
+
+    @pytest.mark.asyncio
+    async def test_the_listed_users_get_it_directly(self, tmp_path):
+        """@verifies REQ-0011"""
+        declaration = a_declaration(
+            tmp_path, extra="platform_admin:\n  role: platform-admin\n  users: [alice, bob]\n"
+        )
+        kc = FakeRealm({"bruteForceProtected": False}, users={"alice": set(), "bob": {"platform-admin"}})
+        kc.roles.add("platform-admin")
+
+        result = await converge(kc, declaration)
+
+        assert result.platform_admins_granted == ["alice"]
+        assert kc.users == {"alice": {"platform-admin"}, "bob": {"platform-admin"}}
+
+    @pytest.mark.asyncio
+    async def test_a_listed_user_who_does_not_exist_is_reported_and_is_not_a_change(self, tmp_path):
+        """@verifies REQ-0011"""
+        declaration = a_declaration(
+            tmp_path, extra="platform_admin:\n  role: platform-admin\n  users: [carol]\n"
+        )
+        kc = FakeRealm({"bruteForceProtected": False}, roles={"platform-admin"})
+
+        result = await converge(kc, declaration)
+
+        assert result.platform_admins_missing == ["carol"]
+        assert not result.changed
+
+    @pytest.mark.asyncio
+    async def test_a_holder_nobody_declared_keeps_it_and_is_reported(self, tmp_path):
+        """@verifies REQ-0011"""
+        kc = FakeRealm({"bruteForceProtected": False}, users={"dave": {"platform-admin"}})
+        kc.roles.add("platform-admin")
+
+        result = await converge(kc, a_declaration(tmp_path))
+
+        assert result.platform_admins_undeclared == ["dave"]
+        assert kc.users["dave"] == {"platform-admin"}
+        assert not result.changed
+
+    @pytest.mark.asyncio
+    async def test_a_realm_group_mapping_of_it_is_removed(self, tmp_path):
+        """Everyone in the group would be a platform admin.
+
+        @verifies REQ-0011
+        """
+        kc = FakeRealm({"bruteForceProtected": False}, roles={"platform-admin"}, groups={"/ops": {"platform-admin"}})
+
+        result = await converge(kc, a_declaration(tmp_path))
+        second = await converge(kc, a_declaration(tmp_path))
+
+        assert result.platform_admin_unmapped_groups == ["/ops"]
+        assert kc.groups == {"/ops": set()}
+        assert not second.changed
+
+    @pytest.mark.asyncio
+    async def test_an_organization_group_is_never_written_through_the_realm_groups_api(self, tmp_path):
+        """Keycloak answers 400 for an organization group there. Should a later version list
+        one under the role's groups, bootstrap leaves it alone rather than fail.
+
+        @verifies REQ-0011
+        """
+        kc = FakeRealm({"bruteForceProtected": False}, roles={"platform-admin"})
+
+        async def listed_with_an_org_group(name):
+            return [{"id": "g1", "path": "/admins", "parentId": "org-parent"}]
+
+        kc.get_realm_role_groups = listed_with_an_org_group
+
+        result = await converge(kc, a_declaration(tmp_path))
+
+        assert result.platform_admin_unmapped_groups == []
+        assert not [w for w in kc.writes if w[0] == "unmap-group"]
+
+    @pytest.mark.asyncio
+    async def test_it_is_taken_out_of_the_default_roles_and_any_composite(self, tmp_path):
+        """In `default-roles-<realm>` it would reach every user of the realm.
+
+        @verifies REQ-0011
+        """
         kc = FakeRealm(
             {"bruteForceProtected": False},
-            roles={"admin", "viewer", "extra"},
-            groups={"/admins": {"extra"}, "/viewers": {"viewer"}},
+            roles={"platform-admin", "offline_access"},
+            composites={"default-roles-x": {"offline_access", "platform-admin"}, "ops": {"platform-admin"}},
         )
 
-        result = await converge(kc, a_declaration(tmp_path, groups=self.GROUPS))
+        result = await converge(kc, a_declaration(tmp_path))
 
-        assert result.groups_created == [] and result.roles_created == []
-        assert result.role_mappings_added == [("/admins", "admin")]
-        assert kc.groups["/admins"] == {"extra", "admin"}
+        assert result.platform_admin_unmapped_composites == ["default-roles-x", "ops"]
+        assert kc.composites == {"default-roles-x": {"offline_access"}, "ops": set()}
+
+    @pytest.mark.asyncio
+    async def test_a_new_realm_gets_the_role_before_anyone_is_granted_it(self, tmp_path):
+        """@verifies REQ-0011"""
+        declaration = a_declaration(
+            tmp_path, extra="platform_admin:\n  role: platform-admin\n  users: [alice]\n"
+        )
+        kc = FakeRealm({"bruteForceProtected": False}, users={"alice": set()})
+
+        await converge(kc, declaration)
+
+        order = [w[0] for w in kc.writes if w[0] in ("role", "grant")]
+        assert order == ["role", "grant"]
 
 
 class TestTheCheckOtherCommandsMake:
@@ -840,7 +1198,7 @@ class TestTheAccountConsoleGetsItsDefaultScopes:
 
     @pytest.mark.asyncio
     async def test_a_realm_that_has_them_is_not_touched(self, tmp_path):
-        kc = FakeRealm({"resetPasswordAllowed": True, "bruteForceProtected": False})
+        kc = FakeRealm({"resetPasswordAllowed": True, "bruteForceProtected": False}, roles={"platform-admin"})
 
         result = await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
 
@@ -887,7 +1245,9 @@ class TestTheAccountConsoleGetsItsDefaultScopes:
 
     @pytest.mark.asyncio
     async def test_a_realm_without_the_client_is_left_alone(self, tmp_path):
-        kc = FakeRealm({"resetPasswordAllowed": True, "bruteForceProtected": False}, has_console=False)
+        kc = FakeRealm(
+            {"resetPasswordAllowed": True, "bruteForceProtected": False}, has_console=False, roles={"platform-admin"}
+        )
 
         result = await converge(kc, a_declaration(tmp_path, "resetPasswordAllowed: true"))
 

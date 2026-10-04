@@ -14,7 +14,6 @@ Examples:
 - `digital-twin.values.read` — read digital twin values
 - `pipelines.runs.write` — update pipeline runs
 - `dataset.query` — execute dataset queries
-- `mqtt.admin` — MQTT superuser access
 
 ## Platform Scopes
 
@@ -144,9 +143,8 @@ the other.
 
 ### MQTT
 
-| Scope | Description |
-|-------|-------------|
-| `mqtt.admin` | MQTT superuser access |
+No scope. There is no MQTT superuser (REQ-0014): `mqtt.admin` was removed. A broker client holds
+the `<service>.<resource>.<verb>` scopes of its topics.
 
 ### Provisioning
 
@@ -369,8 +367,9 @@ onboarding uses for everything else carries no community write and no sweep:
   `svc-onboarding` token that did not request it with `403 insufficient_scope`.
 
 Neither adds an audience: both land on services this client already addresses. A realm has
-the optional assignments only after `keycloak sync`, and the sync is started by a realm admin
-(onboarding's `recs.write`), never on a template reload.
+the optional assignments only after `keycloak sync`, and the sync is started by a platform admin
+(the realm role `platform-admin`, the only holder of onboarding's `recs.write`), never on a
+template reload.
 
 ### svc-onboarding-cli
 
@@ -384,9 +383,10 @@ default_scopes:
   - onboarding.admin
 ```
 
-It never starts onboarding's planned registry sync: that capability is held by realm
-`admins` only and no scope grants it, `onboarding.admin` included. The CLI's sync command
-runs with a realm admin's own token or `--local`.
+It never starts onboarding's planned registry sync: that capability is held by the realm role
+`platform-admin` only (no organization group grants it) and no scope grants it,
+`onboarding.admin` included. The CLI's sync command runs with a `platform-admin` holder's own
+token or `--local`.
 
 ### svc-provisioning
 
@@ -436,7 +436,6 @@ default_scopes:
   - digital-twin.admin
   - pipelines.admin
   - dataset.admin
-  - mqtt.admin
   - rec-registry.admin
   - nudging.admin
   - onboarding.admin
@@ -444,37 +443,41 @@ default_scopes:
 
 ---
 
-## User Groups
+## Who a person is: two levels (ADR-0012)
 
-User authorization is group-based. Groups determine what resources a user can access (e.g., internal datasets, community data).
+There are exactly two levels of authority, and nothing in between:
 
-### Group Sources
-
-Groups can come from two places in the JWT:
-
-| Source | Claim | Assigned via |
+| Level | Claim | Assigned via |
 |---|---|---|
-| **Realm-level** | `groups: ["/admins"]` | Keycloak admin UI, or `sync-users --group /admins` given explicitly |
-| **Org-level** | `organization.<alias>.groups: ["/viewers"]` | the provisioning service (`viewers`, automatic for REC participants); `keycloak set-user-organization --group managers` (or `admins`), run by a platform admin; `sync-users` in local development |
+| **Platform** | `realm_access.roles: ["platform-admin"]` | `keycloak bootstrap`: the operator realm admin and the users a deployment lists in `platform_admin.users`; by hand in the admin console (reported by bootstrap, not revoked) |
+| **Organization** | `organization.<alias>.groups: ["/admins"]` | the provisioning service (`viewers`, automatic for REC participants); `keycloak set-user-organization --group managers` (or `admins`), run by a platform admin; `sync-users` and `seed-dev-users` in local development |
 
-Realm-level groups are reserved for **platform management** (admins, managers). Regular REC participants receive org-level groups only: the provisioning service assigns no realm group, and `sync-users` assigns one only when `--group` names it. The `taskfile.yaml` dev tasks no longer pass `--group /viewers` (2026-09-14); an account already in realm `/viewers` keeps that membership until an operator removes it.
+- **`platform-admin` is the only platform-wide grant.** It is a realm *role*, carried by a name
+  no organization group can have, read from `realm_access.roles` (celine-sdk `realm_roles`,
+  `is_platform_admin`). Every client people sign in through holds the `roles` scope, or its
+  tokens carry no `realm_access` (REQ-0013).
+- **An organization's groups count only inside that organization.** Read them for the
+  organization the request is about (celine-sdk `organization_groups(claims, alias)`), never
+  merged with another organization's or with anything realm-wide.
+- **Realm groups carry no authority.** `/admins`, `/managers`, `/editors`, `/viewers` and the
+  realm roles `admin`, `manager`, `editor`, `viewer` are deleted by `bootstrap` (REQ-0012), and
+  no mapper writes a top-level `groups` claim (REQ-0013). A realm group still present in a token
+  grants nothing. `sync-users --group` can still file participants into a realm group for local
+  development; it grants nothing either.
+- **Policy input** carries platform roles in `input.subject.roles`, never in `groups`.
 
-### Group Hierarchy
+### Organization group hierarchy
 
-Groups follow the standard role hierarchy (defined in `ROLE_HIERARCHY`):
+Organization groups follow the standard hierarchy (`ROLE_HIERARCHY`), inside one organization:
 
 | Group | Capabilities |
 |---|---|
-| `admins` | Full access to all resources |
+| `admins` | Full access to that organization's resources |
 | `managers` | Read/query access to internal datasets |
 | `editors` | Used by the onboarding console (see below); unused elsewhere |
 | `viewers` | Read/query access to internal datasets |
 
-The same four names exist at realm level and inside every organization, and the
-distinction carries meaning: an **org**-level group grants the capability for that
-community only, a **realm**-level group grants it across every community. The onboarding
-console is the first service to use the full hierarchy, mapping it to concrete
-capabilities:
+The onboarding console maps it to concrete capabilities:
 
 | Group | Onboarding console |
 |---|---|
@@ -483,18 +486,18 @@ capabilities:
 | `managers` | + approve, reject, reopen, retry a failed enablement step, export |
 | `admins` | + GDPR erasure, reverse enablement |
 
-### How Services Read Groups
+### How services read the two levels
 
-All CELINE services use `extract_groups()` from `celine-sdk` to read groups from JWT claims. This function merges realm-level and org-level groups into a flat list:
+`extract_groups()`, which merged realm and organization groups into one flat list, is removed
+from celine-sdk (2.0.0). A service reads the platform role and the organization groups apart:
 
 ```python
-from celine.sdk.auth.jwt import extract_groups
+from celine.sdk.auth import Grants, is_platform_admin, organization_groups
 
-groups = extract_groups(user.claims)
-# ["viewers"] — regardless of whether it came from realm or org
+is_platform_admin(user.claims)                 # realm_access.roles has "platform-admin"
+organization_groups(user.claims, "example-rec")  # ["admins"] — that organization only
+Grants.from_claims(user.claims).in_org("example-rec")
 ```
-
-Services must NOT use `claims.get("groups")` directly — it misses org-level groups.
 
 ### Multi-REC Isolation
 

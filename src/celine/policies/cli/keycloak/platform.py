@@ -45,6 +45,15 @@ The import cannot say otherwise without declaring the `account` client and its r
 well. So `bootstrap` adds the missing ones, to that client only, and never removes one.
 It is the one client this level touches: every other client is `sync`'s.
 
+## The platform-wide grant, and what it replaced (ADR-0012)
+
+Exactly two levels. The realm role `platform-admin` is the only platform-wide grant; an
+organization's own groups count only inside it. `bootstrap` creates the role, gives it directly
+to the operator realm admin and to `platform_admin.users`, and takes it off any group or
+composite role that would hand it to everyone in it. It deletes the realm groups and roles
+`retired` lists — the old `/admins`-style role groups — from whatever state the realm is in.
+Those deletions are the declaration, so `--allow-destructive` does not gate them.
+
 ## Nested objects are replaced whole
 
 Keycloak does not merge a nested object on `PUT`: `smtpServer` with one field is a
@@ -62,6 +71,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import yaml
+
+from celine.sdk.auth import PLATFORM_ADMIN_ROLE
 
 from celine.policies.cli.keycloak.client import KeycloakError
 
@@ -119,8 +130,10 @@ REFUSED_REALM_SETTINGS: dict[str, str] = {
     "passwordPolicy": "the realm keeps Keycloak's default policy",
 }
 
-#: The only keys a deployment overlay may change.
+#: The only realm keys a deployment overlay may change. It may also list the deployment's
+#: platform administrators, `platform_admin.users`, and nothing else of the declaration.
 OVERLAY_REALM_SETTINGS = frozenset({"supportedLocales"})
+PLATFORM_ADMINS_KEY = "platform_admin.users"
 
 #: Prefix of the variables that override a declared value; the realm key follows in upper
 #: snake case (`loginTheme` -> `CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME`). `PLATFORM_` keeps
@@ -165,7 +178,11 @@ THEME_LOCALES = frozenset({"it", "en", "es"})
 #: Realm keys whose value names a theme of the given type in `serverinfo.themes`.
 THEME_SETTINGS = {"loginTheme": "login", "emailTheme": "email"}
 
-_TOP_LEVEL_KEYS = frozenset({"realm_settings", "role_groups"})
+_TOP_LEVEL_KEYS = frozenset({"realm_settings", "platform_admin", "retired"})
+
+#: Realm roles Keycloak owns. `retired` may not name one: deleting it breaks every login.
+BUILTIN_REALM_ROLES = frozenset({"offline_access", "uma_authorization"})
+BUILTIN_REALM_ROLE_PREFIX = "default-roles-"
 
 
 def env_override_name(key: str) -> str:
@@ -185,21 +202,19 @@ class PlatformNotReady(KeycloakError):
     """
 
 
-@dataclass(frozen=True)
-class RoleGroup:
-    """A realm-wide group and the realm role every member of it holds."""
-
-    path: str
-    realm_role: str
-
-
 @dataclass
 class PlatformDeclaration:
     """`platform.yaml` with its overlays applied, and where each value came from."""
 
     realm_settings: dict[str, Any] = field(default_factory=dict)
-    role_groups: list[RoleGroup] = field(default_factory=list)
-    #: realm key -> the file that set it last
+    #: The platform-wide realm role. Always `PLATFORM_ADMIN_ROLE`: the loader refuses another.
+    platform_admin_role: str = PLATFORM_ADMIN_ROLE
+    #: Usernames that hold it directly, beside the operator realm admin.
+    platform_admins: list[str] = field(default_factory=list)
+    #: Top-level realm group paths and realm role names bootstrap deletes when present.
+    retired_groups: list[str] = field(default_factory=list)
+    retired_roles: list[str] = field(default_factory=list)
+    #: realm key -> the file that set it last; `platform_admin.users` too
     sources: dict[str, str] = field(default_factory=dict)
     platform_file: str = ""
 
@@ -269,36 +284,65 @@ def _realm_settings(path: Path, data: dict[str, Any]) -> dict[str, Any]:
     return dict(settings)
 
 
-def _role_groups(path: Path, data: dict[str, Any]) -> list[RoleGroup]:
-    raw = data.get("role_groups") or []
-    if not isinstance(raw, list):
-        raise PlatformDeclarationError(f"{path}: role_groups must be a list")
-    groups: list[RoleGroup] = []
-    for i, entry in enumerate(raw):
-        if not isinstance(entry, dict) or set(entry) != {"path", "realm_role"}:
+def _names(path: "Path | str", key: str, raw: Any) -> list[str]:
+    """A list of distinct non-empty strings, or a refusal naming `key`."""
+    if raw is None:
+        return []
+    if (
+        not isinstance(raw, list)
+        or not all(isinstance(v, str) and v.strip() for v in raw)
+        or len({v.strip() for v in raw}) != len(raw)
+    ):
+        raise PlatformDeclarationError(f"{path}: {key} must be a list of distinct names, got {raw!r}")
+    return [v.strip() for v in raw]
+
+
+def _platform_admin(path: Path, data: dict[str, Any]) -> tuple[str, list[str]]:
+    """`platform_admin`: the role, which must be the SDK's, and the users who hold it."""
+    raw = data.get("platform_admin")
+    if raw is None:
+        raise PlatformDeclarationError(
+            f"{path}: platform_admin is required: it declares the realm role "
+            f"{PLATFORM_ADMIN_ROLE!r}, the only platform-wide grant"
+        )
+    if not isinstance(raw, dict) or not set(raw) <= {"role", "users"}:
+        raise PlatformDeclarationError(
+            f"{path}: platform_admin must be a mapping with `role` and `users`"
+        )
+    role = raw.get("role")
+    if role != PLATFORM_ADMIN_ROLE:
+        raise PlatformDeclarationError(
+            f"{path}: platform_admin.role must be {PLATFORM_ADMIN_ROLE!r}, the name every "
+            f"service reads from realm_access.roles; got {role!r}"
+        )
+    return role, _names(path, "platform_admin.users", raw.get("users"))
+
+
+def _retired(path: Path, data: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """`retired`: the realm groups and roles bootstrap deletes. Never a built-in or the grant."""
+    raw = data.get("retired") or {}
+    if not isinstance(raw, dict) or not set(raw) <= {"realm_groups", "realm_roles"}:
+        raise PlatformDeclarationError(
+            f"{path}: retired must be a mapping with `realm_groups` and `realm_roles`"
+        )
+    groups = _names(path, "retired.realm_groups", raw.get("realm_groups"))
+    for group_path in groups:
+        if not group_path.startswith("/") or "/" in group_path[1:] or len(group_path) < 2:
             raise PlatformDeclarationError(
-                f"{path}: role_groups[{i}] must have exactly `path` and `realm_role`"
+                f"{path}: retired.realm_groups must name top-level group paths like /admins, "
+                f"got {group_path!r}"
             )
-        group_path, role = entry["path"], entry["realm_role"]
-        if (
-            not isinstance(group_path, str)
-            or not group_path.startswith("/")
-            or "/" in group_path[1:]
-            or len(group_path) < 2
-        ):
+    roles = _names(path, "retired.realm_roles", raw.get("realm_roles"))
+    for role in roles:
+        if role == PLATFORM_ADMIN_ROLE:
             raise PlatformDeclarationError(
-                f"{path}: role_groups[{i}].path must be a top-level group path like "
-                f"/admins, got {group_path!r}"
+                f"{path}: retired.realm_roles names {PLATFORM_ADMIN_ROLE!r}, the platform grant"
             )
-        if not isinstance(role, str) or not role:
+        if role in BUILTIN_REALM_ROLES or role.startswith(BUILTIN_REALM_ROLE_PREFIX):
             raise PlatformDeclarationError(
-                f"{path}: role_groups[{i}].realm_role must be a role name"
+                f"{path}: retired.realm_roles names {role!r}, a role Keycloak owns"
             )
-        groups.append(RoleGroup(path=group_path, realm_role=role))
-    paths = [g.path for g in groups]
-    if len(set(paths)) != len(paths):
-        raise PlatformDeclarationError(f"{path}: role_groups names a group twice")
-    return groups
+    return groups, roles
 
 
 def _check_locales(settings: dict[str, Any], sources: dict[str, str]) -> None:
@@ -377,32 +421,47 @@ def load_platform(
     """Read `platform.yaml`, apply each overlay in order, then the environment's overrides.
 
     An overlay has the declaration's shape and may name `realm_settings.supportedLocales`
-    only. Key-level merge, last wins, and a list replaces a list. The environment
+    and `platform_admin.users` only. Key-level merge, last wins, and a list replaces a list. The environment
     (`apply_env_overrides`) wins over both. Every check runs on the merged result,
     before `bootstrap` reads anything from Keycloak.
     """
     data = _read_mapping(path)
     settings = _realm_settings(path, data)
+    role, admins = _platform_admin(path, data)
+    retired_groups, retired_roles = _retired(path, data)
     declaration = PlatformDeclaration(
         realm_settings=settings,
-        role_groups=_role_groups(path, data),
+        platform_admin_role=role,
+        platform_admins=admins,
+        retired_groups=retired_groups,
+        retired_roles=retired_roles,
         sources={key: str(path) for key in settings},
         platform_file=str(path),
     )
+    declaration.sources[PLATFORM_ADMINS_KEY] = str(path)
 
     for overlay in overlays:
         odata = _read_mapping(overlay)
-        if "role_groups" in odata:
+        if "retired" in odata:
             raise PlatformDeclarationError(
-                f"{overlay}: an overlay may not change role_groups; "
-                f"it may change only {sorted(OVERLAY_REALM_SETTINGS)}"
+                f"{overlay}: an overlay may not change retired; it may change only "
+                f"{sorted(OVERLAY_REALM_SETTINGS)} and {PLATFORM_ADMINS_KEY}"
             )
+        if "platform_admin" in odata:
+            padmin = odata["platform_admin"]
+            if not isinstance(padmin, dict) or set(padmin) != {"users"}:
+                raise PlatformDeclarationError(
+                    f"{overlay}: an overlay may change {PLATFORM_ADMINS_KEY} only, "
+                    f"never the role's name"
+                )
+            declaration.platform_admins = _names(overlay, PLATFORM_ADMINS_KEY, padmin["users"])
+            declaration.sources[PLATFORM_ADMINS_KEY] = str(overlay)
         osettings = _realm_settings(overlay, odata)
         refused = sorted(set(osettings) - OVERLAY_REALM_SETTINGS)
         if refused:
             raise PlatformDeclarationError(
-                f"{overlay}: an overlay may change only {sorted(OVERLAY_REALM_SETTINGS)}; "
-                f"it names {refused}"
+                f"{overlay}: an overlay may change only {sorted(OVERLAY_REALM_SETTINGS)} "
+                f"and {PLATFORM_ADMINS_KEY}; it names {refused}"
             )
         for key, value in osettings.items():
             declaration.realm_settings[key] = value
@@ -574,6 +633,10 @@ def destructive(change: SettingChange) -> bool:
         return True
     if isinstance(change.current, list) and isinstance(change.desired, list):
         return bool(set(change.current) - set(change.desired))
+    # The admin second factor turned off: a custom browser flow unbound for Keycloak's own
+    # (REQ-0015, REQ-0016).
+    if change.key == "browserFlow" and change.desired == "browser" and change.current not in (None, "browser"):
+        return True
     return False
 
 
@@ -582,10 +645,6 @@ class PlatformResult:
     """What a `bootstrap` run changed, or with `dry_run`, would change."""
 
     settings: list[SettingChange] = field(default_factory=list)
-    roles_created: list[str] = field(default_factory=list)
-    groups_created: list[str] = field(default_factory=list)
-    #: (group path, realm role)
-    role_mappings_added: list[tuple[str, str]] = field(default_factory=list)
     smtp: list[SettingChange] = field(default_factory=list)
     #: The SMTP password was (or would be) sent. Not a change: it cannot be compared,
     #: so it is sent on every run with SMTP authentication (requester, 2026-09-14).
@@ -593,29 +652,59 @@ class PlatformResult:
 
     #: The realm did not exist and was (or would be) created first.
     realm_created: bool = False
-    #: The operator realm admin was (or would be) created, and put in this group.
+    #: The operator realm admin was (or would be) created.
     realm_admin_created: str | None = None
-    realm_admin_group_added: tuple[str, str] | None = None
+
+    #: The platform-wide role (`platform-admin`) was (or would be) created.
+    platform_admin_role_created: bool = False
+    #: Usernames given the role directly, the realm admin included.
+    platform_admins_granted: list[str] = field(default_factory=list)
+    #: Realm groups the role was mapped onto, by path.
+    platform_admin_unmapped_groups: list[str] = field(default_factory=list)
+    #: Composite realm roles (the realm's default roles among them) it was taken out of.
+    platform_admin_unmapped_composites: list[str] = field(default_factory=list)
+    #: Retired realm groups and realm roles deleted (REQ-0012).
+    groups_removed: list[str] = field(default_factory=list)
+    roles_removed: list[str] = field(default_factory=list)
+
+    #: Reported, never a change. Declared usernames the realm does not have yet, and
+    #: direct holders of the role nobody declared (kept: bootstrap does not revoke).
+    platform_admins_missing: list[str] = field(default_factory=list)
+    platform_admins_undeclared: list[str] = field(default_factory=list)
 
     #: Default client scopes added to the built-in `account-console` client.
     account_console_scopes_added: list[str] = field(default_factory=list)
 
+    #: The platform admin's second factor: the realm's browser flow (REQ-0015).
+    admin_mfa: list[SettingChange] = field(default_factory=list)
+    #: The master realm (REQ-0016): the bootstrap client, then the hardening.
+    master_client: list[SettingChange] = field(default_factory=list)
+    master: list[SettingChange] = field(default_factory=list)
+    #: Who this run signed in to master as, and why master was not hardened, for the report.
+    master_session: str | None = None
+    master_skipped: str | None = None
+
     @property
     def destructive(self) -> list[SettingChange]:
-        return [c for c in self.settings if destructive(c)]
+        return [c for c in [*self.settings, *self.admin_mfa, *self.master] if destructive(c)]
 
     @property
     def changed(self) -> bool:
         return bool(
             self.realm_created
             or self.realm_admin_created
-            or self.realm_admin_group_added
             or self.settings
-            or self.roles_created
-            or self.groups_created
-            or self.role_mappings_added
             or self.smtp
+            or self.platform_admin_role_created
+            or self.platform_admins_granted
+            or self.platform_admin_unmapped_groups
+            or self.platform_admin_unmapped_composites
+            or self.groups_removed
+            or self.roles_removed
             or self.account_console_scopes_added
+            or self.admin_mfa
+            or self.master_client
+            or self.master
         )
 
 
@@ -624,10 +713,92 @@ def desired_realm_settings(
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """The declaration plus the per-environment keys, with a source for each."""
     desired = dict(declaration.realm_settings)
-    sources = dict(declaration.sources)
+    sources = {k: v for k, v in declaration.sources.items() if k in desired}
     desired["bruteForceProtected"] = brute_force_protected
     sources["bruteForceProtected"] = "CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED"
     return desired, sources
+
+
+@dataclass
+class _RolePlan:
+    """The ids the writes of the platform role and the retired objects need."""
+
+    #: retired group path -> id
+    groups: dict[str, str] = field(default_factory=dict)
+    #: group id -> its report label, for the role's group mappings to remove
+    shared_groups: dict[str, str] = field(default_factory=dict)
+    #: composite role id -> its name
+    composites: dict[str, str] = field(default_factory=dict)
+    #: username -> user id, for the grants; None for a realm admin still to be created
+    grants: dict[str, str | None] = field(default_factory=dict)
+
+
+def _is_realm_group(group: dict[str, Any] | None) -> bool:
+    """A top-level realm group. An organization's group has a parent, and is never ours."""
+    return bool(group) and not group.get("parentId")
+
+
+async def _plan_platform_role(
+    kc: "KeycloakAdminClient",
+    declaration: PlatformDeclaration,
+    result: PlatformResult,
+    realm_admin: "RealmAdminSettings | None",
+) -> _RolePlan:
+    """Read everything the role and the retired objects need. Writes nothing."""
+    plan = _RolePlan()
+    role_name = declaration.platform_admin_role
+
+    for path in declaration.retired_groups:
+        group = await kc.get_group_by_path(path)
+        if _is_realm_group(group):
+            plan.groups[path] = group["id"]
+            result.groups_removed.append(path)
+    for name in declaration.retired_roles:
+        if await kc.get_realm_role(name) is not None:
+            result.roles_removed.append(name)
+
+    role = await kc.get_realm_role(role_name)
+    result.platform_admin_role_created = role is None
+
+    if role is not None:
+        # Anything that would hand the role to everyone in it: a realm group, or a
+        # composite role such as the realm's default roles. An organization's group is
+        # not among them: on 26.7.3 a realm role mapped onto one (only the Organization
+        # API can) reaches no member's token, and `…/roles/{role}/groups` does not list it.
+        for group in await kc.get_realm_role_groups(role_name):
+            if group["id"] in plan.groups.values() or not _is_realm_group(group):
+                continue  # deleted with the retired group / not a realm group
+            plan.shared_groups[group["id"]] = group.get("path") or group.get("name") or group["id"]
+        for composite in await kc.list_realm_roles():
+            if not composite.get("composite") or composite.get("name") in result.roles_removed:
+                continue
+            if role_name in await kc.get_role_composite_realm_role_names(composite["id"]):
+                plan.composites[composite["id"]] = composite["name"]
+        result.platform_admin_unmapped_groups = sorted(plan.shared_groups.values())
+        result.platform_admin_unmapped_composites = sorted(plan.composites.values())
+
+    declared: list[str] = []
+    if realm_admin is not None and realm_admin.configured:
+        admin_id = await _plan_realm_admin(kc, realm_admin, result)
+        declared.append(realm_admin.username.strip())
+        if admin_id is None or role is None or role_name not in await kc.get_user_realm_role_names(admin_id):
+            plan.grants[declared[-1]] = admin_id
+    for username in declaration.platform_admins:
+        if username in declared:
+            continue
+        declared.append(username)
+        user = await kc.get_user_by_username(username)
+        if user is None:
+            result.platform_admins_missing.append(username)
+            continue
+        if role is None or role_name not in await kc.get_user_realm_role_names(user["id"]):
+            plan.grants[username] = user["id"]
+    result.platform_admins_granted = list(plan.grants)
+
+    if role is not None:
+        holders = {u.get("username") for u in await kc.get_realm_role_users(role_name)}
+        result.platform_admins_undeclared = sorted(h for h in holders if h and h not in declared)
+    return plan
 
 
 async def converge_platform(
@@ -657,29 +828,10 @@ async def converge_platform(
         result.smtp = plan_smtp(smtp_rep, realm.get("smtpServer"))
         result.smtp_password_applied = "password" in smtp_rep
 
-    roles_missing: list[str] = []
-    groups: dict[str, str | None] = {}
-    for rg in declaration.role_groups:
-        if rg.realm_role not in roles_missing and await kc.get_realm_role(rg.realm_role) is None:
-            roles_missing.append(rg.realm_role)
-        group = await kc.get_group_by_path(rg.path)
-        groups[rg.path] = group["id"] if group else None
-
-    result.roles_created = roles_missing
-    for rg in declaration.role_groups:
-        group_id = groups[rg.path]
-        if group_id is None:
-            result.groups_created.append(rg.path)
-            result.role_mappings_added.append((rg.path, rg.realm_role))
-        elif rg.realm_role not in await kc.get_group_realm_role_names(group_id):
-            result.role_mappings_added.append((rg.path, rg.realm_role))
+    role_plan = await _plan_platform_role(kc, declaration, result, realm_admin)
 
     console_id, console_missing = await _plan_account_console(kc)
     result.account_console_scopes_added = list(console_missing)
-
-    admin_id: str | None = None
-    if realm_admin is not None and realm_admin.configured:
-        admin_id = await _plan_realm_admin(kc, declaration, realm_admin, groups, result)
 
     if dry_run:
         return result
@@ -710,15 +862,28 @@ async def converge_platform(
                 f"{[c.key for c in unstuck]}"
             )
 
-    for role in result.roles_created:
-        await kc.create_realm_role(role)
-    for rg in declaration.role_groups:
-        if (rg.path, rg.realm_role) not in result.role_mappings_added:
-            continue
-        group_id = groups[rg.path]
-        if group_id is None:
-            group_id = await kc.create_group(rg.path.lstrip("/"))
-        await kc.add_group_realm_role(group_id, rg.realm_role)
+    # The retired level first: a group goes with its memberships and role mappings, a
+    # role with every mapping of it.
+    for group_id in role_plan.groups.values():
+        await kc.delete_group(group_id)
+    for name in result.roles_removed:
+        await kc.delete_realm_role(name)
+
+    role_name = declaration.platform_admin_role
+    if result.platform_admin_role_created:
+        await kc.create_realm_role(role_name)
+    for group_id in role_plan.shared_groups:
+        await kc.remove_group_realm_role(group_id, role_name)
+    for composite_id in role_plan.composites:
+        await kc.remove_role_composite_realm_role(composite_id, role_name)
+
+    if result.realm_admin_created:
+        admin_id = await _apply_realm_admin(kc, realm_admin)
+        role_plan.grants[realm_admin.username.strip()] = admin_id
+    for username, user_id in role_plan.grants.items():
+        if user_id is None:
+            raise PlatformDeclarationError(f"user {username!r} not found after converging")
+        await kc.add_user_realm_role(user_id, role_name)
 
     if console_id is not None and console_missing:
         for scope_id in console_missing.values():
@@ -729,17 +894,12 @@ async def converge_platform(
                 f"Keycloak accepted the {ACCOUNT_CONSOLE_CLIENT_ID} scopes but these did not take: {sorted(unstuck)}"
             )
 
-    if result.realm_admin_created or result.realm_admin_group_added:
-        await _apply_realm_admin(kc, realm_admin, admin_id, result)
-
     return result
 
 
 async def _plan_realm_admin(
     kc: "KeycloakAdminClient",
-    declaration: PlatformDeclaration,
     admin: "RealmAdminSettings",
-    groups: dict[str, str | None],
     result: PlatformResult,
 ) -> str | None:
     """Plan the operator realm admin, refusing before any write. Returns its id, if it exists."""
@@ -749,12 +909,6 @@ async def _plan_realm_admin(
             "CELINE_KEYCLOAK_REALM_ADMIN_FIRST_NAME and _LAST_NAME must not be empty: the "
             "realm's user profile requires both, and Keycloak refuses the sign-in without them"
         )
-    group_known = admin.group in groups or await kc.get_group_by_path(admin.group) is not None
-    if not group_known:
-        raise PlatformDeclarationError(
-            f"CELINE_KEYCLOAK_REALM_ADMIN_GROUP {admin.group!r} is neither a role group "
-            f"platform.yaml declares nor a group the realm has"
-        )
     user = await kc.get_user_by_username(username)
     if user is None:
         if not admin.password.get_secret_value():
@@ -763,34 +917,21 @@ async def _plan_realm_admin(
                 f"CELINE_KEYCLOAK_REALM_ADMIN_PASSWORD"
             )
         result.realm_admin_created = username
-        result.realm_admin_group_added = (username, admin.group)
         return None
-    paths = {g.get("path") for g in await kc.get_user_groups(user["id"])}
-    if admin.group not in paths:
-        result.realm_admin_group_added = (username, admin.group)
     return user["id"]
 
 
-async def _apply_realm_admin(
-    kc: "KeycloakAdminClient",
-    admin: "RealmAdminSettings",
-    admin_id: str | None,
-    result: PlatformResult,
-) -> None:
-    if result.realm_admin_created:
-        admin_id, _ = await kc.ensure_user(
-            admin.username.strip(),
-            email=admin.email or None,
-            first_name=admin.first_name or None,
-            last_name=admin.last_name or None,
-            temporary_password=admin.password.get_secret_value(),
-            temporary=False,
-            email_verified=True,
-        )
-    group = await kc.get_group_by_path(admin.group)
-    if group is None or admin_id is None:
-        raise PlatformDeclarationError(f"realm admin group {admin.group!r} not found after converging")
-    await kc.add_user_to_group(admin_id, group["id"])
+async def _apply_realm_admin(kc: "KeycloakAdminClient", admin: "RealmAdminSettings") -> str:
+    admin_id, _ = await kc.ensure_user(
+        admin.username.strip(),
+        email=admin.email or None,
+        first_name=admin.first_name or None,
+        last_name=admin.last_name or None,
+        temporary_password=admin.password.get_secret_value(),
+        temporary=False,
+        email_verified=True,
+    )
+    return admin_id
 
 
 # ---------------------------------------------------------------------------

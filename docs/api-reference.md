@@ -100,12 +100,10 @@ Validates the JWT, converts the mosquitto `acc` bitmask to action names, and eva
 
 ## POST /superuser
 
-Check if a client has MQTT superuser access. Superusers bypass all ACL checks.
-
-Grants superuser if the JWT contains:
-- The `mqtt.admin` scope, OR
-- The `admin` group, OR
-- The `mqtt.admin` group
+There is no MQTT superuser (REQ-0014, ADR-0012): the endpoint answers `403` to every request,
+whatever the token carries — no scope, group or realm role (`platform-admin` included) makes a
+client a superuser. It exists so a broker configured to ask (`auth_opt_disable_superuser false`)
+gets a definite no, and every operation goes through `/acl`.
 
 **Request Body (JSON):**
 
@@ -115,16 +113,10 @@ Grants superuser if the JWT contains:
 }
 ```
 
-**Response (200):**
+**Response (403), always:**
 
 ```json
-{"ok": true, "reason": "superuser"}
-```
-
-**Response (403):**
-
-```json
-{"ok": false, "reason": "not superuser"}
+{"ok": false, "reason": "superuser disabled"}
 ```
 
 ---

@@ -130,7 +130,8 @@ class TestEnsureDataspaceClaimScope:
 
 
 class TestRealmClaimScopesIncludesDataspace:
-    async def test_calls_all_three_scope_functions(self):
+    async def test_calls_both_scope_functions_and_never_makes_a_groups_scope(self):
+        """@verifies REQ-0013"""
         client = KeycloakAdminClient(_make_settings())
         client._client = AsyncMock()
         client._token = AsyncMock()
@@ -138,7 +139,6 @@ class TestRealmClaimScopesIncludesDataspace:
         client._token.access_token = "fake"
 
         client.ensure_org_client_scope = AsyncMock(return_value=("org-id", False))
-        client._ensure_groups_client_scope = AsyncMock(return_value=("grp-id", False))
         client._ensure_dataspace_claim_scope = AsyncMock(return_value=("ds-id", False))
         client._ensure_scope_not_realm_default = AsyncMock(return_value=False)
 
@@ -146,9 +146,9 @@ class TestRealmClaimScopesIncludesDataspace:
 
         assert changed is False
         client.ensure_org_client_scope.assert_awaited_once()
-        client._ensure_groups_client_scope.assert_awaited_once()
         client._ensure_dataspace_claim_scope.assert_awaited_once()
-        assert client._ensure_scope_not_realm_default.await_count == 3
+        assert client._ensure_scope_not_realm_default.await_count == 2
+        assert not hasattr(client, "_ensure_groups_client_scope")
 
     async def test_assigns_dataspace_as_default_on_oauth2_proxy(self):
         client = KeycloakAdminClient(_make_settings())
@@ -158,7 +158,6 @@ class TestRealmClaimScopesIncludesDataspace:
         client._token.access_token = "fake"
 
         client.ensure_org_client_scope = AsyncMock(return_value=("org-id", False))
-        client._ensure_groups_client_scope = AsyncMock(return_value=("grp-id", False))
         client._ensure_dataspace_claim_scope = AsyncMock(return_value=("ds-id", False))
         client._ensure_scope_not_realm_default = AsyncMock(return_value=False)
         client.get_client_by_client_id = AsyncMock(
@@ -173,7 +172,7 @@ class TestRealmClaimScopesIncludesDataspace:
             for call in client._ensure_scope_default_on_client.call_args_list
         ]
         assert "organization" in scope_names_assigned
-        assert "groups" in scope_names_assigned
+        assert "groups" not in scope_names_assigned
         assert "dataspace" in scope_names_assigned
 
 

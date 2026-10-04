@@ -8,18 +8,28 @@ The platform level of the realm, and nothing else (plan each-cli-command-owns-on
 
 0. **The realm itself**, created empty if it does not exist. That needs the master admin.
 1. **The platform declaration** (`platform.yaml`, see `keycloak/platform.py`): realm
-   features, sign-in settings, languages, themes, lifespans, brute force and the role
-   groups. Only the declared keys are written. A deployment overrides a listed key with
+   features, sign-in settings, languages, themes, lifespans, brute force, the realm role
+   `platform-admin` and who holds it, and the retired realm groups and roles it deletes
+   (ADR-0012). Only the declared keys are written. A deployment overrides a listed key with
    `CELINE_KEYCLOAK_PLATFORM_<KEY>`, or stops declaring it with the value `null`.
    Also the built-in `account-console` client's default client scopes, added when missing
    (an imported realm has none, and the account console answers 403).
+   And the realm's browser flow: the platform admin's second factor (REQ-0015, ADR-0013),
+   on unless `ENV=dev`.
 2. **The admin CLI client** — the service account every other command authenticates as.
-   Created or refreshed only with master admin credentials, because a service account
-   cannot create the client it is.
+   Created or refreshed only through master, because a service account cannot create the
+   client it is.
+3. **The master realm** (REQ-0016, ADR-0014, `keycloak/master.py`). `bootstrap` signs in to
+   master as its own client `svc-celine-policies-bootstrap` (secret
+   `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET`), or as the master admin user when that fails;
+   converges the client; then does everything else with the client's token. Outside dev it
+   hardens master with that token only: brute force, and a second factor for its admins.
+   Outside dev the client's secret is required.
 
 With the admin CLI client's own credentials instead (the environment, or the secrets
-file a first run wrote), step 1 runs and step 2 is skipped: the client holds
-`manage-realm`, which every platform setting needs (measured on 26.7.3).
+file a first run wrote), and master not to be hardened (dev), step 1 runs and steps 2 and
+3 are skipped: the client holds `manage-realm`, which every platform setting needs
+(measured on 26.7.3).
 
 For a deployment job (decision 2): `--export` writes a partial export of the realm before
 any write, `--check` plans and exits 1 if anything would change, and outside dev a plan that
@@ -37,11 +47,23 @@ from typing import Annotated, Optional
 
 import typer
 
+from celine.policies.cli.keycloak.admin_mfa import apply_admin_mfa, plan_admin_mfa
 from celine.policies.cli.keycloak.client import (
     KeycloakAdminClient,
     KeycloakAuthError,
     KeycloakError,
 )
+from celine.policies.cli.keycloak.master import (
+    MASTER_REALM,
+    apply_bootstrap_client,
+    apply_master_hardening,
+    plan_bootstrap_client,
+    plan_master_hardening,
+    require_bootstrap_client,
+    sign_in_to_master,
+)
+from celine.sdk.auth import PLATFORM_ADMIN_ROLE
+
 from celine.policies.cli.keycloak.platform import (
     DEFAULT_PLATFORM_FILE,
     PlatformDeclaration,
@@ -162,19 +184,28 @@ def bootstrap(
     )
     resolved_secrets_file = settings.secrets_file
 
-    as_admin_user = settings.has_admin_credentials
-    if as_admin_user:
-        # `authenticate` prefers client credentials, so a secret in the environment
-        # would otherwise win over the admin user this run was given.
+    # Outside dev master is hardened, and only the bootstrap client may do it (REQ-0016):
+    # refused here, before Keycloak is asked anything.
+    problem = settings.bootstrap_secret_problem()
+    if problem:
+        typer.secho(f"Error: {problem}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    # Through master: the bootstrap client, or the master admin user when it is absent.
+    through_master = settings.has_admin_credentials or bool(settings.bootstrap_secret)
+    if through_master:
+        # `authenticate` prefers the admin CLI client's credentials, so a secret in the
+        # environment would otherwise win over master.
         settings = settings.model_copy(update={"admin_client_secret": None})
     else:
         settings = settings.with_auto_secret()
         if not settings.has_client_credentials:
             typer.secho(
-                "Error: bootstrap needs credentials. Use --admin-user and --admin-password "
-                "(required the first time, and to refresh the admin CLI client), or the "
-                "admin CLI client's own (CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET or the secrets "
-                "file) to converge the platform only.",
+                "Error: bootstrap needs credentials. Use the bootstrap client "
+                "(CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET) or --admin-user and "
+                "--admin-password (required the first time, and to refresh the admin CLI "
+                "client), or the admin CLI client's own (CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET "
+                "or the secrets file) to converge the platform only.",
                 fg=typer.colors.RED,
                 err=True,
             )
@@ -193,10 +224,12 @@ def bootstrap(
                 settings=settings,
                 declaration=declaration,
                 client_id=client_id,
-                manage_admin_client=as_admin_user,
+                manage_admin_client=through_master,
                 dry_run=dry_run,
                 export=export,
                 allow_destructive=allow_destructive or not settings.is_production,
+                admin_mfa=settings.admin_mfa,
+                harden_master=settings.master_hardened,
             )
         )
     except KeycloakAuthError as e:
@@ -224,10 +257,11 @@ def bootstrap(
         typer.secho("\nCheck passed: nothing to change.", fg=typer.colors.GREEN)
         return
 
-    if not as_admin_user:
+    if not through_master:
         typer.echo(
             f"\nAdmin CLI client: skipped ({client_id} cannot refresh itself; "
-            f"pass --admin-user and --admin-password to create or refresh it)"
+            f"configure the bootstrap client, or pass --admin-user and --admin-password, "
+            f"to create or refresh it)"
         )
         return
 
@@ -272,6 +306,8 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
         typer.echo(f"  = smtpServer.password: write-only, {state} on every run (not compared)")
     if not result.changed:
         typer.echo("  ✓ no change")
+        _report_platform_admins(result)
+        _report_master(result, dry_run=dry_run)
         return
     for change in result.settings + result.smtp:
         mark = "!" if destructive(change) else "~"
@@ -280,19 +316,67 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
             f"  {mark} {change.key}: {change.current!r} -> {change.desired!r}  ({change.source}){note}",
             fg=typer.colors.YELLOW,
         )
-    for role in result.roles_created:
-        typer.secho(f"  + realm role {role}", fg=typer.colors.GREEN)
-    for path in result.groups_created:
-        typer.secho(f"  + group {path}", fg=typer.colors.GREEN)
-    for path, role in result.role_mappings_added:
-        typer.secho(f"  + {path} -> realm role {role}", fg=typer.colors.GREEN)
+    for path in result.groups_removed:
+        typer.secho(f"  - realm group {path} (retired)", fg=typer.colors.YELLOW)
+    for role in result.roles_removed:
+        typer.secho(f"  - realm role {role} (retired)", fg=typer.colors.YELLOW)
+    if result.platform_admin_role_created:
+        typer.secho(f"  + realm role {PLATFORM_ADMIN_ROLE}", fg=typer.colors.GREEN)
+    for label in result.platform_admin_unmapped_groups:
+        typer.secho(f"  - {PLATFORM_ADMIN_ROLE} mapped onto group {label}", fg=typer.colors.YELLOW)
+    for name in result.platform_admin_unmapped_composites:
+        typer.secho(f"  - {PLATFORM_ADMIN_ROLE} inside composite role {name}", fg=typer.colors.YELLOW)
     for scope in result.account_console_scopes_added:
         typer.secho(f"  + account-console default scope {scope}", fg=typer.colors.GREEN)
     if result.realm_admin_created:
         typer.secho(f"  + realm admin {result.realm_admin_created}", fg=typer.colors.GREEN)
-    if result.realm_admin_group_added:
-        user, group = result.realm_admin_group_added
-        typer.secho(f"  + {user} -> group {group}", fg=typer.colors.GREEN)
+    for username in result.platform_admins_granted:
+        typer.secho(f"  + {username} -> realm role {PLATFORM_ADMIN_ROLE}", fg=typer.colors.GREEN)
+    _report_changes(result.admin_mfa)
+    _report_platform_admins(result)
+    _report_master(result, dry_run=dry_run)
+
+
+def _report_changes(changes) -> None:
+    for change in changes:
+        mark = "!" if destructive(change) else "~"
+        note = "  [destructive]" if mark == "!" else ""
+        typer.secho(
+            f"  {mark} {change.key}: {change.current!r} -> {change.desired!r}  ({change.source}){note}",
+            fg=typer.colors.YELLOW,
+        )
+
+
+def _report_master(result: PlatformResult, *, dry_run: bool) -> None:
+    """The master realm (REQ-0016): who signed in, the bootstrap client, the hardening."""
+    if result.master_session is None and result.master_skipped is None:
+        return
+    verb = "would change" if dry_run else "changed"
+    typer.echo(f"\nMaster realm ({verb}):")
+    if result.master_session:
+        typer.echo(f"  signed in as {result.master_session}")
+    _report_changes(result.master_client)
+    _report_changes(result.master)
+    if result.master_skipped:
+        typer.echo(f"  not hardened: {result.master_skipped}")
+    if not (result.master_client or result.master):
+        typer.echo("  ✓ no change")
+
+
+def _report_platform_admins(result: PlatformResult) -> None:
+    """What a run cannot change and an operator should know: never a change."""
+    for username in result.platform_admins_missing:
+        typer.secho(
+            f"  ? {username}: listed in platform_admin.users but not in the realm yet; "
+            f"granted on the first run after it exists",
+            fg=typer.colors.YELLOW,
+        )
+    for username in result.platform_admins_undeclared:
+        typer.secho(
+            f"  ! {username} holds {PLATFORM_ADMIN_ROLE} but is not declared "
+            f"(kept; bootstrap does not revoke a grant given by hand)",
+            fg=typer.colors.YELLOW,
+        )
 
 
 def _update_secrets_file(
@@ -329,24 +413,90 @@ async def _async_bootstrap(
     dry_run: bool,
     export: Path | None = None,
     allow_destructive: bool = True,
+    admin_mfa: bool = False,
+    harden_master: bool = False,
 ) -> tuple[PlatformResult, tuple[str, bool]]:
-    """Create the realm if absent, converge the platform, then the admin CLI client.
+    """Sign in, create the realm if absent, converge the platform, master, then the admin
+    CLI client.
+
+    `manage_admin_client`: this run goes through master (the bootstrap client, or the master
+    admin user), so it may create the realm and the admin CLI client. Otherwise it signs in
+    as the admin CLI client and converges the platform only.
 
     Returns the platform result and `(secret, created)` for the admin client —
     `("", created)` when it was skipped or this is a dry run.
     """
-    async with KeycloakAdminClient(settings) as client:
-        await client.authenticate()
+    secret = settings.bootstrap_secret
+    if harden_master and not secret:
+        # The command refuses this before any call; kept here for any other caller.
+        raise PlatformDeclarationError(settings.bootstrap_secret_problem() or "no bootstrap client")
+
+    async with KeycloakAdminClient(settings) as client, KeycloakAdminClient(
+        settings.for_realm(MASTER_REALM)
+    ) as master:
+        master_client_changes: list = []
+        master_session: str | None = None
+        if manage_admin_client:
+            # (i) the bootstrap client first, else the master admin user
+            as_client = await sign_in_to_master(master, settings)
+            client.adopt_session(master)
+            master_session = (
+                f"bootstrap client {settings.bootstrap_client_id}" if as_client
+                else f"master admin user {settings.admin_user}"
+            )
+            if secret:
+                # (ii) the client, converged to the configured secret and its roles
+                plan = await plan_bootstrap_client(
+                    master,
+                    client_id=settings.bootstrap_client_id,
+                    secret=secret,
+                    signed_in_as_client=as_client,
+                )
+                master_client_changes = plan.changes
+                if not dry_run:
+                    if master_client_changes:
+                        try:
+                            await apply_bootstrap_client(master, plan, secret=secret)
+                        except KeycloakError as e:
+                            if as_client:
+                                raise KeycloakError(
+                                    f"the bootstrap client could not converge itself ({e}). "
+                                    f"Restore it as a master administrator (kc.sh bootstrap-admin, "
+                                    f"docs/deployment.md)"
+                                ) from e
+                            raise
+                    # (iii) everything else as the client, its token checked
+                    await master.authenticate_master_client(settings.bootstrap_client_id, secret)
+                    client.adopt_session(master)
+                    master_session = f"bootstrap client {settings.bootstrap_client_id}"
+        else:
+            await client.authenticate()
+
+        # (iv) master's hardening, planned before any write to the platform realm
+        master_plan = None
+        if harden_master:
+            master_plan = await plan_master_hardening(
+                master, declaration, brute_force=settings.brute_force_protected, mfa=admin_mfa
+            )
+
+        def finish(result: PlatformResult) -> PlatformResult:
+            result.master_client = master_client_changes
+            result.master_session = master_session
+            if master_plan is not None:
+                result.master = master_plan.changes
+            elif manage_admin_client:
+                result.master_skipped = "ENV=dev (CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED and _ADMIN_MFA_REQUIRED off)"
+            return result
 
         realm_created = False
         if not await client.realm_exists():
             if not manage_admin_client:
                 raise KeycloakError(
                     f"realm '{settings.realm}' does not exist; creating it needs the master "
-                    f"admin (--admin-user and --admin-password)"
+                    f"admin (--admin-user and --admin-password) or the bootstrap client"
                 )
             if dry_run:
-                return PlatformResult(realm_created=True), ("", True)
+                return finish(PlatformResult(realm_created=True)), ("", True)
             await client.create_realm()
             realm_created = True
         elif export is not None:
@@ -358,6 +508,15 @@ async def _async_bootstrap(
             realm_admin=RealmAdminSettings(),
         )
         platform = await converge_platform(client, declaration, dry_run=True, **converge)
+        mfa_plan = await plan_admin_mfa(
+            client,
+            required=admin_mfa,
+            role=declaration.platform_admin_role,
+            retired_roles=declaration.retired_roles,
+            browser_flow=(await client.get_realm_settings()).get("browserFlow"),
+        )
+        platform.admin_mfa = mfa_plan.changes
+        finish(platform)
         if not dry_run:
             if platform.destructive and not allow_destructive:
                 raise PlatformDeclarationError(
@@ -366,6 +525,14 @@ async def _async_bootstrap(
                     "--allow-destructive on this run"
                 )
             platform = await converge_platform(client, declaration, dry_run=False, **converge)
+            if mfa_plan.changes:
+                await apply_admin_mfa(client, mfa_plan)
+            platform.admin_mfa = mfa_plan.changes
+            if master_plan is not None:
+                # Refuses any token but the bootstrap client's own, checked in this run.
+                require_bootstrap_client(master, settings.bootstrap_client_id)
+                await apply_master_hardening(master, master_plan, client_id=settings.bootstrap_client_id)
+            finish(platform)
         platform.realm_created = realm_created
 
         if not manage_admin_client:

@@ -35,10 +35,17 @@ AUDIENCE_MAPPER_PREFIX = "aud-"
 CLAIM_MAPPER_PREFIX = "claim-"
 
 #: The realm claim scopes `ensure_realm_claim_scopes` provisions.
-REALM_CLAIM_SCOPES: tuple[str, ...] = ("organization", "groups", "dataspace")
+REALM_CLAIM_SCOPES: tuple[str, ...] = ("organization", "dataspace")
 
-# Standard role hierarchy used at both realm and organisation level.
-# Order: most-privileged first.
+#: The top-level claim realm group membership used to reach a token through, and the client
+#: scope that carried it. Both are retired (ADR-0012, REQ-0013): organization groups reach a
+#: token only inside `organization.<alias>.groups`, and a full `sync` deletes every mapper that
+#: writes this claim and the scope itself.
+GROUPS_CLAIM = "groups"
+RETIRED_GROUPS_SCOPE = "groups"
+
+# The groups every organisation has. Organisation level only: realm groups carry no
+# authority (ADR-0012). Order: most-privileged first.
 ROLE_HIERARCHY: list[str] = ["admins", "managers", "editors", "viewers"]
 
 # Name prefix on every admin permission and policy this CLI manages, and the
@@ -120,6 +127,38 @@ class TokenInfo:
     def is_valid(self, leeway: int = 30) -> bool:
         """Check if token is still valid."""
         return time.time() < (self.expires_at - leeway)
+
+
+#: Who a `KeycloakAdminClient` is signed in as (`identity.kind`).
+ADMIN_USER = "admin-user"  # the master admin user, password grant through admin-cli
+REALM_CLIENT = "realm-client"  # a client of the target realm (the admin CLI client)
+MASTER_CLIENT = "master-client"  # a master-realm client, client_credentials, checked
+
+
+@dataclass(frozen=True)
+class AuthIdentity:
+    """Who this session's token belongs to, as this process obtained it.
+
+    Set only by the `authenticate*` methods below, never from outside: a guard that asks
+    "is this the bootstrap client's own token, obtained and checked in this run" (REQ-0016)
+    reads it.
+    """
+
+    kind: str
+    name: str
+
+
+def token_claims(access_token: str) -> dict[str, Any]:
+    """The payload of a JWT, unverified: for checking a token this process just obtained
+    from the token endpoint itself, never for trusting one it was handed."""
+    import base64
+
+    try:
+        payload = access_token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return jsonlib.loads(base64.urlsafe_b64decode(payload))
+    except (IndexError, ValueError) as e:
+        raise KeycloakAuthError(f"the token endpoint returned a token that is not a JWT: {e}")
 
 
 @dataclass(frozen=True)
@@ -259,9 +298,9 @@ class KeycloakAdminClient:
     ]
 
     # Well-known Keycloak built-in scopes to ignore during sync.
-    # 'organization', 'groups', and 'dataspace' are managed via
-    # ensure_*_client_scope() helpers rather than through clients.yaml —
-    # exclude from orphan detection.
+    # 'organization' and 'dataspace' are managed via ensure_*_client_scope()
+    # helpers rather than through clients.yaml, and 'groups' is deleted by
+    # retire_groups_claim() — exclude all three from orphan detection.
     #
     # **The SAML ones belong here for a reason beyond tidiness.** They are
     # Keycloak's own, this platform declares none of them and uses no SAML, so
@@ -297,6 +336,11 @@ class KeycloakAdminClient:
         self._settings = settings
         self._token: TokenInfo | None = None
         self._client: httpx.AsyncClient | None = None
+        #: Who the token belongs to; None until a sign-in succeeds.
+        self.identity: AuthIdentity | None = None
+        #: How to sign in again when the token expires, when it is not `authenticate`'s
+        #: default choice (a master client, or a session adopted from another instance).
+        self._reauth: "Any | None" = None
 
     async def __aenter__(self) -> "KeycloakAdminClient":
         """Async context manager entry."""
@@ -321,10 +365,26 @@ class KeycloakAdminClient:
     async def authenticate(self) -> None:
         """Authenticate and obtain access token.
 
-        Tries service client credentials first, falls back to admin user/pass.
+        Tries the admin CLI client's credentials first, then `bootstrap`'s master client
+        when its secret is configured (REQ-0016: outside dev the master admin's password
+        alone no longer signs in, so `sync` in a deployment signs in as that client), and
+        falls back to the admin user/pass. A session that signed in some other way
+        (`authenticate_master_client`, `adopt_session`) signs in again the same way.
         """
-        if self._settings.has_client_credentials:
+        if self._reauth is not None:
+            await self._reauth()
+        elif self._settings.has_client_credentials:
             await self._authenticate_client_credentials()
+        elif self._settings.bootstrap_secret:
+            try:
+                await self.authenticate_master_client(
+                    self._settings.bootstrap_client_id, self._settings.bootstrap_secret
+                )
+            except KeycloakAuthError:
+                if not self._settings.has_admin_credentials:
+                    raise
+                logger.info("Bootstrap client sign-in failed; falling back to the admin user")
+                await self._authenticate_admin_user()
         elif self._settings.has_admin_credentials:
             await self._authenticate_admin_user()
         else:
@@ -361,6 +421,7 @@ class KeycloakAdminClient:
             expires_at=time.time() + float(payload.get("expires_in", 300)),
             refresh_token=payload.get("refresh_token"),
         )
+        self.identity = AuthIdentity(REALM_CLIENT, self._settings.admin_client_id)
         logger.info(
             "Authenticated as service client: %s", self._settings.admin_client_id
         )
@@ -392,7 +453,70 @@ class KeycloakAdminClient:
             expires_at=time.time() + float(payload.get("expires_in", 300)),
             refresh_token=payload.get("refresh_token"),
         )
+        self.identity = AuthIdentity(ADMIN_USER, self._settings.admin_user or "")
         logger.info("Authenticated as admin user: %s", self._settings.admin_user)
+
+    async def authenticate_admin_user(self) -> None:
+        """Sign in as the master admin user, whatever client credentials are configured."""
+        self._reauth = self._authenticate_admin_user
+        await self._authenticate_admin_user()
+
+    async def authenticate_master_client(self, client_id: str, secret: str) -> None:
+        """Sign in as a master-realm client (`client_credentials`), and check the token.
+
+        The bootstrap client (REQ-0016). The token must be that client's own: `azp` is the
+        client and the issuer is master. Raises `KeycloakAuthError` otherwise, and when the
+        client does not exist or holds another secret.
+        """
+
+        async def sign_in() -> None:
+            response = await self._client.post(
+                f"{self._settings.master_realm_url}/protocol/openid-connect/token",
+                data={"grant_type": "client_credentials", "client_id": client_id, "client_secret": secret},
+            )
+            if response.status_code != 200:
+                raise KeycloakAuthError(
+                    f"master client {client_id}: {response.status_code} {response.text}",
+                    status_code=response.status_code,
+                )
+            payload = response.json()
+            claims = token_claims(payload["access_token"])
+            if claims.get("azp") != client_id or not str(claims.get("iss", "")).endswith("/realms/master"):
+                raise KeycloakAuthError(
+                    f"master client {client_id}: the token is not that client's own "
+                    f"(azp={claims.get('azp')!r}, iss={claims.get('iss')!r})"
+                )
+            self._token = TokenInfo(
+                access_token=payload["access_token"],
+                expires_at=time.time() + float(payload.get("expires_in", 300)),
+            )
+            self.identity = AuthIdentity(MASTER_CLIENT, client_id)
+            logger.info("Authenticated as master client: %s", client_id)
+
+        self._reauth = sign_in
+        try:
+            await sign_in()
+        except KeycloakAuthError:
+            self._reauth = None
+            self.identity = None
+            self._token = None
+            raise
+
+    def adopt_session(self, other: "KeycloakAdminClient") -> None:
+        """Use `other`'s sign-in for this instance too (the same token, the same identity).
+
+        For the target realm and master in one run: one sign-in, two admin URLs. A token
+        refresh on either signs in again the way `other` did.
+        """
+
+        async def sign_in() -> None:
+            await other._ensure_token()
+            self._token = other._token
+            self.identity = other.identity
+
+        self._reauth = sign_in
+        self._token = other._token
+        self.identity = other.identity
 
     async def _ensure_token(self) -> str:
         """Ensure we have a valid token."""
@@ -686,9 +810,9 @@ class KeycloakAdminClient:
         return scope_id, changed
 
     # -------------------------------------------------------------------------
-    # Realm-level claim scopes (groups, organization)
+    # Realm-level claim scopes (organization, dataspace)
     #
-    # These scopes carry OIDC claim mappers (groups, org membership).
+    # These scopes carry OIDC claim mappers (org membership and org groups, the DID).
     # Policy: realm Assigned type = None (not auto-applied to every client),
     # explicitly assigned as Default on the oauth2_proxy client only.
     #
@@ -775,62 +899,6 @@ class KeycloakAdminClient:
         logger.info("Assigned '%s' as default scope on client %s", scope_name, client_uuid)
         return True
 
-    async def _ensure_groups_client_scope(self) -> tuple[str, bool]:
-        """Ensure the 'groups' client scope exists with its group membership mapper.
-
-        Creates scope and/or mapper if absent; updates mapper config on drift.
-        Does NOT set realm-level assignment — caller decides Default/Optional/None.
-        Returns (scope_id, changed).
-        """
-        DESIRED = {
-            "claim.name": "groups",
-            "full.path": "true",
-            "id.token.claim": "true",
-            "access.token.claim": "true",
-            "userinfo.token.claim": "true",
-            "introspection.token.claim": "true",
-        }
-        changed = False
-
-        scope = await self.get_client_scope_by_name("groups")
-        if not scope:
-            scope_id = await self.create_client_scope(
-                name="groups", description="Group membership claims"
-            )
-            changed = True
-            logger.info("Created 'groups' client scope (%s)", scope_id)
-        else:
-            scope_id = scope["id"]
-
-        mappers = await self.get_scope_protocol_mappers(scope_id)
-        existing = next(
-            (m for m in mappers if m.get("protocolMapper") == "oidc-group-membership-mapper"),
-            None,
-        )
-        if existing:
-            config = existing.get("config", {})
-            if any(config.get(k) != v for k, v in DESIRED.items()):
-                config.update(DESIRED)
-                existing["config"] = config
-                await self.update_scope_protocol_mapper(scope_id, existing)
-                logger.info("Updated groups mapper on scope %s", scope_id)
-                changed = True
-        else:
-            await self._post(
-                f"/client-scopes/{scope_id}/protocol-mappers/models",
-                json={
-                    "name": "groups",
-                    "protocol": "openid-connect",
-                    "protocolMapper": "oidc-group-membership-mapper",
-                    "consentRequired": False,
-                    "config": DESIRED,
-                },
-            )
-            logger.info("Added groups mapper to scope %s", scope_id)
-            changed = True
-
-        return scope_id, changed
-
     async def _ensure_dataspace_claim_scope(self) -> tuple[str, bool]:
         """Ensure the 'dataspace' client scope exists with its DID attribute mapper.
 
@@ -897,7 +965,7 @@ class KeycloakAdminClient:
         remove_realm_defaults: bool = True,
         kept: list[str] | None = None,
     ) -> bool:
-        """Idempotently provision realm-level claim scopes (organization, groups, dataspace).
+        """Idempotently provision realm-level claim scopes (organization, dataspace).
 
         For each scope:
           1. Ensure the scope + protocol mapper exist (create/update on drift)
@@ -908,8 +976,8 @@ class KeycloakAdminClient:
         `kept` what it left (`keycloak sync --additive`). Steps 1 and 3 add or
         update, and run either way.
 
-        Safe to call from any command (sync, sync-users, etc.) — all paths
-        converge to the same desired state.
+        The `groups` scope is not among them any more (ADR-0012): see
+        `retire_groups_claim`.
 
         Returns True if anything was created or updated.
         """
@@ -923,14 +991,6 @@ class KeycloakAdminClient:
         )
         changed = changed or c
 
-        # --- groups scope ---
-        groups_id, c = await self._ensure_groups_client_scope()
-        changed = changed or c
-        c = await self._ensure_scope_not_realm_default(
-            groups_id, "groups", remove=remove_realm_defaults, kept=kept
-        )
-        changed = changed or c
-
         # --- dataspace scope ---
         ds_id, c = await self._ensure_dataspace_claim_scope()
         changed = changed or c
@@ -939,14 +999,12 @@ class KeycloakAdminClient:
         )
         changed = changed or c
 
-        # --- assign all three as Default on oauth2_proxy ---
+        # --- assign both as Default on oauth2_proxy ---
         if oauth2_proxy_client_id:
             proxy = await self.get_client_by_client_id(oauth2_proxy_client_id)
             if proxy:
                 proxy_uuid = proxy["id"]
                 c = await self._ensure_scope_default_on_client(proxy_uuid, "organization")
-                changed = changed or c
-                c = await self._ensure_scope_default_on_client(proxy_uuid, "groups")
                 changed = changed or c
                 c = await self._ensure_scope_default_on_client(proxy_uuid, "dataspace")
                 changed = changed or c
@@ -957,6 +1015,73 @@ class KeycloakAdminClient:
                 )
 
         return changed
+
+    # -------------------------------------------------------------------------
+    # The retired realm `groups` claim (ADR-0012, REQ-0013)
+    #
+    # Two mappers wrote it — the `groups` client scope's (full.path true: `/admins`) and a
+    # client-level one on oauth2_proxy (full.path false: `admins`) — and the dev realm's
+    # `microprofile-jwt` scope writes realm roles into it. Whatever the starting realm, a
+    # full sync leaves no mapper writing it, and no `groups` scope.
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def writes_groups_claim(mapper: dict[str, Any]) -> bool:
+        """A mapper that writes the top-level `groups` claim, or realm group membership at all."""
+        config = mapper.get("config") or {}
+        return (
+            config.get("claim.name") == GROUPS_CLAIM
+            or mapper.get("protocolMapper") == "oidc-group-membership-mapper"
+        )
+
+    async def groups_claim_holders(self) -> list[tuple[str, str, str, dict[str, Any]]]:
+        """Every mapper writing the `groups` claim, and the `groups` scope itself. Read only.
+
+        Returns (kind, owner name, owner id, mapper) with kind "scope", "client" or
+        "retired-scope" (the scope itself, mapper empty).
+        """
+        found: list[tuple[str, str, str, dict[str, Any]]] = []
+        for scope in await self.list_client_scopes() or []:
+            if scope.get("protocol", "openid-connect") != "openid-connect":
+                continue
+            if scope.get("name") == RETIRED_GROUPS_SCOPE:
+                found.append(("retired-scope", scope["name"], scope["id"], {}))
+                continue
+            for mapper in await self.get_scope_protocol_mappers(scope["id"]) or []:
+                if self.writes_groups_claim(mapper):
+                    found.append(("scope", scope["name"], scope["id"], mapper))
+        for client in await self.list_clients() or []:
+            for mapper in client.get("protocolMappers") or []:
+                if mapper.get("protocol", "openid-connect") == "openid-connect" and self.writes_groups_claim(mapper):
+                    found.append(("client", client.get("clientId", client["id"]), client["id"], mapper))
+        return found
+
+    @staticmethod
+    def describe_groups_claim_holder(holder: tuple[str, str, str, dict[str, Any]]) -> str:
+        kind, owner, _, mapper = holder
+        if kind == "retired-scope":
+            return f"client scope {owner}"
+        where = "client scope" if kind == "scope" else "client"
+        return f"{where} {owner}: mapper {mapper.get('name')} ({mapper.get('protocolMapper')})"
+
+    async def retire_groups_claim(self, remove: bool = True) -> list[str]:
+        """Delete every mapper writing the `groups` claim and the `groups` scope.
+
+        With `remove=False` (`sync --additive`, or a dry run) nothing is written. Returns
+        what was (or would be) removed, as report lines.
+        """
+        holders = await self.groups_claim_holders()
+        if remove:
+            for kind, _, owner_id, mapper in holders:
+                if kind == "scope":
+                    await self._delete(f"/client-scopes/{owner_id}/protocol-mappers/models/{mapper['id']}")
+                elif kind == "client":
+                    await self.delete_protocol_mapper(owner_id, mapper["id"])
+            for kind, _, owner_id, _ in holders:
+                if kind == "retired-scope":
+                    # Keycloak drops the scope's client and realm assignments with it.
+                    await self.delete_client_scope(owner_id)
+        return [self.describe_groups_claim_holder(h) for h in holders]
 
     async def delete_client_scope(self, scope_id: str) -> None:
         """Delete a client scope."""
@@ -1069,6 +1194,10 @@ class KeycloakAdminClient:
         logger.debug("Updating client: %s", client_id)
         await self._put(f"/clients/{client_uuid}", json=payload)
         logger.info("Updated client: %s", client_id)
+
+    async def put_client(self, client_uuid: str, representation: dict[str, Any]) -> None:
+        """Put a whole client representation back, as read and changed (the bootstrap client)."""
+        await self._put(f"/clients/{client_uuid}", json=representation)
 
     async def delete_client(self, client_uuid: str) -> None:
         """Delete a client."""
@@ -2387,6 +2516,160 @@ class KeycloakAdminClient:
         )
         logger.info("Mapped realm role %s onto group %s", role_name, group_id)
 
+    # The platform-wide role and the retired realm level (ADR-0012). `bootstrap` alone
+    # writes through these.
+
+    async def _delete_with_body(self, path: str, json: list | dict) -> Any:
+        """DELETE with a JSON body, which the role-mapping endpoints take."""
+        url = f"{self._settings.admin_url}{path}"
+        response = await self._client.request("DELETE", url, headers=await self._headers(), json=json)
+        return self._handle_response(response, expected_status=[200, 204])
+
+    async def list_realm_roles(self) -> list[dict[str, Any]]:
+        """Every realm role, with its `composite` flag."""
+        return await self._get("/roles", params={"briefRepresentation": "false", "max": "1000"}) or []
+
+    async def delete_realm_role(self, name: str) -> None:
+        """Delete a realm role. Keycloak drops every mapping of it with it."""
+        await self._delete(f"/roles/{quote(name, safe='')}")
+        logger.info("Deleted realm role: %s", name)
+
+    async def delete_group(self, group_id: str) -> None:
+        """Delete a group, with its memberships and role mappings."""
+        await self._delete(f"/groups/{group_id}")
+        logger.info("Deleted group %s", group_id)
+
+    async def get_realm_role_groups(self, name: str) -> list[dict[str, Any]]:
+        """The groups a realm role is mapped onto directly, organization groups included."""
+        return await self._get(
+            f"/roles/{quote(name, safe='')}/groups", params={"first": "0", "max": "1000"}
+        ) or []
+
+    async def get_realm_role_users(self, name: str) -> list[dict[str, Any]]:
+        """The users that hold a realm role directly (not through a group or a composite)."""
+        return await self._get(
+            f"/roles/{quote(name, safe='')}/users", params={"first": "0", "max": "1000"}
+        ) or []
+
+    async def remove_group_realm_role(self, group_id: str, role_name: str) -> None:
+        role = await self.get_realm_role(role_name)
+        if role is None:
+            return
+        await self._delete_with_body(
+            f"/groups/{group_id}/role-mappings/realm", [{"id": role["id"], "name": role["name"]}]
+        )
+        logger.info("Removed realm role %s from group %s", role_name, group_id)
+
+    async def get_role_composite_realm_role_names(self, role_id: str) -> set[str]:
+        """The realm roles directly inside a composite role."""
+        roles = await self._get(f"/roles-by-id/{role_id}/composites/realm") or []
+        return {r["name"] for r in roles if r.get("name")}
+
+    async def remove_role_composite_realm_role(self, composite_id: str, role_name: str) -> None:
+        role = await self.get_realm_role(role_name)
+        if role is None:
+            return
+        await self._delete_with_body(
+            f"/roles-by-id/{composite_id}/composites", [{"id": role["id"], "name": role["name"]}]
+        )
+        logger.info("Removed realm role %s from composite %s", role_name, composite_id)
+
+    async def get_user_realm_role_names(self, user_id: str) -> set[str]:
+        """The realm roles mapped onto a user directly (not through a group or a composite)."""
+        roles = await self._get(f"/users/{user_id}/role-mappings/realm") or []
+        return {r["name"] for r in roles if r.get("name")}
+
+    async def add_user_realm_role(self, user_id: str, role_name: str) -> None:
+        """Map a realm role onto a user directly. Additive."""
+        role = await self.get_realm_role(role_name)
+        if role is None:
+            raise KeycloakNotFoundError(f"Realm role not found: {role_name}")
+        await self._post(
+            f"/users/{user_id}/role-mappings/realm",
+            json=[{"id": role["id"], "name": role["name"]}],
+        )
+        logger.info("Mapped realm role %s onto user %s", role_name, user_id)
+
+    # -------------------------------------------------------------------------
+    # Authentication flows and required actions (the admin second factor, ADR-0013).
+    # `bootstrap` alone writes through these (`admin_mfa.py`).
+    # -------------------------------------------------------------------------
+
+    async def list_authentication_flows(self) -> list[dict[str, Any]]:
+        """The realm's top-level authentication flows (sub-flows are not listed)."""
+        return await self._get("/authentication/flows") or []
+
+    async def get_flow_executions(self, alias: str) -> list[dict[str, Any]]:
+        """A flow's executions, depth first, sub-flows inlined with their `level`."""
+        return await self._get(f"/authentication/flows/{quote(alias, safe='')}/executions") or []
+
+    async def get_authenticator_config(self, config_id: str) -> dict[str, Any]:
+        return await self._get(f"/authentication/config/{config_id}")
+
+    async def update_authenticator_config(self, config_id: str, alias: str, config: dict[str, str]) -> None:
+        """Replace an execution's config. Keycloak keeps the id; the alias is resent as it was."""
+        await self._put(
+            f"/authentication/config/{config_id}",
+            json={"id": config_id, "alias": alias, "config": config},
+        )
+
+    async def create_top_level_flow(self, alias: str, description: str) -> None:
+        await self._post(
+            "/authentication/flows",
+            json={"alias": alias, "description": description, "providerId": "basic-flow",
+                  "topLevel": True, "builtIn": False},
+        )
+        logger.info("Created authentication flow: %s", alias)
+
+    async def delete_authentication_flow(self, flow_id: str) -> None:
+        """Delete a top-level flow with its sub-flows and their configs.
+
+        Keycloak 26.7.3 answers 500 for the realm's bound browser flow: unbind it first.
+        """
+        await self._delete(f"/authentication/flows/{flow_id}")
+        logger.info("Deleted authentication flow %s", flow_id)
+
+    async def add_flow_authenticator(self, parent_alias: str, provider: str) -> None:
+        await self._post(
+            f"/authentication/flows/{quote(parent_alias, safe='')}/executions/execution",
+            json={"provider": provider},
+        )
+
+    async def add_sub_flow(self, parent_alias: str, alias: str, description: str) -> None:
+        # `provider` is the form type of a form-flow; a basic-flow ignores it, the API wants one.
+        await self._post(
+            f"/authentication/flows/{quote(parent_alias, safe='')}/executions/flow",
+            json={"alias": alias, "type": "basic-flow", "provider": "registration-page-form",
+                  "description": description},
+        )
+
+    async def update_flow_execution(self, parent_alias: str, execution: dict[str, Any]) -> None:
+        """Write an execution's `requirement` (send the representation `get_flow_executions` gave)."""
+        await self._put(
+            f"/authentication/flows/{quote(parent_alias, safe='')}/executions", json=execution
+        )
+
+    async def add_execution_config(self, execution_id: str, alias: str, config: dict[str, str]) -> None:
+        """Attach a config to an execution. The alias is unique in the realm (409 otherwise)."""
+        await self._post(
+            f"/authentication/executions/{execution_id}/config",
+            json={"alias": alias, "config": config},
+        )
+
+    async def list_authenticator_provider_ids(self) -> set[str]:
+        """The authenticator provider ids this server has, conditions included."""
+        providers = await self._get("/authentication/authenticator-providers") or []
+        return {p["id"] for p in providers if p.get("id")}
+
+    async def list_required_actions(self) -> list[dict[str, Any]]:
+        """The realm's registered required actions, with `enabled`."""
+        return await self._get("/authentication/required-actions") or []
+
+    async def update_required_action(self, action: dict[str, Any]) -> None:
+        await self._put(
+            f"/authentication/required-actions/{quote(action['alias'], safe='')}", json=action
+        )
+
     # -------------------------------------------------------------------------
     # Organizations
     # -------------------------------------------------------------------------
@@ -2666,6 +2949,18 @@ class KeycloakAdminClient:
             raise KeycloakError(f"Failed to retrieve created org group '{name}' on {org_id}")
         logger.info("Created org group '%s' on organization %s (%s)", name, org_id, group["id"])
         return group["id"], True
+
+    async def is_user_in_org_group(self, org_id: str, group_id: str, user_id: str) -> bool:
+        """Whether a user is a member of one organization group. Read only.
+
+        Asked of the member (`…/members/{user}/groups`): Keycloak 26.7.3 has no GET for
+        one member of an organization group, and answers that path 404 for everyone.
+        """
+        try:
+            groups = await self._get(f"/organizations/{org_id}/members/{user_id}/groups") or []
+        except KeycloakNotFoundError:
+            return False
+        return any(g.get("id") == group_id for g in groups)
 
     async def ensure_user_in_org_group(
         self, org_id: str, group_id: str, user_id: str

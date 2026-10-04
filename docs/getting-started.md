@@ -37,10 +37,15 @@ This does two things, in order:
 
 1. **Converges the realm's platform level** from [`platform.yaml`](../platform.yaml):
    Organizations, fine-grained admin permissions, sign-in settings, languages, themes,
-   lifespans and the realm role groups. Only the keys the file names are written.
+   lifespans, the realm role `platform-admin` and who holds it, and the retired realm groups
+   and roles it deletes (ADR-0012). Only the keys the file names are written.
    Brute-force protection comes from `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` (on by default,
-   off under `ENV=dev`), and `smtpServer` from `CELINE_KEYCLOAK_SMTP_*` when
-   `CELINE_KEYCLOAK_SMTP_HOST` is set. `--dry-run` shows what would change.
+   off under `ENV=dev`), the platform admin's second factor from
+   `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED` (the same default), and `smtpServer` from
+   `CELINE_KEYCLOAK_SMTP_*` when `CELINE_KEYCLOAK_SMTP_HOST` is set. `--dry-run` shows what
+   would change. Outside dev it also hardens the master realm, and needs
+   `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` for that ([deployment](deployment.md#the-admin-second-factor-and-the-master-realm));
+   under `ENV=dev` (the taskfile's) master is left alone.
 2. **Creates a `celine-admin-cli` service account** with realm-management roles, and writes
    its secret to `.client.secrets.yaml`. Subsequent commands auto-load credentials from this
    file. The secret is printed only under a development `ENV`.
@@ -102,8 +107,11 @@ from:
 ENV=dev celine-policies keycloak seed-dev-users
 ```
 
-`admin`, `manager`, `editor` and `viewer`, each with its username as password, in the role group
-of the same rank (`config/keycloak/dev-users.yaml`). It refuses outside a development `ENV`.
+`admin` (realm role `platform-admin`), `org-admin` (`example_rec` admins, not a platform
+administrator) and `org-viewer` (`example_rec` viewers), each with its username as password
+(`config/keycloak/dev-users.yaml`). No user is in a realm group: realm groups carry no authority
+(ADR-0012). The organizations come from `sync-users` with the example REC, so run that first.
+It refuses outside a development `ENV`.
 
 ### Step 5: Sync Organizations (optional)
 

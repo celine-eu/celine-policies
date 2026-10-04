@@ -14,7 +14,8 @@
 #                        existing account with emailVerified: false at its next sign-in
 #   passwordPolicy       Keycloak's default
 #
-# A deployment may overlay `realm_settings.supportedLocales` only (`bootstrap --overlay`).
+# A deployment may overlay `realm_settings.supportedLocales` and `platform_admin.users` only
+# (`bootstrap --overlay`).
 # A deployment may override most values from the environment, CELINE_KEYCLOAK_PLATFORM_<KEY>
 # (`loginTheme` -> CELINE_KEYCLOAK_PLATFORM_LOGIN_THEME); `null` stops bootstrap managing the
 # key. Which keys: ENV_OVERRIDABLE_SETTINGS in src/celine/policies/cli/keycloak/platform.py.
@@ -65,14 +66,23 @@ realm_settings:
   minimumQuickLoginWaitSeconds: 60
   maxFailureWaitSeconds: 900
 
-# The realm-wide role groups, each carrying the realm role of the same rank. Created
-# with the role mapped; an existing group gains a missing mapping and keeps the rest.
-role_groups:
-  - path: /admins
-    realm_role: admin
-  - path: /managers
-    realm_role: manager
-  - path: /editors
-    realm_role: editor
-  - path: /viewers
-    realm_role: viewer
+# The platform-wide grant: exactly one, a realm role (ADR-0012, REQ-0011). Every service reads
+# it from `realm_access.roles` under this name (celine-sdk PLATFORM_ADMIN_ROLE), so the name is
+# fixed: bootstrap refuses any other. It is held directly by the operator realm admin
+# (CELINE_KEYCLOAK_REALM_ADMIN_*) and by the users listed here, never through a group or a
+# composite role. Organization groups (admins > managers > editors > viewers) are the other
+# level and are valid only inside their organization.
+#
+# `users` is empty in the image, which names no account. A deployment lists its own platform
+# administrators in its overlay; a user the list names who does not exist yet is reported.
+platform_admin:
+  role: platform-admin
+  users: []
+
+# What the platform level used to declare and no longer grants anything (ADR-0012,
+# REQ-0012). bootstrap deletes each one the realm holds, with its memberships and role
+# mappings, on every run. Top-level realm groups only: an organization's group of the same
+# name is never touched.
+retired:
+  realm_groups: [/admins, /managers, /editors, /viewers]
+  realm_roles: [admin, manager, editor, viewer]

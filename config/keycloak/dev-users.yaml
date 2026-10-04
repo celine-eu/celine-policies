@@ -1,31 +1,39 @@
-# Development users: one per role group, with their username as password.
+# Development users, with their username as password.
 #
 # `celine-policies keycloak seed-dev-users` creates them, and refuses outside a development
-# ENV. They are what the dev realm import (import/realm-celine.json) has always carried;
-# once the import is dropped this file and that command are where they come from
-# (requester, 2026-09-14). `admin` is the one the local stack depends on.
+# ENV. Exactly two levels of authority (ADR-0012): the realm role `platform-admin`, and an
+# organization's own groups, valid only inside it. No user here is in a realm group.
+#
+#   admin       platform-admin; also admins of the two example organizations, as a platform
+#               administrator from the dev team would be. The local stack depends on it.
+#   org-admin   admins of example_rec only: an organization administrator who is NOT a
+#               platform administrator.
+#   org-viewer  viewers of example_rec only: a member.
+#
+# The organizations are created by `sync-users` from the example REC; seed-dev-users refuses
+# one that does not exist yet. A user is created once and its memberships and role are kept;
+# a password is never reset.
 users:
   - username: admin
     email: admin@celine.localhost
     first_name: Admin
     last_name: User
     password: admin
-    group: /admins
-  - username: manager
-    email: manager@celine.localhost
-    first_name: Manager
-    last_name: User
-    password: manager
-    group: /managers
-  - username: editor
-    email: editor@celine.localhost
-    first_name: Editor
-    last_name: User
-    password: editor
-    group: /editors
-  - username: viewer
-    email: viewer@celine.localhost
-    first_name: Viewer
-    last_name: User
-    password: viewer
-    group: /viewers
+    realm_roles: [platform-admin]
+    organizations:
+      example_rec: admins
+      example_dso: admins
+  - username: org-admin
+    email: org-admin@celine.localhost
+    first_name: Organization
+    last_name: Admin
+    password: org-admin
+    organizations:
+      example_rec: admins
+  - username: org-viewer
+    email: org-viewer@celine.localhost
+    first_name: Organization
+    last_name: Viewer
+    password: org-viewer
+    organizations:
+      example_rec: viewers
