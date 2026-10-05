@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import logging
 
-# TODO: raise the celine-sdk floor to the release that ships celine.sdk.audit and
-# docs_urls (pyproject.toml), and re-lock, before building an image.
 from celine.sdk.audit import configure_audit
 from celine.sdk.posture import docs_urls
 from fastapi import FastAPI

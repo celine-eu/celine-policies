@@ -297,7 +297,7 @@ only callers are mosquitto-go-auth and health probes). A refused `/user` or `/ac
 record on the `celine.audit` logger naming the caller by `sub` and client id; an allowed ACL
 check is not audited ([REQ-0019](specifications/services.md)). **No MQTT audience exists in the realm yet** — see `.env.example` — so a
 hardened deployment needs an audience mapper onto one MQTT audience for every broker client
-first. The image needs the celine-sdk release that ships `celine.sdk.posture`.
+first. The image needs celine-sdk 2.0.0 or later, the first release with `celine.sdk.posture`.
 
 `/superuser` answers `403` to every token (REQ-0014): there is no MQTT superuser, whatever
 `auth_opt_disable_superuser` says. User or service is the token's kind (`is_service_account`);

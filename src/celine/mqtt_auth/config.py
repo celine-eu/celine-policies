@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-# TODO: celine.sdk.posture ships in the next celine-sdk release; raise the
-# celine-sdk floor in pyproject.toml to it (and re-lock) before building an image.
 from celine.sdk.posture import PostureGuard
 from celine.sdk.settings.models import OidcSettings
 from pydantic import Field

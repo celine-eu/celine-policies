@@ -41,8 +41,8 @@ BOOTSTRAP_CLIENT_SECRET_MIN_LENGTH = 32
 # exactly `dev`, the platform rule (`celine.sdk.posture.DEV`). Everything else —
 # `development`, `local`, `test`, `ci`, a typo and nothing at all — is treated
 # as production, so the safety checks are on unless someone opted out on purpose.
-# Kept local rather than imported so the operator CLI does not need the unreleased
-# celine-sdk posture module; the semantics must stay identical to it.
+# Kept local rather than imported from the SDK posture module; the semantics must
+# stay identical to it.
 NON_PRODUCTION_ENVS = frozenset({"dev"})
 
 
