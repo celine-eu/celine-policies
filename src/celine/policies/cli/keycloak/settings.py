@@ -377,6 +377,23 @@ def secrets_file_is_set_in_environment() -> bool:
     return "secrets_file" in KeycloakSettings().model_fields_set
 
 
+def secrets_file_to_write(
+    flag: Path | None, settings: KeycloakSettings
+) -> Path | None:
+    """Where a run records the client secrets it obtained, or None for nowhere.
+
+    `--secrets-file`, else `CELINE_KEYCLOAK_SECRETS_FILE`, else the default path in
+    dev only. Outside dev a run that was not asked leaves no credential on disk
+    (REQ-0020). `sync` and `bootstrap` both decide with this, so the two
+    commands that write the file are asked the same way.
+    """
+    if flag is not None or secrets_file_is_set_in_environment():
+        return settings.secrets_file
+    if not settings.is_production:
+        return settings.secrets_file
+    return None
+
+
 class SmtpSettings(BaseSettings):
     """The realm's `smtpServer`, as `keycloak bootstrap` applies it (plan Phase 2b).
 

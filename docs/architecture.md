@@ -101,7 +101,7 @@ run instead of writing them:
   have is refused, so it runs after the reconcile has created the organization
 - `status` — show current scopes, clients, and assignments
 
-Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time, and is mode `0600`. Outside dev `sync` writes it only when given `--secrets-file` or `CELINE_KEYCLOAK_SECRETS_FILE` (REQ-0020).
+Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time, and is mode `0600`. Outside dev neither command writes it unless given `--secrets-file` or `CELINE_KEYCLOAK_SECRETS_FILE` (REQ-0020); a run there that was not asked authenticates with `CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET` or the bootstrap client instead.
 
 ### 4. Rego Policies
 
@@ -212,4 +212,4 @@ The Keycloak CLI is configured via `CELINE_KEYCLOAK_*` environment variables (se
 | `CELINE_KEYCLOAK_ADMIN_PASSWORD` | — | Admin password (for bootstrap) |
 | `CELINE_KEYCLOAK_ADMIN_CLIENT_ID` | `celine-admin-cli` | Service client ID |
 | `CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET` | — | Service client secret |
-| `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` | Auto-load secret from file; set, `sync` also records its secrets there (REQ-0020) |
+| `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` | Auto-load secret from file; set, `bootstrap` and `sync` also record their secrets there (REQ-0020) |

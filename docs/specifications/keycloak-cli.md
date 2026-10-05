@@ -193,17 +193,22 @@ is lost is Keycloak's own `kc.sh bootstrap-admin`.
 
 ---
 
-### REQ-0020 — `sync` writes client secrets to disk only when asked, readable by its owner only
+### REQ-0020 — `sync` and `bootstrap` write client secrets to disk only when asked, readable by their owner only
 
-`celine-policies keycloak sync` records the secrets of the clients it created or updated in a
-secrets file only when the run asks for it:
+`celine-policies keycloak sync` records the secrets of the clients it created or updated, and
+`celine-policies keycloak bootstrap` the secret of the admin CLI client (`celine-admin-cli`) it
+created or refreshed, in a secrets file only when the run asks for it:
 
 - **`--secrets-file PATH`**, or **`CELINE_KEYCLOAK_SECRETS_FILE`** set: the run writes that path.
 - **Neither, under `ENV=dev`**: the run writes `.client.secrets.yaml` in the working directory, as
   before.
-- **Neither, any other `ENV`, unset included**: the run writes no file and prints how many
-  clients' secrets it did not record and how to ask.
-- `--dry-run` writes nothing, asked or not.
+- **Neither, any other `ENV`, unset included**: the run writes no file and says so. `sync`
+  prints how many clients' secrets it did not record and how to ask; `bootstrap` prints how to
+  ask, and where the secret can be read instead (the realm's admin console, the client's
+  Credentials tab). Outside dev the other commands need no copy of it either: they sign in as the
+  bootstrap client when `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` is set and the admin CLI
+  client's secret is not (REQ-0016).
+- `--dry-run` and `--check` write nothing, asked or not.
 
 Every write of the file — `sync`'s and `bootstrap`'s, through the one merging writer — leaves it
 mode `0600`, narrowing a file an earlier run left wider. The secrets a `sync` applies are the

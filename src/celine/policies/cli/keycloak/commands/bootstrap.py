@@ -27,9 +27,9 @@ The platform level of the realm, and nothing else (plan each-cli-command-owns-on
    Outside dev the client's secret is required.
 
 With the admin CLI client's own credentials instead (the environment, or the secrets
-file a first run wrote), and master not to be hardened (dev), step 1 runs and steps 2 and
-3 are skipped: the client holds `manage-realm`, which every platform setting needs
-(measured on 26.7.3).
+file a first run wrote — in dev, or when asked: REQ-0020), and master not to be hardened
+(dev), step 1 runs and steps 2 and 3 are skipped: the client holds `manage-realm`, which
+every platform setting needs (measured on 26.7.3).
 
 For a deployment job (decision 2): `--export` writes a partial export of the realm before
 any write, `--check` plans and exits 1 if anything would change, and outside dev a plan that
@@ -79,6 +79,7 @@ from celine.policies.cli.keycloak.settings import (
     KeycloakSettings,
     RealmAdminSettings,
     SmtpSettings,
+    secrets_file_to_write,
 )
 from celine.policies.cli.keycloak.commands._utils import configure_logging
 
@@ -149,7 +150,15 @@ def bootstrap(
     ] = DEFAULT_ADMIN_CLIENT_ID,
     secrets_file: Annotated[
         Optional[Path],
-        typer.Option("--secrets-file", "-s", help="Secrets file path"),
+        typer.Option(
+            "--secrets-file",
+            "-s",
+            help=(
+                "Record the admin CLI client's secret in this file (mode 0600). "
+                "Also CELINE_KEYCLOAK_SECRETS_FILE. Without either, only ENV=dev "
+                "records it, in .client.secrets.yaml."
+            ),
+        ),
     ] = None,
     verbose: Annotated[
         bool,
@@ -161,6 +170,11 @@ def bootstrap(
     Writes only the keys platform.yaml declares. Every other command checks this
     level and refuses without it, so run bootstrap first, then sync, then
     sync-orgs / sync-users.
+
+    The admin CLI client's secret is written to disk only when asked, as `sync`
+    does: `--secrets-file PATH` or `CELINE_KEYCLOAK_SECRETS_FILE`. ENV=dev writes
+    `.client.secrets.yaml` without being asked; any other environment writes
+    nothing and says where the secret can be read instead. The file is mode 0600.
 
     Example:
         celine-policies keycloak bootstrap --admin-user admin --admin-password admin
@@ -182,7 +196,9 @@ def bootstrap(
         admin_password=admin_password,
         secrets_file=secrets_file,
     )
-    resolved_secrets_file = settings.secrets_file
+    # Where the admin CLI client's secret goes, or None (REQ-0020). Decided before
+    # any Keycloak call, from the flag and the environment only.
+    secrets_output = secrets_file_to_write(secrets_file, settings)
 
     # Outside dev master is hardened, and only the bootstrap client may do it (REQ-0016):
     # refused here, before Keycloak is asked anything.
@@ -271,23 +287,44 @@ def bootstrap(
         typer.echo(f"\nAdmin CLI client: {client_id} {state}")
         return
 
-    _update_secrets_file(resolved_secrets_file, settings.realm, client_id, secret, created)
+    if secrets_output is not None:
+        _update_secrets_file(secrets_output, settings.realm, client_id, secret, created)
 
     shown = secret if not settings.is_production else REDACTED
     action = "Created" if created else "Retrieved existing"
     typer.secho(f"\n✓ {action} client: {client_id}", fg=typer.colors.GREEN)
     typer.echo(f"  Secret: {shown}")
-    typer.echo(f"  Secrets file: {resolved_secrets_file}")
+    if secrets_output is not None:
+        typer.echo(f"  Secrets file: {secrets_output}")
+    else:
+        typer.echo(
+            "  Secrets file: not written (pass --secrets-file or set "
+            "CELINE_KEYCLOAK_SECRETS_FILE to record it)"
+        )
     typer.echo("\nSet environment variables for future operations:")
     typer.secho(
         f"  export CELINE_KEYCLOAK_ADMIN_CLIENT_ID={client_id}", fg=typer.colors.CYAN
     )
     if settings.is_production:
+        where = (
+            f"in {secrets_output}"
+            if secrets_output is not None
+            else (
+                f"from the realm {settings.realm}: admin console, Clients > {client_id} "
+                f"> Credentials"
+            )
+        )
         typer.secho(
             f"  export CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET=<the secret for {client_id} "
-            f"in {resolved_secrets_file}>",
+            f"{where}>",
             fg=typer.colors.CYAN,
         )
+        if secrets_output is None:
+            typer.echo(
+                "  or keep CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET set: the other "
+                "commands sign in as the bootstrap client when the admin CLI "
+                "client's secret is not set."
+            )
     else:
         typer.secho(
             f"  export CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET={secret}", fg=typer.colors.CYAN

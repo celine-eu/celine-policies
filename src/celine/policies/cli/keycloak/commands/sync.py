@@ -22,7 +22,7 @@ from celine.policies.cli.keycloak.models import KeycloakConfig
 from celine.policies.cli.keycloak.platform import require_platform
 from celine.policies.cli.keycloak.settings import (
     KeycloakSettings,
-    secrets_file_is_set_in_environment,
+    secrets_file_to_write,
 )
 from celine.policies.cli.keycloak.sync import (
     SyncResult,
@@ -275,9 +275,10 @@ def sync(
             traceback.print_exc()
         raise typer.Exit(1)
 
-    # Record the applied secrets — only where asked, or in dev (REQ-0020).
+    # Record the applied secrets — only where asked, or in dev (REQ-0020). Nothing a
+    # deployment runs reads them back: they are its own inputs to begin with.
     if result.client_secrets and not dry_run:
-        output_path = _secrets_output(secrets_file, settings)
+        output_path = secrets_file_to_write(secrets_file, settings)
         if output_path is None:
             typer.echo(
                 f"Secrets of {len(result.client_secrets)} client(s) not written to "
@@ -293,23 +294,6 @@ def sync(
 
     if not result.success:
         raise typer.Exit(1)
-
-
-def _secrets_output(
-    flag: Path | None, settings: KeycloakSettings
-) -> Path | None:
-    """Where this run records the client secrets it applied, or None for nowhere.
-
-    `--secrets-file`, else `CELINE_KEYCLOAK_SECRETS_FILE`, else the default path in
-    dev only. Outside dev an unasked run leaves no credential on disk (REQ-0020):
-    nothing a deployment runs reads the file back, and the secrets are the
-    deployment's own inputs to begin with.
-    """
-    if flag is not None or secrets_file_is_set_in_environment():
-        return settings.secrets_file
-    if not settings.is_production:
-        return settings.secrets_file
-    return None
 
 
 def _resolve_additive(

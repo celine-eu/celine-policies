@@ -46,9 +46,13 @@ This does two things, in order:
    would change. Outside dev it also hardens the master realm, and needs
    `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` for that ([deployment](deployment.md#the-admin-second-factor-and-the-master-realm));
    under `ENV=dev` (the taskfile's) master is left alone.
-2. **Creates a `celine-admin-cli` service account** with realm-management roles, and writes
-   its secret to `.client.secrets.yaml`. Subsequent commands auto-load credentials from this
-   file. The secret is printed only under a development `ENV`.
+2. **Creates a `celine-admin-cli` service account** with realm-management roles. Under
+   `ENV=dev` (the taskfile's) it writes the secret to `.client.secrets.yaml`, and subsequent
+   commands auto-load credentials from this file. Any other `ENV` writes the file only when
+   asked (`--secrets-file`, `CELINE_KEYCLOAK_SECRETS_FILE`), and otherwise says where the
+   secret can be read: the realm's admin console, Clients > `celine-admin-cli` > Credentials
+   ([REQ-0020](specifications/keycloak-cli.md)). The secret is printed only under a
+   development `ENV`.
 
 The emails and login pages need the `rec` theme, so `bootstrap` refuses a Keycloak that
 does not list it: use this repository's `keycloak` image, not the stock one.
