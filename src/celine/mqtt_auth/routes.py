@@ -1,4 +1,12 @@
-"""FastAPI routes for MQTT authentication."""
+"""FastAPI routes for MQTT authentication.
+
+**What is logged (REQ-0019).** A refused `/user` or `/acl` that presented a token
+is one `celine.audit` record (`audit_denied`) naming the caller by `sub` and
+client id, the topic, the verb and a short reason. Nothing else about the token
+is written anywhere: no claim, no policy input. An allowed ACL check is not
+audited — the broker asks for every publish and subscribe — and leaves at most a
+DEBUG line with the topic and verbs.
+"""
 
 import logging
 import time
@@ -7,7 +15,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Response, status, Request
 
-from celine.mqtt_auth.config import MqttAuthSettings
+from celine.sdk.audit import audit_denied
+
+from celine.mqtt_auth.config import SERVICE_NAME, MqttAuthSettings
 from celine.mqtt_auth.models import (
     MqttAclRequest,
     MqttAuthRequest,
@@ -107,6 +117,7 @@ def _acc_to_actions(acc: int) -> list[str]:
 
 @router.post("/user")
 async def mqtt_auth(
+    request: Request,
     response: Response,
     authorization: Annotated[str | None, Header()] = None,
     settings: MqttAuthSettings = Depends(get_settings),
@@ -129,7 +140,10 @@ async def mqtt_auth(
 
     subject = _extract_subject_from_token(token, settings)
     if subject is None:
-        logger.debug("MQTT auth failed: invalid credentials")
+        # The token did not verify, so nothing in it names a caller.
+        audit_denied(
+            "mqtt.connect", reason="invalid_token", service=SERVICE_NAME, request=request
+        )
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid credentials")
 
@@ -160,8 +174,9 @@ async def mqtt_acl(
     raw_body = await request.body()
     try:
         body = MqttAclRequest.model_validate_json(raw_body)
-    except Exception as e:
-        logger.warning(f"Failed to parse body: {raw_body}")
+    except Exception:
+        # The body is not logged: it carries the broker's username field.
+        logger.warning("Failed to parse ACL request body (%d bytes)", len(raw_body))
         raise HTTPException(500, "Failed to parse request body")
 
     request_id = x_request_id or str(uuid.uuid4())
@@ -174,13 +189,32 @@ async def mqtt_acl(
 
     subject = _extract_subject_from_token(token, settings)
     if subject is None:
-        logger.debug("MQTT ACL failed: invalid credentials (topic=%s)", body.topic)
+        audit_denied(
+            "mqtt.acl",
+            resource=body.topic,
+            reason="invalid_token",
+            service=SERVICE_NAME,
+            request=request,
+            request_id=request_id,
+        )
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid credentials")
+
+    def denied(action: str, reason: str) -> None:
+        audit_denied(
+            action,
+            caller=subject.claims,
+            resource=body.topic,
+            reason=reason,
+            service=SERVICE_NAME,
+            request=request,
+            request_id=request_id,
+        )
 
     # Convert acc bitmask to action names
     actions = _acc_to_actions(body.acc)
     if not actions:
+        denied("mqtt.acl", "invalid_acc_mask")
         response.status_code = status.HTTP_403_FORBIDDEN
         return MqttResponse(ok=False, reason="invalid acc mask")
 
@@ -204,28 +238,20 @@ async def mqtt_acl(
             )
 
             if not decision.allowed:
-                logger.warning(
-                    "MQTT ACL denied: user=%s topic=%s action=%s reason=%s input=%s",
-                    subject.id,
-                    body.topic,
-                    action_name,
-                    decision.reason,
-                    policy_input.model_dump_json(),
-                )
+                # The policy's reason is a fixed string of the bundle, never
+                # the input; the input (claims included) is not logged.
+                denied(f"mqtt.{action_name}", decision.reason or "denied")
                 response.status_code = status.HTTP_403_FORBIDDEN
                 return MqttResponse(ok=False, reason=decision.reason)
 
         except Exception as e:
-            logger.exception("MQTT ACL check failed: %s", e)
+            logger.exception("MQTT ACL check failed: %s", type(e).__name__)
+            denied(f"mqtt.{action_name}", "check_failed")
             response.status_code = status.HTTP_403_FORBIDDEN
-            return MqttResponse(ok=False, reason=f"check failed")
+            return MqttResponse(ok=False, reason="check failed")
 
-    logger.info(
-        "MQTT ACL allowed: user=%s topic=%s actions=%s",
-        subject.id,
-        body.topic,
-        actions,
-    )
+    # Not audited: the broker asks for every publish and subscribe.
+    logger.debug("MQTT ACL allowed: topic=%s actions=%s", body.topic, actions)
     return MqttResponse(ok=True, reason="authorized")
 
 
@@ -241,6 +267,6 @@ async def mqtt_superuser(
     in a deployment's broker); every answer is no, so every operation goes through `/acl`.
     No scope, group or role — `platform-admin` included — makes a client a superuser.
     """
-    logger.debug("MQTT superuser check: always denied (user=%s)", request.username)
+    logger.debug("MQTT superuser check: always denied")
     response.status_code = status.HTTP_403_FORBIDDEN
     return MqttResponse(ok=False, reason="superuser disabled")

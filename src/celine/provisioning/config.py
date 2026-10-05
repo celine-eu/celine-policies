@@ -27,6 +27,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from celine.provisioning.invitation import EmailMode, EmailPolicy, parse_recipients
 from celine.sdk.settings.models import OidcSettings
 
+#: The name every audit record of this service carries (`celine.sdk.audit`).
+SERVICE_NAME = "provisioning"
+
 #: Scope authorising the upsert and the two lifecycle calls.
 SCOPE_PARTICIPANTS_WRITE = "provisioning.participants.write"
 

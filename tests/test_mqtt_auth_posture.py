@@ -3,7 +3,8 @@
 Only `CELINE_ENV=dev` relaxes (`celine.sdk.posture`). Hardened, the service must
 name the audience its tokens are for — without one any client's token is an MQTT
 credential — and must not run on the SDK's local Keycloak defaults. Either way a
-configured audience is enforced on every token, and CORS exists only in dev.
+configured audience is enforced on every token. There is no CORS in any environment, and
+the API docs are served only in dev or when opted in.
 """
 
 from __future__ import annotations
@@ -163,28 +164,56 @@ class TestAudienceEnforcement:
 
 class TestCors:
     PREFLIGHT: ClassVar[dict[str, str]] = {
-        "Origin": "http://evil.example.org",
+        "Origin": "http://other.example.org",
         "Access-Control-Request-Method": "POST",
     }
 
-    def test_dev_answers_cross_origin_requests(self, monkeypatch):
-        """@verifies REQ-0010"""
-        monkeypatch.setenv("CELINE_ENV", "dev")
-        monkeypatch.setenv("CELINE_POLICIES_DIR", POLICIES_DIR)
-        client = TestClient(_create_app())
-
-        response = client.options("/user", headers=self.PREFLIGHT)
-
-        assert response.status_code == 200
-        assert "access-control-allow-origin" in response.headers
-
-    def test_hardened_has_no_cors(self, hardened_env):
-        """@verifies REQ-0010"""
-        client = TestClient(_create_app())
-
+    def _assert_no_cors(self, client: TestClient) -> None:
         preflight = client.options("/user", headers=self.PREFLIGHT)
-        health = client.get("/health", headers={"Origin": "http://evil.example.org"})
+        health = client.get("/health", headers={"Origin": "http://other.example.org"})
 
         assert "access-control-allow-origin" not in preflight.headers
         assert "access-control-allow-origin" not in health.headers
         assert "access-control-allow-credentials" not in health.headers
+
+    def test_dev_has_no_cors(self, monkeypatch):
+        """No browser calls the broker's auth backend, in dev either.
+
+        @verifies REQ-0010
+        """
+        monkeypatch.setenv("CELINE_ENV", "dev")
+        monkeypatch.setenv("CELINE_POLICIES_DIR", POLICIES_DIR)
+
+        self._assert_no_cors(TestClient(_create_app()))
+
+    def test_hardened_has_no_cors(self, hardened_env):
+        """@verifies REQ-0010"""
+        self._assert_no_cors(TestClient(_create_app()))
+
+
+class TestApiDocs:
+    PATHS: ClassVar[tuple[str, ...]] = ("/docs", "/redoc", "/openapi.json")
+
+    def test_hardened_serves_no_docs(self, hardened_env):
+        """@verifies REQ-0018"""
+        client = TestClient(_create_app())
+
+        for path in self.PATHS:
+            assert client.get(path).status_code == 404, path
+
+    def test_hardened_serves_them_when_opted_in(self, hardened_env):
+        """@verifies REQ-0018"""
+        hardened_env.setenv("CELINE_PUBLIC_DOCS", "true")
+        client = TestClient(_create_app())
+
+        for path in self.PATHS:
+            assert client.get(path).status_code == 200, path
+
+    def test_dev_serves_them(self, monkeypatch):
+        """@verifies REQ-0018"""
+        monkeypatch.setenv("CELINE_ENV", "dev")
+        monkeypatch.setenv("CELINE_POLICIES_DIR", POLICIES_DIR)
+        client = TestClient(_create_app())
+
+        for path in self.PATHS:
+            assert client.get(path).status_code == 200, path

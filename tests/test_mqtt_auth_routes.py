@@ -7,6 +7,8 @@ boundary and every case below asserts it rather than only the body.
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -623,3 +625,142 @@ class TestAppWiring:
             assert self._acl(client, headers).status_code == 200
 
         assert app.state.engine.cache_stats["hits"] == 0
+
+
+# ---------------------------------------------------------------------------
+# What a refusal leaves in the log (REQ-0019)
+# ---------------------------------------------------------------------------
+
+# Claims a token may carry that name a person. None of them may reach any log line.
+PERSONAL = {"email": "a.person@example.org", "name": "Ann Example", "given_name": "Ann"}
+
+
+def _audit(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    return [json.loads(r.getMessage()) for r in caplog.records if r.name == "celine.audit"]
+
+
+class TestAudit:
+    """A refusal is one `celine.audit` record naming the caller; an allow is none."""
+
+    @pytest.fixture(autouse=True)
+    def _capture_everything(self, caplog: pytest.LogCaptureFixture):
+        caplog.set_level(logging.DEBUG)
+
+    def _acl(self, client: TestClient, headers: dict[str, str], topic: str, acc: int = 4):
+        return client.post(
+            "/acl", headers=headers, json={"clientid": "mosq-1", "topic": topic, "acc": acc}
+        )
+
+    def test_a_policy_denial_records_caller_topic_verb_and_reason(
+        self, client: TestClient, bearer, caplog
+    ):
+        """@verifies REQ-0019"""
+        response = self._acl(
+            client,
+            {
+                **bearer("svc-pipelines", scope="pipelines.runs.read", **PERSONAL),
+                "X-Request-ID": "req-acl-1",
+            },
+            topic="celine/pipelines/#",
+        )
+
+        assert response.status_code == 403
+        [record] = _audit(caplog)
+        assert record["event"] == "denied"
+        assert record["service"] == "mqtt-auth"
+        assert record["sub"] == "svc-pipelines"
+        assert record["client_id"] == "svc-pipelines"
+        assert record["service_account"] is True
+        assert record["action"] == "mqtt.subscribe"
+        assert record["resource"] == "celine/pipelines/#"
+        assert record["reason"] == "service-level wildcard denied"
+        assert record["route"] == "/acl"
+        assert record["request_id"] == "req-acl-1"
+
+    def test_no_claim_beyond_the_caller_reaches_any_log_line(
+        self, client: TestClient, bearer, caplog
+    ):
+        """The denial used to log the whole policy input, every claim included.
+
+        @verifies REQ-0019
+        """
+        self._acl(client, bearer("u-1", scope="pipelines.admin", **PERSONAL), topic=TOPIC)
+        self._acl(
+            client,
+            bearer("svc-pipelines", scope="pipelines.runs.read", **PERSONAL),
+            topic=TOPIC,
+            acc=2,
+        )
+
+        assert len(_audit(caplog)) == 2
+        for value in PERSONAL.values():
+            assert value not in caplog.text
+        assert "pipelines.admin" not in caplog.text
+
+    def test_an_allowed_check_is_not_audited(self, client: TestClient, bearer, caplog):
+        """The broker asks for every publish and subscribe.
+
+        @verifies REQ-0019
+        """
+        response = self._acl(
+            client, bearer("svc-pipelines", scope="pipelines.runs.read", **PERSONAL), TOPIC
+        )
+
+        assert response.status_code == 200
+        assert _audit(caplog) == []
+        for value in PERSONAL.values():
+            assert value not in caplog.text
+
+    def test_an_invalid_acc_mask_is_a_recorded_denial(
+        self, client: TestClient, bearer, caplog
+    ):
+        """@verifies REQ-0019"""
+        self._acl(client, bearer("svc-pipelines", scope="pipelines.admin"), TOPIC, acc=8)
+
+        [record] = _audit(caplog)
+        assert (record["action"], record["reason"]) == ("mqtt.acl", "invalid_acc_mask")
+        assert record["sub"] == "svc-pipelines"
+
+    def test_a_failing_engine_is_a_recorded_denial(
+        self, client: TestClient, app, bearer, caplog
+    ):
+        """@verifies REQ-0019"""
+
+        def boom(**_: Any):
+            raise RuntimeError("engine failure")
+
+        app.state.engine.evaluate_decision = boom
+
+        self._acl(client, bearer("svc-pipelines", scope="pipelines.admin"), TOPIC)
+
+        [record] = _audit(caplog)
+        assert (record["action"], record["reason"]) == ("mqtt.subscribe", "check_failed")
+
+    @pytest.mark.parametrize("endpoint", ["/acl", "/user"])
+    def test_a_token_that_does_not_verify_is_recorded_without_a_caller(
+        self, client: TestClient, bearer, caplog, endpoint
+    ):
+        """An unverified token names nobody, so none of it is written.
+
+        @verifies REQ-0019
+        """
+        headers = bearer("svc-pipelines", expires_in=-3600, **PERSONAL)
+        if endpoint == "/acl":
+            response = self._acl(client, headers, TOPIC)
+        else:
+            response = client.post("/user", headers=headers)
+
+        assert response.status_code == 403
+        [record] = _audit(caplog)
+        assert record["reason"] == "invalid_token"
+        assert record["action"] == ("mqtt.acl" if endpoint == "/acl" else "mqtt.connect")
+        assert (record["sub"], record["client_id"]) == (None, None)
+        for value in PERSONAL.values():
+            assert value not in caplog.text
+
+    def test_no_token_is_not_recorded(self, client: TestClient, caplog):
+        """@verifies REQ-0019"""
+        assert self._acl(client, {}, TOPIC).status_code == 403
+        assert client.post("/user").status_code == 403
+
+        assert _audit(caplog) == []

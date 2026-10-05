@@ -26,11 +26,14 @@ audience is optional and the findings above are logged as one warning.
 > Until 2026-10 the service constructed its OIDC settings with `audience=None`, overriding the
 > environment, so no audience was ever checked (NIS2 review finding R24).
 
-### REQ-0010 — CORS is enabled only in dev
+### REQ-0010 — the service answers no cross-origin request
 
-In `dev` the service answers cross-origin requests from any origin. In a hardened environment it
-installs no CORS middleware: its callers are mosquitto-go-auth's HTTP backend and health probes,
-never a browser.
+The service installs no CORS middleware, in any environment: its callers are mosquitto-go-auth's
+HTTP backend and health probes, never a browser. A preflight gets no
+`Access-Control-Allow-Origin`, and neither does any other response.
+
+> Until 2026-10 `dev` answered cross-origin requests from any origin, with credentials (NIS2
+> review finding R31).
 
 ### REQ-0014 — no MQTT superuser, no group grant, and a service is what its token says it is
 

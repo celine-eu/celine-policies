@@ -17,10 +17,14 @@ from __future__ import annotations
 
 import logging
 
+# TODO: raise the celine-sdk floor to the release that ships celine.sdk.audit and
+# docs_urls (pyproject.toml), and re-lock, before building an image.
+from celine.sdk.audit import configure_audit
+from celine.sdk.posture import docs_urls
 from fastapi import FastAPI
 
 from celine.policies.cli.keycloak.settings import KeycloakSettings
-from celine.provisioning.config import ProvisioningSettings
+from celine.provisioning.config import SERVICE_NAME, ProvisioningSettings
 from celine.provisioning.routes import get_service, get_settings, router
 from celine.provisioning.service import ProvisioningService
 
@@ -36,6 +40,7 @@ def create_app() -> FastAPI:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+    configure_audit(SERVICE_NAME)
 
     app = FastAPI(
         title="CELINE Provisioning Service",
@@ -55,8 +60,9 @@ def create_app() -> FastAPI:
         # gained `locale`, `invite` and `invitation`. Bumped so the SDK's spec
         # snapshot is a new version rather than an overwrite in place.
         version="1.4.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        # Swagger UI, ReDoc and openapi.json only in dev or with
+        # CELINE_PUBLIC_DOCS=true (REQ-0018).
+        **docs_urls(),
     )
 
     # No CORS middleware, and that is not an omission. A browser never calls

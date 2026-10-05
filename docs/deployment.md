@@ -288,11 +288,14 @@ Environment variables with `CELINE_` prefix:
 | `CELINE_POLICIES_CACHE_TTL` | `300` | Cache TTL (seconds) |
 | `CELINE_POLICIES_CACHE_MAXSIZE` | `10000` | Max cached decisions |
 | `CELINE_MQTT_POLICY_PACKAGE` | `celine.mqtt.acl` | Rego package for ACL |
-| `CELINE_LOG_LEVEL` | `INFO` | Log level |
+| `CELINE_LOG_LEVEL` | `INFO` | Log level. The `celine.audit` logger stays at `INFO` whatever it says |
+| `CELINE_PUBLIC_DOCS` | unset | `true` serves `/docs`, `/redoc` and `/openapi.json` outside dev ([REQ-0018](specifications/services.md)); the provisioning service reads it too |
 
 Outside `CELINE_ENV=dev` the service refuses to start without an audience or on the SDK's
-OIDC defaults, and installs no CORS middleware (its only callers are mosquitto-go-auth and
-health probes). **No MQTT audience exists in the realm yet** — see `.env.example` — so a
+OIDC defaults, and serves no API docs. It installs no CORS middleware in any environment (its
+only callers are mosquitto-go-auth and health probes). A refused `/user` or `/acl` is one JSON
+record on the `celine.audit` logger naming the caller by `sub` and client id; an allowed ACL
+check is not audited ([REQ-0019](specifications/services.md)). **No MQTT audience exists in the realm yet** — see `.env.example` — so a
 hardened deployment needs an audience mapper onto one MQTT audience for every broker client
 first. The image needs the celine-sdk release that ships `celine.sdk.posture`.
 

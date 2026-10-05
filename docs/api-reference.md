@@ -140,11 +140,13 @@ Liveness check. No authentication required.
 
 ## GET /docs
 
-Swagger UI for interactive API exploration.
+Swagger UI for interactive API exploration. Served in `dev`, and elsewhere only with
+`CELINE_PUBLIC_DOCS=true`; otherwise `404`, like `/redoc` and `/openapi.json`
+([REQ-0018](specifications/services.md)). The same holds for the provisioning service.
 
 ## GET /redoc
 
-ReDoc API documentation.
+ReDoc API documentation, under the same rule.
 
 ---
 
@@ -168,7 +170,9 @@ realm. Stateless: a retry is another call, and idempotency comes from the keys.
 ## Authentication
 
 A bearer token, as everywhere else. A token that does not verify is `401`; a token without
-the scope is `403`. `provisioning.admin` satisfies any of the scopes below.
+the scope is `403`. `provisioning.admin` satisfies any of the scopes below. Each of those two
+refusals is one `celine.audit` record with the caller's `sub` and client id, the route's action
+and the community ([REQ-0019](specifications/services.md)).
 
 | Endpoint | Scope |
 |---|---|

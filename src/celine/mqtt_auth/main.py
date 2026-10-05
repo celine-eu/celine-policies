@@ -2,11 +2,14 @@
 
 import logging
 
+# TODO: raise the celine-sdk floor to the release that ships celine.sdk.audit and
+# docs_urls (pyproject.toml), and re-lock, before building an image.
+from celine.sdk.audit import configure_audit
 from celine.sdk.policies import CachedPolicyEngine, DecisionCache, PolicyEngine
+from celine.sdk.posture import docs_urls
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
-from celine.mqtt_auth.config import MqttAuthSettings, check_posture
+from celine.mqtt_auth.config import SERVICE_NAME, MqttAuthSettings, check_posture
 from celine.mqtt_auth.routes import get_engine, get_settings, router
 
 logger = logging.getLogger(__name__)
@@ -28,7 +31,8 @@ def create_app() -> FastAPI:
 
     # Posture first: a hardened deployment with dev settings fails here, before
     # any policy is loaded or request served.
-    guard = check_posture(settings)
+    check_posture(settings)
+    configure_audit(SERVICE_NAME)
     logger.info(
         "Validating MQTT client tokens: issuer=%s audience=%s",
         settings.oidc.base_url,
@@ -78,21 +82,14 @@ def create_app() -> FastAPI:
         title="CELINE MQTT Auth Service",
         description="Authentication and authorization for MQTT broker using policies",
         version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        # Swagger UI, ReDoc and openapi.json only in dev or with
+        # CELINE_PUBLIC_DOCS=true (REQ-0018).
+        **docs_urls(),
     )
 
-    # CORS only in dev. The callers are mosquitto-go-auth's HTTP backend
-    # (/user, /acl, /superuser) and health probes, none of them a browser, so a
-    # hardened deployment answers no cross-origin request at all.
-    if not guard.hardened:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+    # No CORS middleware, in any environment (REQ-0010). The callers are
+    # mosquitto-go-auth's HTTP backend (/user, /acl, /superuser) and health
+    # probes, none of them a browser, so no cross-origin request is answered.
 
     # Store settings and engine in app state
     app.state.settings = settings

@@ -12,7 +12,9 @@ in `test_provisioning_service.py`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import logging
+from dataclasses import dataclass, field
 
 import pytest
 from celine.sdk.settings.models import OidcSettings
@@ -54,6 +56,7 @@ class FakeUser:
 
     sub: str
     scopes: tuple[str, ...]
+    claims: dict = field(default_factory=dict)
 
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes
@@ -138,7 +141,7 @@ def app_with(monkeypatch: pytest.MonkeyPatch):
             def from_token(token, oidc=None):
                 if not valid_token:
                     raise ValueError("signature does not verify")
-                return FakeUser(sub="svc-onboarding", scopes=scopes)
+                return FakeUser(sub="svc-onboarding", scopes=scopes, claims=CALLER_CLAIMS)
 
         monkeypatch.setattr(routes_module, "JwtUser", FakeJwtUser)
 
@@ -150,6 +153,16 @@ def app_with(monkeypatch: pytest.MonkeyPatch):
 
     return build
 
+
+# What a verified token carries besides its scopes. The personal claims must never
+# reach a log line (REQ-0019); only `sub` and `azp` name the caller.
+PERSONAL = {"email": "a.caller@example.org", "name": "Ann Example"}
+CALLER_CLAIMS = {
+    "sub": "svc-onboarding",
+    "azp": "svc-onboarding",
+    "preferred_username": "service-account-svc-onboarding",
+    **PERSONAL,
+}
 
 WRITE = ("provisioning.participants.write",)
 RECONCILE = ("provisioning.reconcile",)
@@ -253,6 +266,85 @@ def test_provisioning_admin_satisfies_every_route(app_with, method, path):
     )
 
     assert response.status_code == 200
+
+
+# --- what a refusal leaves in the log (REQ-0019) --------------------------
+
+
+def _audit(caplog: pytest.LogCaptureFixture) -> list[dict]:
+    return [json.loads(r.getMessage()) for r in caplog.records if r.name == "celine.audit"]
+
+
+@pytest.mark.parametrize(
+    "method,path,scopes,action,route",
+    [
+        ("put", "/participants/example-rec/ex-00001", RECONCILE, "participant.upsert",
+         "/participants/{community}/{key}"),
+        ("patch", "/participants/example-rec/ex-00001", RECONCILE, "participant.update",
+         "/participants/{community}/{key}"),
+        ("post", "/participants/example-rec/ex-00001/invitation", RECONCILE,
+         "participant.invite", "/participants/{community}/{key}/invitation"),
+        ("post", "/participants/example-rec/ex-00001/disable", RECONCILE,
+         "participant.disable", "/participants/{community}/{key}/disable"),
+        ("post", "/reconcile/example-rec", WRITE, "community.reconcile",
+         "/reconcile/{community}"),
+    ],
+)
+def test_a_forbidden_call_is_recorded_with_its_caller(
+    app_with, caplog, method, path, scopes, action, route
+):
+    """@verifies REQ-0019"""
+    caplog.set_level(logging.DEBUG)
+    client, _ = app_with(scopes=scopes)
+    body = BODY if method == "put" else PATCH if method == "patch" else INVITE
+
+    response = getattr(client, method)(
+        path, json=body, headers={"Authorization": "Bearer x", "X-Request-ID": "req-1"}
+    )
+
+    assert response.status_code == 403
+    [record] = _audit(caplog)
+    assert record["event"] == "denied"
+    assert record["service"] == "provisioning"
+    assert (record["sub"], record["client_id"]) == ("svc-onboarding", "svc-onboarding")
+    assert record["service_account"] is True
+    assert record["action"] == action
+    assert record["resource"] == "example-rec"
+    assert record["reason"] == "insufficient_scope"
+    assert record["route"] == route
+    assert record["request_id"] == "req-1"
+    # neither the caller's personal claims, nor the member key, nor the request body
+    for value in (*PERSONAL.values(), "ex-00001", BODY["email"]):
+        assert value not in caplog.text
+
+
+def test_a_token_that_does_not_verify_is_recorded_without_a_caller(app_with, caplog):
+    """@verifies REQ-0019"""
+    client, _ = app_with(scopes=WRITE, valid_token=False)
+
+    response = client.post(
+        "/participants/example-rec/ex-00001/disable", headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 401
+    [record] = _audit(caplog)
+    assert (record["sub"], record["client_id"]) == (None, None)
+    assert (record["action"], record["reason"]) == ("participant.disable", "invalid_token")
+
+
+def test_no_token_and_an_allowed_call_are_not_recorded(app_with, caplog):
+    """A request with no token names nobody; an allowed call is not a refusal.
+
+    @verifies REQ-0019
+    """
+    client, _ = app_with(scopes=WRITE)
+
+    assert client.put("/participants/example-rec/ex-00001", json=BODY).status_code == 401
+    assert client.put(
+        "/participants/example-rec/ex-00001", json=BODY, headers={"Authorization": "Bearer x"}
+    ).status_code == 200
+
+    assert _audit(caplog) == []
 
 
 # --- the upsert -----------------------------------------------------------
@@ -816,6 +908,33 @@ def test_every_route_declares_its_errors_with_the_shared_body():
     # a string, not an enum: a new code must not break a generated client
     assert detail["properties"]["code"]["type"] == "string"
     assert "enum" not in detail["properties"]["code"]
+
+
+DOC_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+def _docs_client():
+    from celine.provisioning.main import create_app
+
+    return TestClient(create_app())
+
+
+def test_outside_dev_the_api_docs_are_not_served():
+    """@verifies REQ-0018"""
+    client = _docs_client()
+
+    for path in DOC_PATHS:
+        assert client.get(path).status_code == 404, path
+
+
+@pytest.mark.parametrize("var,value", [("CELINE_PUBLIC_DOCS", "true"), ("CELINE_ENV", "dev")])
+def test_dev_or_the_opt_in_serves_the_api_docs(monkeypatch, var, value):
+    """@verifies REQ-0018"""
+    monkeypatch.setenv(var, value)
+    client = _docs_client()
+
+    for path in DOC_PATHS:
+        assert client.get(path).status_code == 200, path
 
 
 def test_the_service_exposes_five_routes_and_a_health_check():

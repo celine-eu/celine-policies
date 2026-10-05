@@ -15,6 +15,15 @@ the whole plan: one writer, reached one way.
 `code` is the contract and `message` is a sentence for a person. The code comes
 from the exception (`ProvisioningError.code`), so a route cannot answer a status
 with a code that means something else.
+
+## Every refusal is recorded
+
+A token that does not verify (`401 invalid_token`) and a token without the
+scope (`403 insufficient_scope`) are each one `celine.audit` record
+(`audit_denied`, REQ-0019): the caller's `sub` and client id when the token
+verified, the route's action, the community, and the code. No claim beyond
+those, and not the member key. A request with no token at all names nobody and
+is not recorded.
 """
 
 from __future__ import annotations
@@ -22,7 +31,8 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from celine.sdk.audit import audit_denied
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from celine.provisioning.api_models import (
     DisableResponse,
@@ -40,6 +50,7 @@ from celine.provisioning.config import (
     SCOPE_ADMIN,
     SCOPE_PARTICIPANTS_WRITE,
     SCOPE_RECONCILE,
+    SERVICE_NAME,
     ProvisioningSettings,
 )
 from celine.provisioning.service import (
@@ -130,7 +141,13 @@ def _token(authorization: str | None) -> str:
 
 
 def _require_scope(
-    authorization: str | None, settings: ProvisioningSettings, scope: str
+    authorization: str | None,
+    settings: ProvisioningSettings,
+    scope: str,
+    *,
+    action: str,
+    request: Request,
+    community: str,
 ) -> JwtUser:
     """Verify the token and refuse a caller that does not hold `scope`.
 
@@ -142,6 +159,8 @@ def _require_scope(
     A bad token is `401` and a good token without the scope is `403`. The
     difference is what an operator does next: renew a credential, or ask for a
     grant.
+
+    Both refusals are audited as `action` on `community`; a missing token is not.
     """
     try:
         user = JwtUser.from_token(_token(authorization), oidc=settings.oidc)
@@ -149,10 +168,24 @@ def _require_scope(
         raise
     except Exception as e:
         logger.debug("Token rejected: %s", e)
+        audit_denied(
+            action,
+            resource=community,
+            reason="invalid_token",
+            service=SERVICE_NAME,
+            request=request,
+        )
         raise _error(status.HTTP_401_UNAUTHORIZED, "invalid_token", "invalid token") from e
 
     if not (user.has_scope(scope) or user.has_scope(SCOPE_ADMIN)):
-        logger.warning("Refused %s: holds neither %s nor %s", user.sub, scope, SCOPE_ADMIN)
+        audit_denied(
+            action,
+            caller=user,
+            resource=community,
+            reason="insufficient_scope",
+            service=SERVICE_NAME,
+            request=request,
+        )
         raise _error(
             status.HTTP_403_FORBIDDEN, "insufficient_scope", f"requires scope '{scope}'"
         )
@@ -169,6 +202,7 @@ async def upsert_participant(
     community: str,
     key: str,
     body: ParticipantUpsert,
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     settings: ProvisioningSettings = Depends(get_settings),
     service: ProvisioningService = Depends(get_service),
@@ -190,7 +224,14 @@ async def upsert_participant(
     complete is still a `200`, with the reason in `invitation`, so an approval
     is never blocked by its email. `invite` only ever means an invitation.
     """
-    _require_scope(authorization, settings, SCOPE_PARTICIPANTS_WRITE)
+    _require_scope(
+        authorization,
+        settings,
+        SCOPE_PARTICIPANTS_WRITE,
+        action="participant.upsert",
+        request=request,
+        community=community,
+    )
 
     try:
         result = await service.ensure_participant(
@@ -224,6 +265,7 @@ async def update_participant(
     community: str,
     key: str,
     body: ParticipantUpdate,
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     settings: ProvisioningSettings = Depends(get_settings),
     service: ProvisioningService = Depends(get_service),
@@ -239,7 +281,14 @@ async def update_participant(
     account holds the address, `502 send_failed` when Keycloak did not send the
     link — the account is then put back as it was, so a retry sends.
     """
-    _require_scope(authorization, settings, SCOPE_PARTICIPANTS_WRITE)
+    _require_scope(
+        authorization,
+        settings,
+        SCOPE_PARTICIPANTS_WRITE,
+        action="participant.update",
+        request=request,
+        community=community,
+    )
 
     try:
         result = await service.update_participant(
@@ -274,6 +323,7 @@ async def send_invitation(
     community: str,
     key: str,
     body: InvitationRequest,
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     settings: ProvisioningSettings = Depends(get_settings),
     service: ProvisioningService = Depends(get_service),
@@ -290,7 +340,14 @@ async def send_invitation(
     upsert — and `502` `send_failed` when Keycloak did not send it, which starts
     no cooldown.
     """
-    _require_scope(authorization, settings, SCOPE_PARTICIPANTS_WRITE)
+    _require_scope(
+        authorization,
+        settings,
+        SCOPE_PARTICIPANTS_WRITE,
+        action="participant.invite",
+        request=request,
+        community=community,
+    )
 
     try:
         result = await service.send_invitation(
@@ -317,13 +374,21 @@ async def send_invitation(
 async def disable_participant(
     community: str,
     key: str,
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     settings: ProvisioningSettings = Depends(get_settings),
     service: ProvisioningService = Depends(get_service),
 ) -> DisableResponse:
     """Disables the account. Nothing is deleted and re-enabling is one call —
     what is being revoked is somebody's access to their own energy community."""
-    _require_scope(authorization, settings, SCOPE_PARTICIPANTS_WRITE)
+    _require_scope(
+        authorization,
+        settings,
+        SCOPE_PARTICIPANTS_WRITE,
+        action="participant.disable",
+        request=request,
+        community=community,
+    )
 
     try:
         result = await service.disable(community=community, key=key)
@@ -353,6 +418,7 @@ async def disable_participant(
 )
 async def reconcile(
     community: str,
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
     settings: ProvisioningSettings = Depends(get_settings),
     service: ProvisioningService = Depends(get_service),
@@ -369,7 +435,14 @@ async def reconcile(
     What calls this on a schedule is a deployment concern. The route is the
     entry point and nothing here is a scheduler.
     """
-    _require_scope(authorization, settings, SCOPE_RECONCILE)
+    _require_scope(
+        authorization,
+        settings,
+        SCOPE_RECONCILE,
+        action="community.reconcile",
+        request=request,
+        community=community,
+    )
 
     try:
         result = await service.reconcile(community)
