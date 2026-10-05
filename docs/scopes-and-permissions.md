@@ -91,12 +91,19 @@ scope at all. These scopes exist for the other subject type — service accounts
 | `onboarding.audit.read` | Read a community's onboarding audit trail |
 | `onboarding.export` | Export submissions or consented supply points |
 | `onboarding.members.invite` | Email a registry member an invitation or a password reset, on behalf of the manager whose token is forwarded |
+| `onboarding.members.release` | Release a registry member from their REC, on behalf of the REC admin whose token is forwarded |
 
 **`onboarding.members.invite` is delegated, and useless alone.** Onboarding allows it only to a
 service that also forwards a manager's verified access token (`X-Acting-User-Token`), and only
 when that manager holds `admins` or `managers` on the REC. No service sends on its own, not even
 one holding `onboarding.admin`. The scope is held by `svc-community` alone, as an optional scope;
 see [svc-community](#svc-community).
+
+**`onboarding.members.release` is delegated in the same way**, and onboarding allows it only
+when the forwarded token belongs to a REC **admin** (org group `admins`) or to the platform
+admin (realm role `platform-admin`). A manager cannot release. The release withdraws the
+member's grants, revokes their credential, moves their login out of the REC's organization
+and sets the registry member inactive. `svc-community` alone holds it, as an optional scope.
 
 `onboarding.submissions.purge` and `onboarding.enablement.revoke` are deliberately
 **not** covered by `onboarding.submissions.review`, mirroring
@@ -265,6 +272,7 @@ default_scopes:
   - nudging.analytics.read
 optional_scopes:
   - onboarding.members.invite           # "Send invitation" / "Reset password", through onboarding
+  - onboarding.members.release          # "Release member" (REC admins), through onboarding
   - rec-registry.assets.write           # attach or detach a member's meter
   - rec-registry.members.profile.write  # change a member's role and area
   - rec-registry.members.role.write     # change a member's role (its own route)

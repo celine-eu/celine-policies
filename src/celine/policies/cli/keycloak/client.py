@@ -3031,3 +3031,84 @@ class KeycloakAdminClient:
             return True
         except KeycloakConflictError:
             return False
+
+    # -------------------------------------------------------------------------
+    # Leaving an organization (a member released by their REC)
+    # -------------------------------------------------------------------------
+
+    async def get_organization_member(
+        self, org_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        """The member representation, with its `membershipType`, or None.
+
+        `MANAGED` members are owned by the organization: Keycloak **deletes the
+        account** when one is removed from it. `UNMANAGED` (every member this
+        platform adds) only loses the membership.
+        """
+        try:
+            return await self._get(f"/organizations/{org_id}/members/{user_id}")
+        except KeycloakNotFoundError:
+            return None
+
+    async def get_user_organizations(self, user_id: str) -> list[dict[str, Any]]:
+        """Every organization the user is a member of, with its attributes.
+
+        `briefRepresentation=false`, or the `type` attribute that tells a REC
+        from an operator is not in the answer.
+        """
+        return (
+            await self._get(
+                f"/organizations/members/{user_id}/organizations",
+                params={"briefRepresentation": "false"},
+            )
+            or []
+        )
+
+    async def get_member_org_groups(
+        self, org_id: str, user_id: str
+    ) -> list[dict[str, Any]]:
+        """The organization's groups this member is in; empty for a non-member."""
+        try:
+            return (
+                await self._get(f"/organizations/{org_id}/members/{user_id}/groups")
+                or []
+            )
+        except KeycloakNotFoundError:
+            return []
+
+    async def remove_user_from_org_group(
+        self, org_id: str, group_id: str, user_id: str
+    ) -> bool:
+        """Take a member out of one organization group. Returns whether it changed."""
+        try:
+            await self._delete(
+                f"/organizations/{org_id}/groups/{group_id}/members/{user_id}"
+            )
+        except KeycloakNotFoundError:
+            return False
+        logger.info("Removed user %s from org group %s/%s", user_id, org_id, group_id)
+        return True
+
+    async def remove_user_from_organization(self, org_id: str, user_id: str) -> bool:
+        """Remove a member from an organization. Returns whether it changed.
+
+        **Deletes a MANAGED member's account** — that is Keycloak's semantics for
+        this call — so callers check `get_organization_member` first. Measured on
+        26.7.3 (2026-10-05): an UNMANAGED member keeps the account and loses the
+        organization's groups with the membership.
+        """
+        try:
+            await self._delete(f"/organizations/{org_id}/members/{user_id}")
+        except KeycloakNotFoundError:
+            return False
+        logger.info("Removed user %s from organization %s", user_id, org_id)
+        return True
+
+    async def logout_user(self, user_id: str) -> None:
+        """End every session of the user; their refresh tokens stop working.
+
+        An access token already issued stays valid until it expires: Keycloak
+        cannot recall it. `manage-users` is enough.
+        """
+        await self._post(f"/users/{user_id}/logout")
+        logger.info("Logged out every session of user %s", user_id)

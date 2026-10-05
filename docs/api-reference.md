@@ -192,7 +192,9 @@ It holds `provisioning.participants.write` by default and `provisioning.reconcil
 optional scope, which its registry sync requests only for the reconcile call.
 A community manager's "Send invitation" and "Reset password" on the dashboard reach
 `POST …/invitation` through onboarding's member-keyed routes. `svc-community` holds
-`onboarding.members.invite` for that, never a provisioning scope.
+`onboarding.members.invite` for that, never a provisioning scope. A REC admin's "Release
+member" reaches `POST …/disable` the same way, through onboarding's release route
+(`onboarding.members.release`).
 
 ## PUT /participants/{community}/{key}
 
@@ -229,7 +231,8 @@ which is where an address somebody logs in with belongs.
   "username": "a.person@example.org",
   "created": true,
   "invitation": "sent",
-  "invited": true
+  "invited": true,
+  "reenabled": false
 }
 ```
 
@@ -239,8 +242,20 @@ computed — an account that already existed may authenticate under a convention
 chose — and it is the value that becomes the registry's `Member.user_id`. Note the name
 collision: the registry's `user_id` column holds a *username*.
 
-Always `200`. A create and a no-op are the same request with the same meaning; `created`
-says which happened.
+A create and a no-op are the same request with the same meaning; `created` says which
+happened.
+
+**One person, one REC** (since 1.5.0). An existing account that is still a member of
+**another** organization typed `rec` is refused with `409 member_of_another_community`
+before anything is written. The answer does not name the other community; the service log
+does. That REC releases the member first (`POST …/disable`). An organization of another
+type, such as a grid operator, does not count.
+
+**A released account is enabled again** (since 1.5.0). If the account is disabled and this
+call adds it to the organization, the call enables it and answers `reenabled: true`. This is
+a member that another REC released and that joins this one. An account that is disabled
+while already in the organization (an older revocation, or an operator's lock) stays
+disabled, and its invitation answers `account_disabled`.
 
 **`invite` never fails the upsert.** What happened is in `invitation`, a reason code to show
 the operator who approved, and `invited` is true only for `sent`:
@@ -252,7 +267,7 @@ the operator who approved, and `invited` is true only for `sent`:
 | `has_password` | The account already has a password; nothing was sent. A retry after the person set their password lands here |
 | `no_email` | The account has no email address, in every email mode; nothing was sent. Keycloak sends to the account's own address, so the body's `email` does not stand in for it. Typically an account `sync-users` made from the registry, in local development |
 | `not_on_dev_list` | `CELINE_PROVISIONING_EMAIL_MODE=dev` and the address is not on `EMAIL_DEV_RECIPIENTS`; a `WARNING` names the member |
-| `account_disabled` | The account is disabled; nothing was sent, and it is not re-enabled |
+| `account_disabled` | The account is disabled and was already in the organization; nothing was sent, and it is not re-enabled |
 | `cooldown` | The account was emailed within `CELINE_PROVISIONING_INVITE_COOLDOWN`, by an upsert or by `…/invitation`; nothing was sent. Ask again after the cooldown |
 | `send_failed` | Keycloak was asked and did not send it — an SMTP failure (Keycloak's `500 Failed to send execute actions email`), a refusal such as an unregistered redirect URI, or a timeout. **No cooldown starts**, so a retry may send. The upsert itself succeeded |
 
@@ -414,20 +429,50 @@ The checks run in this order, and the first that applies is the answer: `communi
 
 ## POST /participants/{community}/{key}/disable
 
-Revoke access. The account, its memberships and everything keyed on its uuid survive —
-disabling is not deletion, and reversing it is one call.
+Release the member's login from the community. The account is **moved, not closed**: it is
+disabled, it leaves the community's organization, and the next REC's upsert enables it again.
+The steps run in an order that a retry can resume:
+
+1. **disable** the account, so nobody signs in while the rest runs;
+2. **leave** the community's organization and its org groups (`admins`, `managers`, …),
+   so the token carries no `organization` claim for this community any more;
+3. **log out** every session, so a refresh token issued before the release stops working.
+   An access token that was already issued stays valid until it expires (Keycloak cannot
+   recall one).
+
+Nothing else changes: the account, any other organization it belongs to (an operator's,
+for example) and everything keyed on its uuid all stay. Keycloak 26.7.3 also drops the
+org-group memberships when the membership goes (measured 2026-10-05). The groups are removed
+one by one first anyway, and the response names them.
 
 **Response (200):**
 
 ```json
-{"user_id": "3f1c…", "username": "ex-00001", "changed": true}
+{
+  "user_id": "3f1c…",
+  "username": "ex-00001",
+  "changed": true,
+  "disabled_now": true,
+  "org_left": true,
+  "org_groups_left": ["viewers"],
+  "sessions_logged_out": true
+}
 ```
 
-`changed: false` means the revocation was already in force, which must not read as one
-that just happened.
+`changed: false` means the release was already in force: the account was disabled and was
+not in the organization. That must not read as a release that just happened.
 
 `404` with `community_not_found`, `member_not_found` or `account_not_found`, as for the
-invitation.
+invitation. Unlike the other member routes, this one resolves the member **whatever its
+registry status**. Releasing only takes access away, and a member set inactive before its
+login was released (an older revocation, or a step that failed) must still be releasable,
+or the next REC refuses the person as still belonging here. `409 managed_membership`: the
+account is a MANAGED member of the organization, and Keycloak would delete it on leaving,
+so it is refused and nothing is removed.
+
+`svc-provisioning`'s existing `manage-users`, `manage-realm` and `manage-organizations`
+cover all three steps. Measured on a throwaway realm: `manage-users` alone answers `403` to
+the organization calls.
 
 ## POST /reconcile/{community}
 

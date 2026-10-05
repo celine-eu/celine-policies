@@ -37,7 +37,9 @@ from celine.provisioning.service import (
     HasPassword,
     InvitationCooldown,
     InvitationResult,
+    ManagedMember,
     MemberNotFound,
+    MemberOfAnotherCommunity,
     NoEmail,
     NoPassword,
     ProvisioningError,
@@ -118,7 +120,15 @@ class FakeService:
         self.calls.append(("disable", community, key))
         if self.raises:
             raise self.raises
-        return DisableResult(username="ex-00001", keycloak_id="uuid-1", changed=True)
+        return DisableResult(
+            username="ex-00001",
+            keycloak_id="uuid-1",
+            changed=True,
+            disabled_now=True,
+            org_left=True,
+            org_groups_left=("viewers",),
+            sessions_logged_out=True,
+        )
 
     async def reconcile(self, community):
         self.calls.append(("reconcile", community))
@@ -366,6 +376,7 @@ def test_the_upsert_returns_the_uuid_under_the_name_onboarding_stores(app_with):
         "created": True,
         "invitation": "not_requested",
         "invited": False,
+        "reenabled": False,
     }
 
 
@@ -883,17 +894,18 @@ def test_the_invitation_route_requires_an_intent_body():
         "invitation",
         "password_reset",
     ]
-    # 1.4.0 added `PATCH /participants/{community}/{key}`; this route is as 1.3.0 left it
-    assert spec["info"]["version"] == "1.4.0"
+    # 1.4.0 added `PATCH /participants/{community}/{key}` and 1.5.0 the release
+    # fields; this route is as 1.3.0 left it
+    assert spec["info"]["version"] == "1.5.0"
 
 
 def test_every_route_declares_its_errors_with_the_shared_body():
     spec = _openapi()
     expected = {
-        ("/participants/{community}/{key}", "put"): {"401", "403", "502"},
+        ("/participants/{community}/{key}", "put"): {"401", "403", "409", "502"},
         ("/participants/{community}/{key}", "patch"): {"401", "403", "404", "409", "502"},
         ("/participants/{community}/{key}/invitation", "post"): {"401", "403", "404", "409", "429", "502"},
-        ("/participants/{community}/{key}/disable", "post"): {"401", "403", "404", "502"},
+        ("/participants/{community}/{key}/disable", "post"): {"401", "403", "404", "409", "502"},
         ("/reconcile/{community}", "post"): {"401", "403", "404", "502"},
     }
 
@@ -1188,3 +1200,59 @@ def test_a_token_for_another_audience_is_refused_when_the_audience_is_checked(
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "invalid_token"
     assert kc.opened is False
+
+
+# --- the release, and the next REC's join ------------------------------------
+
+
+def test_the_release_says_what_it_did(app_with):
+    client, _ = app_with(scopes=WRITE)
+
+    response = client.post(
+        "/participants/example-rec/ex-00001/disable", headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "user_id": "uuid-1",
+        "username": "ex-00001",
+        "changed": True,
+        "disabled_now": True,
+        "org_left": True,
+        "org_groups_left": ["viewers"],
+        "sessions_logged_out": True,
+    }
+
+
+def test_a_managed_membership_is_409_on_the_release(app_with):
+    client, _ = app_with(
+        scopes=WRITE, service=FakeService(raises=ManagedMember("example-rec/x is managed"))
+    )
+
+    response = client.post(
+        "/participants/example-rec/x/disable", headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "managed_membership"
+
+
+def test_an_account_still_in_another_rec_is_409_on_the_upsert(app_with):
+    client, service = app_with(
+        scopes=WRITE,
+        service=FakeService(
+            raises=MemberOfAnotherCommunity("example-rec/x is in another community")
+        ),
+    )
+
+    response = client.put(
+        "/participants/example-rec/x", json=BODY, headers={"Authorization": "Bearer x"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": {
+            "code": "member_of_another_community",
+            "message": "example-rec/x is in another community",
+        }
+    }

@@ -35,7 +35,9 @@ from celine.provisioning.service import (
     EmailTaken,
     HasPassword,
     InvitationCooldown,
+    ManagedMember,
     MemberNotFound,
+    MemberOfAnotherCommunity,
     NoEmail,
     NoPassword,
     ProvisioningError,
@@ -73,13 +75,20 @@ class FakeKeycloak:
         send_error: Exception | None = None,
         send_yields: bool = False,
         update_error: Exception | None = None,
+        org_types: dict[str, str] | None = None,
+        managed: set[tuple[str, str]] | None = None,
     ):
         self.users_by_email = users_by_email or {}
         self.users_by_username = users_by_username or {}
         self.org_members = organization_members or set()
-        #: (org_id, group_id, user_id). The fake has no call that removes one:
-        #: a service that tried would fail on the missing method.
+        #: (org_id, group_id, user_id). Removed only by a release.
         self.org_group_members = org_group_members or set()
+        #: alias -> type, for organizations that exist before the call;
+        #: `ensure_organization` adds its own as a REC.
+        self.org_types: dict[str, str] = dict(org_types or {})
+        #: (org_id, user_id) of MANAGED memberships
+        self.managed = managed or set()
+        self.logouts: list[str] = []
         #: when set, `ensure_user_in_organization` reports success and the
         #: membership does not stick — the failure the sweep's assertion exists
         #: to catch.
@@ -116,7 +125,57 @@ class FakeKeycloak:
 
     async def ensure_organization(self, *, alias, name, description, attributes):
         self.calls.append(("ensure_organization", alias))
+        self.org_types.setdefault(alias, (attributes or {}).get("type", ["rec"])[0])
         return f"org-{alias}", False
+
+    async def get_organization_by_alias(self, alias):
+        if alias not in self.org_types:
+            return None
+        return {"id": f"org-{alias}", "alias": alias}
+
+    async def get_user_organizations(self, user_id):
+        self.calls.append(("get_user_organizations", user_id))
+        return [
+            {"id": org, "alias": org.removeprefix("org-"),
+             "attributes": {"type": [self.org_types.get(org.removeprefix("org-"), "rec")]}}
+            for org, uid in sorted(self.org_members)
+            if uid == user_id
+        ]
+
+    async def get_organization_member(self, org_id, user_id):
+        if (org_id, user_id) not in self.org_members:
+            return None
+        kind = "MANAGED" if (org_id, user_id) in self.managed else "UNMANAGED"
+        return {"id": user_id, "membershipType": kind}
+
+    async def get_member_org_groups(self, org_id, user_id):
+        return [
+            {"id": gid, "name": gid.rsplit("-", 1)[-1]}
+            for org, gid, uid in sorted(self.org_group_members)
+            if org == org_id and uid == user_id
+        ]
+
+    async def remove_user_from_org_group(self, org_id, group_id, user_id):
+        self.calls.append(("remove_user_from_org_group", org_id, group_id, user_id))
+        if (org_id, group_id, user_id) not in self.org_group_members:
+            return False
+        self.org_group_members.discard((org_id, group_id, user_id))
+        return True
+
+    async def remove_user_from_organization(self, org_id, user_id):
+        self.calls.append(("remove_user_from_organization", org_id, user_id))
+        if (org_id, user_id) not in self.org_members:
+            return False
+        self.org_members.discard((org_id, user_id))
+        # Keycloak drops the org groups with the membership.
+        self.org_group_members = {
+            m for m in self.org_group_members if not (m[0] == org_id and m[2] == user_id)
+        }
+        return True
+
+    async def logout_user(self, user_id):
+        self.calls.append(("logout_user", user_id))
+        self.logouts.append(user_id)
 
     async def ensure_org_role(self, org_id, role_name):
         pass
@@ -154,6 +213,8 @@ class FakeKeycloak:
 
     async def ensure_user_in_organization(self, org_id, user_id):
         self.calls.append(("ensure_user_in_organization", org_id, user_id))
+        if (org_id, user_id) in self.org_members:
+            return False
         if not self.blackhole:
             self.org_members.add((org_id, user_id))
         return True
@@ -249,6 +310,7 @@ class FakeKeycloak:
         )
 
     async def set_user_enabled(self, user_id, enabled):
+        self.calls.append(("set_user_enabled", user_id, enabled))
         user = await self.get_user_by_id(user_id)
         if user is None:
             raise AssertionError(f"no such user {user_id}")
@@ -560,9 +622,15 @@ async def test_a_retry_on_an_account_that_has_a_password_sends_nothing(keycloak)
 
 async def test_a_disabled_account_answers_with_the_reason_and_is_not_emailed(keycloak):
     """O3 (requester, 2026-09-14): the upsert does not fail, and it does not
-    re-enable the account either."""
+    re-enable an account disabled while it is in the community's organization
+    (an older revocation, an operator's lock). A released account, outside
+    every REC, is the other case: see the re-enable tests below."""
     user = {"id": "u1", "username": "p@example.org", "enabled": False, "email": "p@example.org"}
-    kc = keycloak(users_by_email={"p@example.org": user}, users_by_username={"p@example.org": user})
+    kc = keycloak(
+        users_by_email={"p@example.org": user},
+        users_by_username={"p@example.org": user},
+        organization_members={("org-example-rec", "u1")},
+    )
 
     result = await a_service().ensure_participant(
         community="example-rec", key="k", email="p@example.org", invite=True
@@ -1822,3 +1890,231 @@ async def test_an_update_logs_field_names_and_never_values(keycloak, registry, c
     assert "first_name" in text and "email" in text
     assert "Anna" not in text
     assert "new@example.org" not in text
+
+
+# --- the release: the login leaves the community, and is moved, not closed ---
+#
+# Requester, 2026-10-05: a REC admin releases a member; the account leaves the
+# REC's organization and its groups, its sessions end, and it stays disabled
+# until the next REC's upsert files it there and enables it again.
+
+
+def _released_world(**kwargs):
+    """ex-00001 as a participant of example-rec, also a member of an operator."""
+    user = {"id": "u1", "username": "ex-00001", "enabled": True, "email": "one@example.org"}
+    defaults = dict(
+        users_by_username={"ex-00001": user},
+        users_by_email={"one@example.org": user},
+        organization_members={("org-example-rec", "u1"), ("org-example-dso", "u1")},
+        org_group_members={
+            ("org-example-rec", "grp-org-example-rec-viewers", "u1"),
+            ("org-example-rec", "grp-org-example-rec-admins", "u1"),
+        },
+        org_types={"example-rec": "rec", "example-dso": "dso"},
+    )
+    defaults.update(kwargs)
+    return defaults
+
+
+async def test_a_release_disables_leaves_the_organization_and_its_groups_and_logs_out(
+    keycloak, registry
+):
+    kc = keycloak(**_released_world())
+    registry()
+
+    result = await a_service().disable(community="example-rec", key="ex-00001")
+
+    assert result.changed and result.disabled_now and result.org_left
+    assert sorted(result.org_groups_left) == ["admins", "viewers"]
+    assert result.sessions_logged_out
+    assert kc.enabled_changes == [("u1", False)]
+    assert ("org-example-rec", "u1") not in kc.org_members
+    assert not any(m[0] == "org-example-rec" for m in kc.org_group_members)
+    assert kc.logouts == ["u1"]
+    # Nothing else is touched: the account and an operator's membership stay.
+    assert "ex-00001" in kc.users_by_username
+    assert ("org-example-dso", "u1") in kc.org_members
+
+
+async def test_a_release_runs_in_the_order_a_retry_can_resume(keycloak, registry):
+    """Disabled first, so nothing signs in while the rest runs; logged out last,
+    so no session outlives the membership."""
+    kc = keycloak(**_released_world())
+    registry()
+
+    await a_service().disable(community="example-rec", key="ex-00001")
+
+    names = [c[0] for c in kc.calls]
+    assert names.index("set_user_enabled") < names.index("remove_user_from_org_group")
+    assert names.index("remove_user_from_org_group") < names.index("remove_user_from_organization")
+    assert names.index("remove_user_from_organization") < names.index("logout_user")
+    assert names[-1] == "logout_user"
+
+
+async def test_releasing_twice_changes_nothing_and_still_ends_sessions(keycloak, registry):
+    kc = keycloak(**_released_world())
+    registry()
+    service = a_service()
+
+    await service.disable(community="example-rec", key="ex-00001")
+    again = await service.disable(community="example-rec", key="ex-00001")
+
+    assert not again.changed
+    assert not again.disabled_now and not again.org_left and again.org_groups_left == ()
+    assert kc.logouts == ["u1", "u1"]
+
+
+async def test_a_release_of_an_account_disabled_by_an_older_revocation_still_moves_it(
+    keycloak, registry
+):
+    """The old revocation disabled and kept the organization. Releasing it now
+    finishes the job and says so: `changed`, but not `disabled_now`."""
+    world = _released_world()
+    world["users_by_username"]["ex-00001"]["enabled"] = False
+    kc = keycloak(**world)
+    registry()
+
+    result = await a_service().disable(community="example-rec", key="ex-00001")
+
+    assert result.changed and result.org_left and not result.disabled_now
+    assert ("org-example-rec", "u1") not in kc.org_members
+
+
+async def test_a_release_where_the_organization_does_not_exist_still_disables_and_logs_out(
+    keycloak, registry
+):
+    kc = keycloak(**_released_world(org_types={}, organization_members=set(), org_group_members=set()))
+    registry()
+
+    result = await a_service().disable(community="example-rec", key="ex-00001")
+
+    assert result.disabled_now and not result.org_left
+    assert kc.logouts == ["u1"]
+
+
+async def test_a_managed_membership_is_refused_and_nothing_is_removed(keycloak, registry):
+    """Keycloak deletes a MANAGED member's account when it leaves the
+    organization. The release destroys nothing, so it refuses."""
+    kc = keycloak(**_released_world(managed={("org-example-rec", "u1")}))
+    registry()
+
+    with pytest.raises(ManagedMember) as excinfo:
+        await a_service().disable(community="example-rec", key="ex-00001")
+
+    assert excinfo.value.code == "managed_membership"
+    assert ("org-example-rec", "u1") in kc.org_members
+    assert not any(c[0] == "remove_user_from_organization" for c in kc.calls)
+
+
+# --- the next REC's join -------------------------------------------------------
+
+
+async def test_a_released_account_joining_another_rec_is_enabled_and_filed_there(keycloak):
+    """The move's second half: found by its address, outside every REC, disabled;
+    the upsert files it into the new REC and enables it again."""
+    user = {"id": "u1", "username": "ex-00001", "enabled": False, "email": "one@example.org"}
+    kc = keycloak(
+        users_by_username={"ex-00001": user},
+        users_by_email={"one@example.org": user},
+        organization_members={("org-example-dso", "u1")},
+        org_types={"example-dso": "dso"},
+    )
+
+    result = await a_service().ensure_participant(
+        community="example-rec-b", key="ex-00009", email="one@example.org", invite=True
+    )
+
+    assert result.reenabled
+    assert not result.created and result.username == "ex-00001"
+    assert user["enabled"] is True
+    assert ("org-example-rec-b", "u1") in kc.org_members
+    # Enabled before the invitation is decided, so a person with no password yet
+    # is invited rather than told `account_disabled`.
+    assert result.invitation == "sent"
+
+
+async def test_an_account_still_in_another_rec_is_refused_and_nothing_is_written(
+    keycloak, caplog
+):
+    user = {"id": "u1", "username": "ex-00001", "enabled": True, "email": "one@example.org"}
+    kc = keycloak(
+        users_by_username={"ex-00001": user},
+        users_by_email={"one@example.org": user},
+        organization_members={("org-example-rec-a", "u1")},
+        org_types={"example-rec-a": "rec"},
+    )
+
+    with caplog.at_level("WARNING"), pytest.raises(MemberOfAnotherCommunity) as excinfo:
+        await a_service().ensure_participant(
+            community="example-rec-b", key="ex-00009", email="one@example.org"
+        )
+
+    assert excinfo.value.code == "member_of_another_community"
+    # The answer reaches the asking REC's operator: the other REC is not named
+    # there, only in the platform's log.
+    assert "example-rec-a" not in str(excinfo.value)
+    assert "example-rec-a" in caplog.text
+    assert [c[0] for c in kc.calls if c[0].startswith(("ensure_", "set_"))] == []
+    assert kc.enabled_changes == []
+
+
+async def test_an_operator_organization_is_not_another_rec(keycloak):
+    """Only organizations typed `rec` count: a member who also works for the
+    grid operator joins a REC as before."""
+    user = {"id": "u1", "username": "ex-00001", "enabled": True, "email": "one@example.org"}
+    kc = keycloak(
+        users_by_username={"ex-00001": user},
+        users_by_email={"one@example.org": user},
+        organization_members={("org-example-dso", "u1")},
+        org_types={"example-dso": "dso"},
+    )
+
+    result = await a_service().ensure_participant(
+        community="example-rec", key="ex-00009", email="one@example.org"
+    )
+
+    assert not result.reenabled
+    assert ("org-example-rec", "u1") in kc.org_members
+
+
+async def test_rejoining_the_same_rec_is_not_another_community(keycloak):
+    """A re-approval in the community the account is already in."""
+    user = {"id": "u1", "username": "ex-00001", "enabled": True, "email": "one@example.org"}
+    keycloak(
+        users_by_username={"ex-00001": user},
+        users_by_email={"one@example.org": user},
+        organization_members={("org-example-rec", "u1")},
+        org_types={"example-rec": "rec"},
+    )
+
+    result = await a_service().ensure_participant(
+        community="example-rec", key="ex-00001", email="one@example.org"
+    )
+
+    assert result.username == "ex-00001"
+
+
+async def test_a_member_already_inactive_in_the_registry_is_still_released(keycloak, registry):
+    """An older revocation set the member inactive after disabling the login, and
+    left the account in the organization. The release resolves it anyway: it only
+    takes access away, and the next REC would otherwise refuse the person."""
+    world = _released_world()
+    world["users_by_username"]["ex-00003"] = world["users_by_username"].pop("ex-00001")
+    world["users_by_username"]["ex-00003"]["username"] = "ex-00003"
+    kc = keycloak(**world)
+    registry()
+
+    result = await a_service().disable(community="example-rec", key="ex-00003")
+
+    assert result.org_left
+    assert ("org-example-rec", "u1") not in kc.org_members
+
+
+async def test_every_other_lifecycle_call_still_resolves_active_members_only(keycloak, registry):
+    keycloak(users_by_username=_member("u3", "ex-00003"))
+    registry()
+
+    with pytest.raises(MemberNotFound):
+        await a_service().update_participant(
+            community="example-rec", key="ex-00003", first_name="Three"
+        )

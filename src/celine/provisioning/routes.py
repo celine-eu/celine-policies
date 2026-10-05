@@ -110,7 +110,9 @@ def _responses(*codes: int) -> dict[int | str, dict]:
         403: "The token lacks the scope (`insufficient_scope`)",
         404: "`community_not_found`, `member_not_found` or `account_not_found`",
         409: (
-            "The account's state rules it out: `account_disabled`; on the "
+            "The account's state rules it out: on the upsert "
+            "`member_of_another_community` (still in another REC's organization); "
+            "on the release `managed_membership`; `account_disabled`; on the "
             "invitation route also `has_password` (intent `invitation`), "
             "`no_password` (intent `password_reset`) and `no_email`; on the "
             "update `email_taken`"
@@ -195,7 +197,7 @@ def _require_scope(
 @router.put(
     "/participants/{community}/{key}",
     response_model=ParticipantResponse,
-    responses=_responses(401, 403, 502),
+    responses=_responses(401, 403, 409, 502),
     summary="Ensure a participant's account, organization and org group",
 )
 async def upsert_participant(
@@ -223,6 +225,11 @@ async def upsert_participant(
     cooldown, an address outside the dev list or a send Keycloak did not
     complete is still a `200`, with the reason in `invitation`, so an approval
     is never blocked by its email. `invite` only ever means an invitation.
+
+    **One person, one REC.** An account still in another REC's organization is
+    `409 member_of_another_community`, before anything is written; the other
+    community is not named. A disabled account that this call files into the
+    organization is enabled again (`reenabled`): a member another REC released.
     """
     _require_scope(
         authorization,
@@ -252,6 +259,7 @@ async def upsert_participant(
         created=result.created,
         invitation=result.invitation,
         invited=result.invited,
+        reenabled=result.reenabled,
     )
 
 
@@ -368,8 +376,8 @@ async def send_invitation(
 @router.post(
     "/participants/{community}/{key}/disable",
     response_model=DisableResponse,
-    responses=_responses(401, 403, 404, 502),
-    summary="Revoke a member's access",
+    responses=_responses(401, 403, 404, 409, 502),
+    summary="Release a member's login from the community",
 )
 async def disable_participant(
     community: str,
@@ -379,8 +387,10 @@ async def disable_participant(
     settings: ProvisioningSettings = Depends(get_settings),
     service: ProvisioningService = Depends(get_service),
 ) -> DisableResponse:
-    """Disables the account. Nothing is deleted and re-enabling is one call —
-    what is being revoked is somebody's access to their own energy community."""
+    """Disables the account, removes it from the community's organization and
+    its org groups, and ends every session. Nothing is deleted: the next REC's
+    upsert enables the same account again. Idempotent; `409 managed_membership`
+    for an account Keycloak would delete on leaving."""
     _require_scope(
         authorization,
         settings,
@@ -399,6 +409,10 @@ async def disable_participant(
         user_id=result.keycloak_id,
         username=result.username,
         changed=result.changed,
+        disabled_now=result.disabled_now,
+        org_left=result.org_left,
+        org_groups_left=list(result.org_groups_left),
+        sessions_logged_out=result.sessions_logged_out,
     )
 
 

@@ -73,7 +73,7 @@ from celine.provisioning.invitation import (
     has_address,
 )
 from celine.provisioning.models import OrganizationSpec
-from celine.provisioning.provisioner import Provisioner
+from celine.provisioning.provisioner import ManagedMembership, Provisioner
 from celine.provisioning.registry import (
     RegistryCommunityNotFound,
     RegistryError,
@@ -143,6 +143,26 @@ class AccountDisabled(Conflict):
     """
 
     code = "account_disabled"
+
+
+class MemberOfAnotherCommunity(Conflict):
+    """The account is still in another REC's organization (requester,
+    2026-10-05: a person cannot be a member of two RECs).
+
+    The upsert refuses before it writes anything, and **does not name the other
+    REC**: this answer reaches the operator of the community asking, and which
+    community somebody belongs to is not theirs to learn. The other REC releases
+    the member first. A `409`.
+    """
+
+    code = "member_of_another_community"
+
+
+class ManagedMember(Conflict):
+    """The account is a MANAGED member of the organization, which Keycloak
+    deletes on leaving. Refused rather than destroyed. A `409`."""
+
+    code = "managed_membership"
 
 
 class HasPassword(Conflict):
@@ -230,6 +250,10 @@ class UpsertResult:
     keycloak_id: str
     created: bool
     invitation: InvitationOutcome = "not_requested"
+    #: The account was disabled and this upsert enabled it again, because it
+    #: was filed into an organization it was not in: a member released by one
+    #: REC joining the next.
+    reenabled: bool = False
 
     @property
     def invited(self) -> bool:
@@ -247,9 +271,16 @@ class InvitationResult:
 
 @dataclass(frozen=True)
 class DisableResult:
+    """What a release did. `changed` is whether anything did change: the
+    account disabled now, or a membership removed now."""
+
     username: str
     keycloak_id: str
     changed: bool
+    disabled_now: bool = False
+    org_left: bool = False
+    org_groups_left: tuple[str, ...] = ()
+    sessions_logged_out: bool = False
 
 
 @dataclass(frozen=True)
@@ -363,12 +394,35 @@ class ProvisioningService:
             await kc.authenticate()
             provisioner = Provisioner(kc)
 
+            existing = await provisioner.find_by_email(email)
+            username = existing["username"] if existing else _username_from(email)
+
+            if existing:
+                # Before anything is written: one person, one REC.
+                others = [
+                    alias
+                    for alias in await provisioner.rec_organizations(existing["id"])
+                    if alias != community
+                ]
+                if others:
+                    # The other REC is named in the log, which stays with the
+                    # platform operator, and never in the answer.
+                    logger.warning(
+                        "Not provisioning %s/%s: account %s is still in REC "
+                        "organization(s) %s",
+                        community,
+                        key,
+                        existing["id"],
+                        ", ".join(sorted(others)),
+                    )
+                    raise MemberOfAnotherCommunity(
+                        f"{community}/{key}: the account for this address is still a "
+                        f"member of another community, which has to release it first"
+                    )
+
             outcome = await provisioner.ensure_community(
                 OrganizationSpec(alias=community, name=community)
             )
-
-            existing = await provisioner.find_by_email(email)
-            username = existing["username"] if existing else _username_from(email)
 
             participant = await provisioner.ensure_participant(
                 username=username,
@@ -380,12 +434,26 @@ class ProvisioningService:
                 locale=locale,
             )
 
+            # The move's second half (requester, 2026-10-05): an account released
+            # by one REC is disabled and outside every REC; filed into this one it
+            # signs in again. Only when this call joined it to the organization —
+            # an account disabled while still in it (an older revocation, an
+            # operator's lock) stays as it is, which is O3 (2026-09-14).
+            reenabled = False
+            if (
+                existing
+                and not existing.get("enabled", True)
+                and participant.org_joined
+            ):
+                reenabled = await provisioner.set_enabled(participant.keycloak_id, True)
+
             logger.info(
-                "Provisioned %s/%s as '%s' (%s)",
+                "Provisioned %s/%s as '%s' (%s%s)",
                 community,
                 key,
                 participant.username,
                 "created" if participant.created else "existing",
+                ", re-enabled" if reenabled else "",
             )
 
             invitation: InvitationOutcome = "not_requested"
@@ -403,6 +471,7 @@ class ProvisioningService:
                 keycloak_id=participant.keycloak_id,
                 created=participant.created,
                 invitation=invitation,
+                reenabled=reenabled,
             )
 
     async def _invite_on_upsert(
@@ -603,8 +672,29 @@ class ProvisioningService:
         return int(remaining) + 1 if remaining > 0 else 0
 
     async def disable(self, *, community: str, key: str) -> DisableResult:
-        """Revoke a member's access without destroying anything."""
-        username = await self._username_of(community, key)
+        """Release a member's login from this community, destroying nothing.
+
+        Three things, in an order a retry can resume (requester, 2026-10-05: the
+        account is **moved**, not closed):
+
+        1. **disable** the account, first, so nothing signs in while the rest runs;
+        2. **leave the community's organization** and its org groups, so the
+           token carries no `organization` claim for it and the next REC's
+           upsert files the same account cleanly;
+        3. **log out every session**, so a refresh token issued before the
+           release stops working. An access token already issued lives out its
+           lifetime; Keycloak cannot recall one.
+
+        The account, its other memberships (an operator's, say) and everything
+        keyed on its uuid stay. The next REC's upsert re-enables it.
+
+        **The member is resolved whatever its registry status**, unlike every
+        other lifecycle call: releasing only takes access away, and a member
+        whose row was set inactive before its login was released (an older
+        revocation, a failed step) would otherwise keep a login nobody can
+        release, and be refused by the next REC as still being in this one.
+        """
+        username = await self._username_of(community, key, any_status=True)
 
         async with KeycloakAdminClient(self._keycloak_settings) as kc:
             await kc.authenticate()
@@ -617,16 +707,46 @@ class ProvisioningService:
                     f"realm has no such account. Nothing to disable."
                 )
 
-            changed = await provisioner.set_enabled(user["id"], False)
+            keycloak_id = user["id"]
+            disabled_now = await provisioner.set_enabled(keycloak_id, False)
+
+            org_left, groups_left = False, ()
+            organization = await provisioner.get_organization(community)
+            if organization is not None:
+                try:
+                    org_left, groups_left = await provisioner.leave_organization(
+                        organization["id"], keycloak_id
+                    )
+                except ManagedMembership as e:
+                    raise ManagedMember(f"{community}/{key} ('{username}'): {e}") from e
+
+            await provisioner.logout(keycloak_id)
+
+            changed = disabled_now or org_left or bool(groups_left)
             logger.info(
-                "Disabled %s/%s ('%s')%s",
+                "Released %s/%s ('%s'): %s",
                 community,
                 key,
                 username,
-                "" if changed else " — already disabled",
+                ", ".join(
+                    part
+                    for part in (
+                        "disabled" if disabled_now else "already disabled",
+                        "left the organization" if org_left else "not in the organization",
+                        f"left org groups {','.join(groups_left)}" if groups_left else "",
+                        "sessions ended",
+                    )
+                    if part
+                ),
             )
             return DisableResult(
-                username=username, keycloak_id=user["id"], changed=changed
+                username=username,
+                keycloak_id=keycloak_id,
+                changed=changed,
+                disabled_now=disabled_now,
+                org_left=org_left,
+                org_groups_left=tuple(groups_left),
+                sessions_logged_out=True,
             )
 
     # -- correcting what an account says about its person ------------------
@@ -936,14 +1056,25 @@ class ProvisioningService:
 
     # -- resolving a member through the registry ---------------------------
 
-    async def _username_of(self, community: str, key: str) -> str:
+    async def _username_of(
+        self, community: str, key: str, *, any_status: bool = False
+    ) -> str:
         """What `(community, key)` authenticates as, per the registry row.
 
         `Member.user_id` is a Keycloak username and the registry is the row that
         owns it, so this reads rather than derives — deriving is how a second
         account appears beside the one somebody already signs in with.
+
+        Only an `active` member resolves, unless `any_status`: the release alone
+        asks for that (see `disable`).
         """
         document = await self._export(community)
+        if any_status:
+            members = document.get("members") or document.get("participants") or {}
+            data = members.get(key)
+            if data is not None:
+                return participant_username({"key": key, **(data or {})})
+            raise MemberNotFound(f"{community} has no member '{key}'")
         for member in load_rec_participants(document):
             if member["key"] == key:
                 return participant_username(member)

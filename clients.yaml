@@ -165,6 +165,13 @@ scopes:
   # the provisioning service only through onboarding.
   - name: onboarding.members.invite
     description: Email a registry member an invitation or a password reset, on behalf of the manager whose token is forwarded
+  # Delegated like the invite, and narrower in who it serves: onboarding allows it
+  # only when the forwarded token is a REC **admin**'s (org group `admins`) or the
+  # platform admin's, never a manager's. It withdraws the member's grants, revokes
+  # their credential, releases their login from the REC's organization and sets
+  # the registry member inactive. Held by svc-community alone.
+  - name: onboarding.members.release
+    description: Release a registry member from their REC (grants withdrawn, credential revoked, login moved out of the organization, member inactive), on behalf of the REC admin whose token is forwarded
 
   # Nudging
   - name: nudging.admin
@@ -555,6 +562,10 @@ clients:
       # svc-onboarding is derived from it. No provisioning.* scope, ever:
       # onboarding is the single point of access to the provisioning service.
       - onboarding.members.invite
+      # The release, optional for the same reason and requested only for the one
+      # call to onboarding. Onboarding re-checks that the forwarded token is a
+      # REC admin's.
+      - onboarding.members.release
       # Optional for the same reason: the BFF writes a member's meter and profile
       # to the registry with its own token, requesting each scope only for the one
       # write that needs it; the dashboard's policy decides which manager may press

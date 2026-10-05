@@ -42,6 +42,10 @@ from celine.provisioning.models import (
 
 logger = logging.getLogger(__name__)
 
+
+class ManagedMembership(RuntimeError):
+    """The account is a MANAGED member: leaving the organization would delete it."""
+
 #: The org group a participant is filed in. The least privileged of
 #: `ROLE_HIERARCHY` — a member is a viewer of their own community until somebody
 #: decides otherwise, and nothing here promotes anybody.
@@ -310,6 +314,55 @@ class Provisioner:
         their own energy community, not a mistake to be erased.
         """
         return await self._kc.set_user_enabled(keycloak_id, enabled)
+
+    async def leave_organization(
+        self, org_id: str, keycloak_id: str
+    ) -> tuple[bool, tuple[str, ...]]:
+        """Take the account out of one organization and its org groups.
+
+        Returns `(org_left, groups_left)`: whether this call removed the
+        membership, and the org groups it removed the account from. A
+        non-member is `(False, ())`, so a retry is a no-op.
+
+        The groups go first and by name, although Keycloak 26.7.3 drops them
+        with the membership (measured 2026-10-05): the answer names what was
+        held, and a version that kept them would leave an `admins` grant behind
+        on an organization the account no longer belongs to.
+
+        **A MANAGED member is refused, never removed.** Keycloak deletes a
+        managed member's account when it leaves the organization, and this is
+        the call that must not destroy anything. Nothing here adds one.
+        """
+        kc = self._kc
+        member = await kc.get_organization_member(org_id, keycloak_id)
+        if member is None:
+            return False, ()
+        if str(member.get("membershipType") or "").upper() == "MANAGED":
+            raise ManagedMembership(
+                f"account {keycloak_id} is a managed member of organization {org_id}; "
+                f"removing it would delete the account"
+            )
+
+        groups_left: list[str] = []
+        for group in await kc.get_member_org_groups(org_id, keycloak_id):
+            if await kc.remove_user_from_org_group(org_id, group["id"], keycloak_id):
+                groups_left.append(group.get("name") or group["id"])
+
+        org_left = await kc.remove_user_from_organization(org_id, keycloak_id)
+        return org_left, tuple(groups_left)
+
+    async def logout(self, keycloak_id: str) -> None:
+        """End every session of the account. Idempotent."""
+        await self._kc.logout_user(keycloak_id)
+
+    async def rec_organizations(self, keycloak_id: str) -> list[str]:
+        """The aliases of the RECs (organizations typed `rec`) the account is in."""
+        aliases: list[str] = []
+        for org in await self._kc.get_user_organizations(keycloak_id):
+            types = (org.get("attributes") or {}).get("type") or []
+            if "rec" in types and org.get("alias"):
+                aliases.append(org["alias"])
+        return aliases
 
     async def is_in_organization(self, org_id: str, keycloak_id: str) -> bool:
         """Whether the account is a member of the organization.

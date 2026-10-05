@@ -42,10 +42,12 @@ EXPECTED_SCOPES = {
     "onboarding.audit.read",
     "onboarding.export",
     "onboarding.members.invite",
+    "onboarding.members.release",
 }
 
 #: The delegated scope, and its one holder.
 INVITE = "onboarding.members.invite"
+RELEASE = "onboarding.members.release"
 COMMUNITY = "svc-community"
 
 
@@ -246,7 +248,7 @@ class TestTheDelegatedInviteScope:
 
     def test_svc_community_holds_no_other_onboarding_scope(self):
         community = next(c for c in _merged().clients if c.client_id == COMMUNITY)
-        assert _explicit_onboarding_scopes(community) == {INVITE}
+        assert _explicit_onboarding_scopes(community) == {INVITE, RELEASE}
 
     def test_svc_community_is_the_only_explicit_holder(self):
         """Over the base file and the ds-host overlay. `onboarding.admin` also
@@ -278,10 +280,30 @@ class TestTheDelegatedInviteScope:
             for a in plan.scope_assignments_to_add
             if a.client_id == COMMUNITY and a.scope_name.startswith("onboarding.")
         }
-        assert assignments == {(COMMUNITY, INVITE, "optional")}
+        assert assignments == {(COMMUNITY, INVITE, "optional"), (COMMUNITY, RELEASE, "optional")}
         mappers = {
             a.audience_client_id
             for a in plan.audience_mappers_to_add
             if a.client_id == COMMUNITY
         }
         assert "svc-onboarding" in mappers
+
+
+class TestTheDelegatedReleaseScope:
+    """`onboarding.members.release`: a REC admin releases a member, through the
+    manager dashboard. Delegated like the invite; onboarding allows it only for a
+    forwarded REC admin's (or platform admin's) token."""
+
+    def test_svc_community_holds_it_as_optional_not_default(self):
+        community = next(c for c in _config().clients if c.client_id == COMMUNITY)
+        assert RELEASE in community.optional_scopes
+        assert RELEASE not in community.default_scopes
+
+    def test_svc_community_is_the_only_explicit_holder(self):
+        for config in (_config(), _merged()):
+            holders = {
+                c.client_id
+                for c in config.clients
+                if RELEASE in set(c.default_scopes) | set(c.optional_scopes)
+            }
+            assert holders == {COMMUNITY}

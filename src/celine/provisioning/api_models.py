@@ -200,6 +200,15 @@ class ParticipantResponse(BaseModel):
     invited: bool = Field(
         ..., description="True if and only if `invitation` is `sent`."
     )
+    reenabled: bool = Field(
+        default=False,
+        description=(
+            "The account was disabled and this call enabled it again, because it "
+            "joined this community's organization in this call: a member another "
+            "REC released, joining this one. An account disabled while already in "
+            "the organization stays disabled."
+        ),
+    )
 
 
 class ParticipantUpdate(BaseModel):
@@ -309,15 +318,35 @@ class InvitationResponse(BaseModel):
 
 
 class DisableResponse(BaseModel):
-    """Whether the account was disabled, or already was.
+    """What releasing the login did: disabled, out of the community's
+    organization and its org groups, every session ended.
 
-    `changed` is false for a revocation that was already in force, which must
-    not read as a revocation that just happened.
+    `changed` is false for a release that was already in force, which must not
+    read as a release that just happened. The other fields say which part this
+    call did.
     """
 
     user_id: str
     username: str
     changed: bool
+    disabled_now: bool = Field(
+        default=False, description="The account was enabled and this call disabled it."
+    )
+    org_left: bool = Field(
+        default=False,
+        description="This call removed the account from the community's organization.",
+    )
+    org_groups_left: list[str] = Field(
+        default_factory=list,
+        description="The community's org groups this call removed the account from.",
+    )
+    sessions_logged_out: bool = Field(
+        default=False,
+        description=(
+            "Every session was ended. An access token already issued stays valid "
+            "until it expires."
+        ),
+    )
 
 
 class DivergenceModel(BaseModel):

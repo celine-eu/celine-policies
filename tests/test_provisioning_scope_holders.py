@@ -119,6 +119,7 @@ def test_svc_community_holds_no_provisioning_scope():
     # Nothing else, besides the derived broker scope (REQ-0017).
     assert [s for s in community.optional_scopes if s != config.broker_scope] == [
         "onboarding.members.invite",
+        "onboarding.members.release",
         "rec-registry.assets.write",
         "rec-registry.members.profile.write",
         "rec-registry.members.role.write",

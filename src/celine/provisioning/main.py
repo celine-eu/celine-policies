@@ -48,6 +48,11 @@ def create_app() -> FastAPI:
             "The only writer of participant accounts in the celine realm. "
             "Internal: no public route, and authorization by provisioning.* scopes."
         ),
+        # 1.5.0: `POST …/disable` releases the login (disabled, out of the
+        # community's organization and org groups, sessions ended) and answers
+        # what it did; the upsert re-enables an account it files into a new
+        # organization (`reenabled`) and refuses one still in another REC
+        # (`409 member_of_another_community`). Additive fields.
         # 1.4.0: `PATCH /participants/{community}/{key}` corrects names and
         # address (`409 email_taken`); additive.
         # 1.3.0: `POST …/invitation` requires `{"intent": "invitation" |
@@ -59,7 +64,7 @@ def create_app() -> FastAPI:
         # 1.1.0: `…/password-reset` replaced by `…/invitation`, and the upsert
         # gained `locale`, `invite` and `invitation`. Bumped so the SDK's spec
         # snapshot is a new version rather than an overwrite in place.
-        version="1.4.0",
+        version="1.5.0",
         # Swagger UI, ReDoc and openapi.json only in dev or with
         # CELINE_PUBLIC_DOCS=true (REQ-0018).
         **docs_urls(),
