@@ -316,7 +316,7 @@ Environment variables with `CELINE_KEYCLOAK_` prefix:
 | `CELINE_KEYCLOAK_ADMIN_PASSWORD` | — | Admin password |
 | `CELINE_KEYCLOAK_ADMIN_CLIENT_ID` | `celine-admin-cli` | Service client ID |
 | `CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET` | — | Service client secret |
-| `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` | Secrets file path |
+| `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` | Secrets file path. Set, `sync` records the secrets it applied there (mode `0600`); unset, `sync` writes no file unless `ENV=dev` (REQ-0020) |
 | `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_ID` | `svc-celine-policies-bootstrap` | The master client `bootstrap` signs in to master with (REQ-0016) |
 | `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` | — | Its secret, from the deployment's secrets; required unless `ENV=dev`, at least 32 characters |
 | `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` | on unless `ENV=dev` | Brute-force detection, platform realm and master |

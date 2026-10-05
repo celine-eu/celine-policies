@@ -366,6 +366,17 @@ def realm_is_set_in_environment() -> bool:
     return "realm" in KeycloakSettings().model_fields_set
 
 
+def secrets_file_is_set_in_environment() -> bool:
+    """Whether `CELINE_KEYCLOAK_SECRETS_FILE` names the secrets file.
+
+    Asked the same way as `realm_is_set_in_environment`, for the same reason: the
+    default path and a variable set to it read identically on the instance.
+    `sync` records the secrets it applied only when asked (REQ-0020), and the
+    variable is one way of asking.
+    """
+    return "secrets_file" in KeycloakSettings().model_fields_set
+
+
 class SmtpSettings(BaseSettings):
     """The realm's `smtpServer`, as `keycloak bootstrap` applies it (plan Phase 2b).
 
@@ -563,9 +574,10 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
         """The registry client's secret, from the flag, the env or the store.
 
         The secrets file is the last of the three because it is the least
-        explicit, and it is consulted at all because `sync` writes every client
-        it created or updated there — so on a realm this CLI provisioned, the
-        credential is usually already on disk.
+        explicit, and it is consulted at all because `sync` can write every
+        client it created or updated there — in dev, or when given
+        `--secrets-file` (REQ-0020) — so on a realm this CLI provisioned that
+        way, the credential is usually already on disk.
 
         **It is not always there.** `write_secrets_file` records only the
         clients a given run touched, so a realm whose `celine-cli` was synced

@@ -63,8 +63,13 @@ its declared `<service>.<resource>.<verb>` scopes.
   mapper (`included.custom.audience`) on that client scope. The scope grants nothing — topic
   access is still the token's `<service>.<resource>.<verb>` and `<service>.admin` scopes.
 - `broker_scope: mqtt` makes `sync` grant it as an **optional** scope to every service-account
-  client holding a scope the ACL can grant a topic with. Nobody lists it by hand, and a browser
-  client never gets it.
+  client holding a scope the ACL can grant a topic with **and declared by the file that
+  declares `broker_scope`**. Nobody lists it by hand, and a browser client never gets it.
+- **A client another file declares does not get it**, whatever its scopes: a guest's own
+  clients (ds's `svc-ds-*`, a deployment's organisation clients) hold
+  `<service>.<resource>.<verb>` scopes for HTTP and never connect to the broker, including when
+  the host's overlay grants them a scope shaped like a topic grant. A guest client that does use
+  the broker is granted `mqtt` by name, in any file. With one file, nothing changes.
 - celine-sdk's `MqttBroker` asks its client-credentials provider for `scope=mqtt`
   (`MqttConfig.token_scope`). Tokens a service mints for HTTP calls do not carry `svc-mqtt`,
   so a service that receives another service's token cannot replay it to the broker.

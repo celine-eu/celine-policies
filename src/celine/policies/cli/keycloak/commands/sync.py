@@ -20,7 +20,10 @@ from celine.policies.cli.keycloak.client import (
 )
 from celine.policies.cli.keycloak.models import KeycloakConfig
 from celine.policies.cli.keycloak.platform import require_platform
-from celine.policies.cli.keycloak.settings import KeycloakSettings
+from celine.policies.cli.keycloak.settings import (
+    KeycloakSettings,
+    secrets_file_is_set_in_environment,
+)
 from celine.policies.cli.keycloak.sync import (
     SyncResult,
     apply_sync_plan,
@@ -116,7 +119,15 @@ def sync(
     ] = None,
     secrets_file: Annotated[
         Optional[Path],
-        typer.Option("--secrets-file", "-s", help="Output file for client secrets"),
+        typer.Option(
+            "--secrets-file",
+            "-s",
+            help=(
+                "Record the client secrets this run applied in this file (mode 0600). "
+                "Also CELINE_KEYCLOAK_SECRETS_FILE. Without either, only ENV=dev "
+                "records them, in .client.secrets.yaml."
+            ),
+        ),
     ] = None,
     verbose: Annotated[
         bool,
@@ -154,6 +165,11 @@ def sync(
     `CELINE_KEYCLOAK_SYNC_ADDITIVE=true` does the same, for a run that cannot be
     handed an argument (an init container); `false`, empty or unset leaves it
     off. `--additive` and `--no-additive` override the variable either way.
+
+    The client secrets a run applied are written to disk only when asked:
+    `--secrets-file PATH` or `CELINE_KEYCLOAK_SECRETS_FILE`. ENV=dev writes
+    `.client.secrets.yaml` without being asked; any other environment writes
+    nothing and says so. The file is created with mode 0600.
 
     Example:
         celine-policies keycloak sync config/keycloak.yaml --dry-run
@@ -259,17 +275,41 @@ def sync(
             traceback.print_exc()
         raise typer.Exit(1)
 
-    # Write secrets file
+    # Record the applied secrets — only where asked, or in dev (REQ-0020).
     if result.client_secrets and not dry_run:
-        output_path = secrets_file or Path(".client.secrets.yaml")
-        write_secrets_file(output_path, result, settings.realm)
-        typer.echo(f"Secrets written to: {output_path}")
+        output_path = _secrets_output(secrets_file, settings)
+        if output_path is None:
+            typer.echo(
+                f"Secrets of {len(result.client_secrets)} client(s) not written to "
+                "disk: pass --secrets-file or set CELINE_KEYCLOAK_SECRETS_FILE to "
+                "record them."
+            )
+        else:
+            write_secrets_file(output_path, result, settings.realm)
+            typer.echo(f"Secrets written to: {output_path}")
 
     # Print summary
     typer.echo("\n" + result.summary())
 
     if not result.success:
         raise typer.Exit(1)
+
+
+def _secrets_output(
+    flag: Path | None, settings: KeycloakSettings
+) -> Path | None:
+    """Where this run records the client secrets it applied, or None for nowhere.
+
+    `--secrets-file`, else `CELINE_KEYCLOAK_SECRETS_FILE`, else the default path in
+    dev only. Outside dev an unasked run leaves no credential on disk (REQ-0020):
+    nothing a deployment runs reads the file back, and the secrets are the
+    deployment's own inputs to begin with.
+    """
+    if flag is not None or secrets_file_is_set_in_environment():
+        return settings.secrets_file
+    if not settings.is_production:
+        return settings.secrets_file
+    return None
 
 
 def _resolve_additive(

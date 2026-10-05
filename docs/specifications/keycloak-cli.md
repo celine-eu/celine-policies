@@ -190,3 +190,24 @@ differently, Keycloak's own `browser` flow bound, or the flow of another shape. 
 either switch off on a hardened master is destructive and needs `--allow-destructive`
 outside dev. `--check` fails while anything above would change. Recovery when the client
 is lost is Keycloak's own `kc.sh bootstrap-admin`.
+
+---
+
+### REQ-0020 — `sync` writes client secrets to disk only when asked, readable by its owner only
+
+`celine-policies keycloak sync` records the secrets of the clients it created or updated in a
+secrets file only when the run asks for it:
+
+- **`--secrets-file PATH`**, or **`CELINE_KEYCLOAK_SECRETS_FILE`** set: the run writes that path.
+- **Neither, under `ENV=dev`**: the run writes `.client.secrets.yaml` in the working directory, as
+  before.
+- **Neither, any other `ENV`, unset included**: the run writes no file and prints how many
+  clients' secrets it did not record and how to ask.
+- `--dry-run` writes nothing, asked or not.
+
+Every write of the file — `sync`'s and `bootstrap`'s, through the one merging writer — leaves it
+mode `0600`, narrowing a file an earlier run left wider. The secrets a `sync` applies are the
+deployment's own inputs (`${SVC_…_SECRET}`), so nothing outside dev needs them back from disk; the
+one reader of `sync`'s entries is `sync-users --from-registry`'s last fallback for the registry
+client's secret, a dev-only command (REQ-0006).
+

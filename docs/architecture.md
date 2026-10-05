@@ -101,7 +101,7 @@ run instead of writing them:
   have is refused, so it runs after the reconcile has created the organization
 - `status` — show current scopes, clients, and assignments
 
-Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time.
+Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time, and is mode `0600`. Outside dev `sync` writes it only when given `--secrets-file` or `CELINE_KEYCLOAK_SECRETS_FILE` (REQ-0020).
 
 ### 4. Rego Policies
 
@@ -151,7 +151,7 @@ clients.ds-host.yaml ─┤   the grants celine adds to ds's clients   ┐ only 
                  │
                  ├─ apply changes ──> Keycloak Admin API
                  │
-                 └─ .client.secrets.yaml
+                 └─ .client.secrets.yaml   (only when asked, or in dev; 0600)
 ```
 
 The `sync` command:
@@ -160,7 +160,7 @@ The `sync` command:
 2. Fetches current state from Keycloak (existing scopes, clients, assignments)
 3. Computes a diff (plan): scopes to create/update, clients to create/update, scope assignments to add/remove
 4. Applies changes idempotently
-5. Merges the client secrets it generated into `.client.secrets.yaml`, keeping the entries this run did not touch — `celine-admin-cli` among them, which is what the next run with no `--admin-user` authenticates with
+5. Merges the client secrets it applied into the secrets file, keeping the entries this run did not touch — `celine-admin-cli` among them, which is what the next run with no `--admin-user` authenticates with. Only when asked (`--secrets-file`, `CELINE_KEYCLOAK_SECRETS_FILE`) or under `ENV=dev`, and always mode `0600` ([REQ-0020](specifications/keycloak-cli.md))
 
 The `scopes_prefix` field on each client declares scope ownership. The CLI uses this to automatically add audience mappers so that user JWTs issued through `oauth2-proxy` carry the correct audience for each service.
 
@@ -212,4 +212,4 @@ The Keycloak CLI is configured via `CELINE_KEYCLOAK_*` environment variables (se
 | `CELINE_KEYCLOAK_ADMIN_PASSWORD` | — | Admin password (for bootstrap) |
 | `CELINE_KEYCLOAK_ADMIN_CLIENT_ID` | `celine-admin-cli` | Service client ID |
 | `CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET` | — | Service client secret |
-| `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` | Auto-load secret from file |
+| `CELINE_KEYCLOAK_SECRETS_FILE` | `.client.secrets.yaml` | Auto-load secret from file; set, `sync` also records its secrets there (REQ-0020) |

@@ -53,8 +53,8 @@ naming a requirement that does not exist is a typo.
 |---|---|
 | REQ-0001 – REQ-0003, REQ-0007 | [provisioning](provisioning.md) — who may call the provisioning service, what it creates for a community, and how it corrects an account |
 | REQ-0004 – REQ-0005, REQ-0008 | [client grants](client-grants.md) — which scopes a client holds as default and which as optional, where a decision fixed it |
-| REQ-0006, REQ-0011 – REQ-0013, REQ-0015 – REQ-0016 | [Keycloak CLI](keycloak-cli.md) — what a `celine-policies keycloak` command may do, where a decision fixed it; the two-level authority model (`platform-admin` role, organization groups); the platform admin's second factor outside dev; the master realm reached through `bootstrap`'s own client and hardened outside dev |
-| REQ-0009 – REQ-0010, REQ-0014, REQ-0017 | [MQTT auth](mqtt-auth.md) — what the MQTT auth backend refuses outside dev; no CORS; no superuser and no group grants; broker tokens bound by the `mqtt` scope |
+| REQ-0006, REQ-0011 – REQ-0013, REQ-0015 – REQ-0016, REQ-0020 | [Keycloak CLI](keycloak-cli.md) — what a `celine-policies keycloak` command may do, where a decision fixed it; the two-level authority model (`platform-admin` role, organization groups); the platform admin's second factor outside dev; the master realm reached through `bootstrap`'s own client and hardened outside dev; client secrets on disk only when asked |
+| REQ-0009 – REQ-0010, REQ-0014, REQ-0017 | [MQTT auth](mqtt-auth.md) — what the MQTT auth backend refuses outside dev; no CORS; no superuser and no group grants; broker tokens bound by the `mqtt` scope, offered only to the broker declaration's own clients |
 | REQ-0018 – REQ-0019 | [service surface](services.md) — both HTTP services: API docs only in dev or when opted in; every refusal an audit record naming the caller, and no claim in any log line |
 
 ## What is not here

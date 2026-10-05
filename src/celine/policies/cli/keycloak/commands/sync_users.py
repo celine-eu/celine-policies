@@ -110,8 +110,9 @@ def _resolve_source(
                 f"'{sync_settings.registry_client_id}'. Pass "
                 f"--registry-client-secret, set "
                 f"CELINE_SYNC_USERS_REGISTRY_CLIENT_SECRET, or run "
-                f"'celine-policies keycloak sync' so the client's secret is "
-                f"recorded in {kc_settings.secrets_file}."
+                f"'celine-policies keycloak sync --secrets-file "
+                f"{kc_settings.secrets_file}' so the client's secret is "
+                f"recorded there."
             )
         issuer = issuer_url(kc_settings.base_url, kc_settings.realm)
         try:

@@ -5,11 +5,13 @@ when the client asked for it — never in the tokens a service sends over HTTP.
 """
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from celine.policies.cli.keycloak import models
 from celine.policies.cli.keycloak.client import (
     AUDIENCE_MAPPER_PREFIX,
     CurrentState,
@@ -120,6 +122,145 @@ def test_the_shipped_declaration():
         assert "mqtt" in by_id[client_id].optional_scopes, client_id
         assert "mqtt" not in by_id[client_id].default_scopes, client_id
     assert "mqtt" not in by_id["oauth2_proxy"].optional_scopes
+
+
+# A realm declared by two files: the host's, which names the broker, and a guest's,
+# whose clients hold scopes shaped like topic grants and never connect to it.
+HOST_YAML = """
+    realm: celine
+    broker_scope: mqtt
+    scopes:
+      - name: mqtt
+        audience: svc-mqtt
+      - name: twin.values.write
+      - name: twin.admin
+      - name: registry.lookup
+    clients:
+      - client_id: svc-example-twin
+        name: Twin
+        scopes_prefix: twin
+        default_scopes: [twin.admin]
+      - client_id: svc-example-http
+        name: HTTP only
+        default_scopes: [registry.lookup]
+"""
+
+GUEST_YAML = """
+    scopes:
+      - name: connector.provider.read
+      - name: identity-registry.memberships.write
+    clients:
+      - client_id: svc-ds-collector-example
+        name: Collector
+        default_scopes: [identity-registry.memberships.write]
+      - client_id: svc-ds-connector-example
+        name: Connector
+        scopes_prefix: connector
+        default_scopes: [connector.provider.read]
+      - client_id: svc-ds-dataset-example
+        name: Dataset
+        default_scopes: [twin.values.write]
+"""
+
+# A host grant on a guest's client: topic-shaped, still not a broker client.
+HOST_GRANTS_YAML = """
+    clients:
+      - client_id: svc-ds-dataset-example
+        default_scopes: [twin.admin]
+"""
+
+
+def _realm(tmp_path: Path) -> KeycloakConfig:
+    paths = []
+    for name, body in (("host.yaml", HOST_YAML), ("grants.yaml", HOST_GRANTS_YAML),
+                       ("guest.yaml", GUEST_YAML)):
+        path = tmp_path / name
+        path.write_text(textwrap.dedent(body), encoding="utf-8")
+        paths.append(path)
+    return KeycloakConfig.from_yaml_files(paths)
+
+
+# @verifies REQ-0017
+def test_a_guest_client_with_topic_shaped_scopes_gets_no_broker_scope(tmp_path):
+    """A ds collector or connector holds `<service>.<resource>.<verb>` scopes for
+    HTTP, declared by a file that does not name the broker."""
+    by_id = {c.client_id: c for c in _realm(tmp_path).clients}
+
+    for client_id in ("svc-ds-collector-example", "svc-ds-connector-example",
+                      "svc-ds-dataset-example"):
+        held = set(by_id[client_id].default_scopes) | set(by_id[client_id].optional_scopes)
+        assert "mqtt" not in held, client_id
+
+
+# @verifies REQ-0017
+def test_a_broker_service_of_the_declaring_file_still_gets_it(tmp_path):
+    by_id = {c.client_id: c for c in _realm(tmp_path).clients}
+
+    assert "mqtt" in by_id["svc-example-twin"].optional_scopes
+    assert "mqtt" not in by_id["svc-example-twin"].default_scopes
+    assert "mqtt" not in by_id["svc-example-http"].optional_scopes
+
+
+# @verifies REQ-0017
+def test_a_guest_granted_the_broker_scope_by_name_keeps_it(tmp_path):
+    """The way a guest that does use the broker gets it: an explicit grant."""
+    path = tmp_path / "broker-grant.yaml"
+    path.write_text(textwrap.dedent("""
+        clients:
+          - client_id: svc-ds-connector-example
+            optional_scopes: [mqtt]
+    """), encoding="utf-8")
+    config = _realm(tmp_path)
+    merged = KeycloakConfig.from_yaml_files(
+        [tmp_path / "host.yaml", tmp_path / "guest.yaml", path]
+    )
+
+    assert "mqtt" not in next(
+        c for c in config.clients if c.client_id == "svc-ds-connector-example"
+    ).optional_scopes
+    assert "mqtt" in next(
+        c for c in merged.clients if c.client_id == "svc-ds-connector-example"
+    ).optional_scopes
+
+
+# @verifies REQ-0017
+def test_one_file_or_no_broker_declaration_has_no_guests(tmp_path):
+    host = ("host.yaml", {"broker_scope": "mqtt", "clients": [{"client_id": "a", "name": "A"}]})
+    guest = ("guest.yaml", {"clients": [{"client_id": "b", "name": "B"},
+                                        {"client_id": "a", "default_scopes": ["x.y.read"]}]})
+
+    assert models.broker_guests([host]) == set()
+    assert models.broker_guests([guest]) == set()
+    assert models.broker_guests([host, guest]) == {"b"}
+
+
+# @verifies REQ-0017
+def test_the_plan_for_an_existing_realm_removes_the_broker_scope_from_guests_only(tmp_path):
+    """A realm synced before the rule: every client holds `mqtt` as optional.
+
+    The plan takes it off the guests and leaves the broker service and the
+    scope's audience mapper alone."""
+    config = _realm(tmp_path)
+    current = CurrentState(
+        scopes={"mqtt": _scope_with_mapper("svc-mqtt")},
+        client_default_scopes={c.client_id: set(c.default_scopes) for c in config.clients},
+        client_optional_scopes={c.client_id: {"mqtt"} for c in config.clients
+                                if c.client_id != "svc-example-http"},
+    )
+
+    plan = compute_sync_plan(config, current)
+
+    mqtt_changes = sorted(
+        (a.client_id, a.assignment_type, a.action)
+        for a in plan.scope_assignments_to_add + plan.scope_assignments_to_remove
+        if a.scope_name == "mqtt"
+    )
+    assert mqtt_changes == [
+        ("svc-ds-collector-example", "optional", "remove"),
+        ("svc-ds-connector-example", "optional", "remove"),
+        ("svc-ds-dataset-example", "optional", "remove"),
+    ]
+    assert all(a.scope.name != "mqtt" for a in plan.scopes_to_update)
 
 
 # @verifies REQ-0017

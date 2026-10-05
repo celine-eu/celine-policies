@@ -11,12 +11,14 @@ changed anything dropped the admin secret, and the file afterwards looked plausi
 rather than empty, which is why it survived so long.
 
 So every write goes through `merge_secrets_file`. It merges by client id and leaves
-untouched every entry it was not given.
+untouched every entry it was not given, and leaves the file readable by its owner
+only (0600), whatever mode an earlier writer gave it (REQ-0020).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 WARNING_COMMENT = (
     "# WARNING: This file contains sensitive credentials. DO NOT COMMIT.\n"
 )
+
+#: Owner read/write only. The file holds client secrets in plain text.
+SECRETS_FILE_MODE = 0o600
 
 # `sync` used to write the warning as a YAML *key* while `bootstrap` wrote a real
 # comment. Dropped on read and re-emitted as a comment, so a file written by the
@@ -90,8 +95,13 @@ def merge_secrets_file(
     data["realm"] = realm
     data["clients"] = {**kept, **clients}
 
-    path.write_text(
-        WARNING_COMMENT
-        + yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+    text = WARNING_COMMENT + yaml.safe_dump(
+        data, default_flow_style=False, sort_keys=False
     )
+    # Created 0600, and narrowed to 0600 if it already existed wider: the mode
+    # given to `os.open` applies only to a file it creates.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, SECRETS_FILE_MODE)
+    with os.fdopen(fd, "w") as handle:
+        os.fchmod(handle.fileno(), SECRETS_FILE_MODE)
+        handle.write(text)
     logger.info("Wrote %d client(s) to: %s", len(clients), path)

@@ -58,7 +58,7 @@ from __future__ import annotations
 import copy
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -736,6 +736,39 @@ def merge_documents(documents: Sequence[tuple[str, dict[str, Any]]]) -> dict[str
     return merged
 
 
+def broker_guests(documents: Sequence[tuple[str, dict[str, Any]]]) -> set[str]:
+    """Clients whose identity a file that does not declare `broker_scope` declares.
+
+    `broker_scope` is offered to the clients of the declaration that names the
+    broker. A file that never mentions it — a guest's own client declaration, a
+    deployment's organisation clients — declares clients that do not connect to
+    the broker, whatever scopes another file grants them. A grants-only entry
+    declares no identity and makes nobody a guest.
+
+    With one file, or with no file declaring `broker_scope`, the set is empty:
+    the one-file loader is unchanged.
+    """
+    declarers = {
+        source
+        for source, document in documents
+        if isinstance(document, dict) and document.get("broker_scope")
+    }
+    if not declarers:
+        return set()
+
+    guests: set[str] = set()
+    for source, document in documents:
+        if source in declarers or not isinstance(document, dict):
+            continue
+        for entry in document.get("clients") or []:
+            if not isinstance(entry, dict):
+                continue
+            client_id = entry.get("client_id")
+            if isinstance(client_id, str) and set(entry) - {"client_id"} - set(GRANT_KEYS):
+                guests.add(client_id)
+    return guests
+
+
 def _grants_without_an_owner(
     documents: Sequence[tuple[str, dict[str, Any]]],
 ) -> dict[str, list[str]]:
@@ -852,8 +885,10 @@ class KeycloakConfig(BaseModel):
     # The scope a client requests for its MQTT broker token (`broker_scope`).
     # Granted automatically as an OPTIONAL scope to every service-account client
     # holding a scope the MQTT ACL can grant a topic with — `<service>.admin` or
-    # `<service>.<resource>.read|write` (policies/celine/mqtt). Optional, so it
-    # is in a token only when asked for: HTTP tokens never carry its audience.
+    # `<service>.<resource>.read|write` (policies/celine/mqtt) — **and declared
+    # by the same file that declares `broker_scope`** (see `broker_guests`).
+    # Optional, so it is in a token only when asked for: HTTP tokens never carry
+    # its audience.
     broker_scope: str | None = Field(
         default=None,
         description=(
@@ -925,10 +960,17 @@ class KeycloakConfig(BaseModel):
         if complete:
             _check_completeness(documents)
 
-        return cls._from_raw(merge_documents(documents))
+        return cls._from_raw(
+            merge_documents(documents), broker_guests=broker_guests(documents)
+        )
 
     @classmethod
-    def _from_raw(cls, raw: dict[str, Any]) -> "KeycloakConfig":
+    def _from_raw(
+        cls,
+        raw: dict[str, Any],
+        *,
+        broker_guests: Collection[str] = (),
+    ) -> "KeycloakConfig":
         """Interpolate, validate and check a merged (or single) raw document.
 
         Interpolation happens **here and once**, over the merged document, and
@@ -949,7 +991,7 @@ class KeycloakConfig(BaseModel):
 
         config = cls.model_validate(resolved)
         config._raw_secrets = raw_secrets
-        config.grant_broker_scope()
+        config.grant_broker_scope(guests=broker_guests)
 
         malformed = config.malformed_admin_permissions()
         if malformed:
@@ -1011,12 +1053,16 @@ class KeycloakConfig(BaseModel):
             scopes.update(client.optional_scopes)
         return scopes
 
-    def grant_broker_scope(self) -> list[str]:
+    def grant_broker_scope(self, guests: Collection[str] = ()) -> list[str]:
         """Add `broker_scope` as an optional scope to every MQTT-capable client.
 
         A client qualifies when it has a service account (a person's token
-        reaches no topic, REQ-0014) and holds a scope the MQTT ACL can grant a
-        topic with. Returns the client ids it was added to. Idempotent.
+        reaches no topic, REQ-0014), holds a scope the MQTT ACL can grant a
+        topic with, and is not one of `guests` — the clients another file
+        declares (`broker_guests`). The scope shape alone does not say a client
+        talks to the broker: a guest's `<service>.<resource>.read` is an HTTP
+        grant like any other. A guest that does use the broker is granted the
+        scope by name. Returns the client ids it was added to. Idempotent.
         """
         if not self.broker_scope:
             return []
@@ -1029,6 +1075,8 @@ class KeycloakConfig(BaseModel):
         for client in self.clients:
             held = set(client.default_scopes) | set(client.optional_scopes)
             if self.broker_scope in held or not client.service_account_enabled:
+                continue
+            if client.client_id in guests:
                 continue
             if any(is_topic_grant_scope(s) for s in held):
                 client.optional_scopes.append(self.broker_scope)
