@@ -17,7 +17,7 @@ dependencies = [
     # TODO: celine-sdk 2.0.0 (unreleased) ships PLATFORM_ADMIN_ROLE, which bootstrap,
     # seed-dev-users and the platform declaration import (ADR-0012). Raise this floor to
     # >=2.0.0 and re-lock once it is published, before building an image.
-    "celine-sdk>=1.20.0",
+    "celine-sdk>=2.0.0",
     "typer>=0.23.1",
     # Imported directly by the Keycloak CLI (settings, models, sync, bootstrap,
     # _utils) but never declared — it arrived transitively via uvicorn[standard].
