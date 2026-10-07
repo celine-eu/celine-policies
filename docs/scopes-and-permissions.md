@@ -23,6 +23,7 @@ Examples:
 |-------|-------------|
 | `digital-twin.admin` | Full access to Digital Twin service |
 | `digital-twin.values.read` | Read digital twin values |
+| `digital-twin.community.manage` | Read a community's manager values (the operator console's per-device figures); held by `svc-community` only |
 | `digital-twin.values.write` | Write digital twin values |
 | `digital-twin.simulation.read` | Read simulation data |
 | `digital-twin.simulation.write` | Write simulation data |
@@ -268,6 +269,7 @@ default_scopes:
   - community.objectives.write
   - digital-twin.values.read
   - dataset.query
+  - digital-twin.community.manage  # the DT's manager fetchers admit a service by this scope alone
   - rec-registry.read          # aggregate population, and member names for the members page
   - nudging.analytics.read
 optional_scopes:

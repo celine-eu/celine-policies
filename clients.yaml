@@ -47,6 +47,11 @@ scopes:
     description: Full access to Digital Twin service
   - name: digital-twin.values.read
     description: Read digital twin values
+  # The REC operator console's: a community's per-device manager figures. Every
+  # service that reads the twin holds values.read, so it cannot tell the console
+  # apart; the Digital Twin admits a service to the manager fetchers by this one.
+  - name: digital-twin.community.manage
+    description: Read a community's manager values (per-device figures for the REC operator console)
   - name: digital-twin.values.write
     description: Write digital twin values
   - name: digital-twin.simulation.read
@@ -546,6 +551,9 @@ clients:
       # Dependencies: the DT forwards this token to governed dataset queries.
       - digital-twin.values.read
       - dataset.query
+      # The Digital Twin's manager fetchers admit a service by this scope alone;
+      # the BFF checks the manager persona itself before it calls them.
+      - digital-twin.community.manage
       # Aggregate population, and member names for the members page, read per
       # request and never persisted. No email, user id, DID or supply point leaves
       # the BFF process. A meter's sensor id is the one registry value a manager
