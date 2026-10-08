@@ -2,6 +2,157 @@
 
 <!-- version list -->
 
+## v1.7.0 (2026-10-08)
+
+### Bug Fixes
+
+- Add additional scope for lookup
+  ([`7fc92a4`](https://github.com/celine-eu/celine-policies/commit/7fc92a4d0f00316787bc3659447b83c529fe3cf1))
+
+- Cleanup names
+  ([`f956286`](https://github.com/celine-eu/celine-policies/commit/f9562865ce4824030d48ee047a7b341de58333d9))
+
+- Correct gh workflow failure
+  ([`ac7aee9`](https://github.com/celine-eu/celine-policies/commit/ac7aee91085e72d589f384058c74e8d86517cadf))
+
+- Correct url encoding in requests, closes #7 expand users query size, closes #8
+  ([`b00f232`](https://github.com/celine-eu/celine-policies/commit/b00f2325b2a86f290133971350e8661a92d3216f))
+
+- Drop participants groups, cleanup clients.yaml
+  ([`23feb66`](https://github.com/celine-eu/celine-policies/commit/23feb664fe71ac7e398901818344b72b46bb7d08))
+
+- Fails on unmapped scopes, allow duplicated but identical scopes
+  ([`58af0bb`](https://github.com/celine-eu/celine-policies/commit/58af0bbf4f11d4a8161a87cc2b6947bd25a661a4))
+
+- Review clients.yaml provisioning
+  ([`f84c484`](https://github.com/celine-eu/celine-policies/commit/f84c4842efd5441d00094141037ea2483fc9a115))
+
+- Review init commands
+  ([`3e49ed9`](https://github.com/celine-eu/celine-policies/commit/3e49ed9e953b8d5ace3dc57308b00f0e697882b6))
+
+- Update sync command to check env=dev
+  ([`b1d3369`](https://github.com/celine-eu/celine-policies/commit/b1d33697e5c5bb633837bce84b3d7c907bf29b02))
+
+- **keycloak**: Bootstrap writes the admin cli secret only on request, as sync does
+  ([`db2efc8`](https://github.com/celine-eu/celine-policies/commit/db2efc81a7fd51c90fb287e36b0e1a315b6967c9))
+
+- **keycloak**: Mqtt scope only for broker clients, secrets file only on request
+  ([`95da67b`](https://github.com/celine-eu/celine-policies/commit/95da67bde1e11dc4c33ccbe8137dcd17fd2201b2))
+
+### Chores
+
+- Add ENV=dev to local compose
+  ([`02df115`](https://github.com/celine-eu/celine-policies/commit/02df115400f8d0293529b1298f90a653ffb22e3f))
+
+- Add keycloack pgsql conn
+  ([`16e30a6`](https://github.com/celine-eu/celine-policies/commit/16e30a628fbfcc73745d0e183f407eca826bd918))
+
+- Drop the celine-sdk release TODOs now that 2.0.0 ships them
+  ([`1882ceb`](https://github.com/celine-eu/celine-policies/commit/1882ceb3f4c73cafb70e3f37fe5be84f7f0ddb28))
+
+- Ignore .ruff*
+  ([`e5e7591`](https://github.com/celine-eu/celine-policies/commit/e5e7591c26afe4c3b36d0b73d476009967387bc1))
+
+- Update harness
+  ([`fb35651`](https://github.com/celine-eu/celine-policies/commit/fb3565160a799ada6b1fe4c0fdc6daa6e4ca997a))
+
+- Upgrade celine-sdk to 2.0.0
+  ([`f6920b8`](https://github.com/celine-eu/celine-policies/commit/f6920b89a1abfb5c7df628722594955769506f7b))
+
+- Upgrade sdk
+  ([`0eae186`](https://github.com/celine-eu/celine-policies/commit/0eae18665177246876117bf9e65412a7b4dc0b3c))
+
+### Features
+
+- Add --additive flag
+  ([`7ef258d`](https://github.com/celine-eu/celine-policies/commit/7ef258d98959bfc556b4eac92a697d9dae76058d))
+
+- Add additive/check options for merging clients
+  ([`f14eaa5`](https://github.com/celine-eu/celine-policies/commit/f14eaa5c9ba26ff9d9e551870786e506f1725648))
+
+- Add admin level persmissions, closes #2
+  ([`79fb3e7`](https://github.com/celine-eu/celine-policies/commit/79fb3e7e3e3f7ee47f4c393685e72f90b79bf6ad))
+
+- Add bootstrap, add ci parity test
+  ([`606c12f`](https://github.com/celine-eu/celine-policies/commit/606c12fa171fcc8e50ecf0154c4e7c742e66c617))
+
+- Add brute force handling, add MFA/webauthn support
+  ([`22f578a`](https://github.com/celine-eu/celine-policies/commit/22f578a6e75eed33e049982a141b81700dd96ad8))
+
+- Add email handling to provisioning
+  ([`e229a0a`](https://github.com/celine-eu/celine-policies/commit/e229a0af8acb46ea6e884f390740622b40c53e2d))
+
+- Add email verification after email change
+  ([`9dd9966`](https://github.com/celine-eu/celine-policies/commit/9dd9966d6a163f3a9bbac59cca27df60b79bfe0c))
+
+- Add LEGAL env to templates
+  ([`d16e483`](https://github.com/celine-eu/celine-policies/commit/d16e4837f68ad5070f23089d86aa5842fb25998d))
+
+- Add participants group container
+  ([`bbc1f84`](https://github.com/celine-eu/celine-policies/commit/bbc1f843d070930693894c02ebf015892053af8c))
+
+- Add provisioning service
+  ([`6149502`](https://github.com/celine-eu/celine-policies/commit/61495026825e0e6823dd6a4549d654683ab87ec0))
+
+- Add user invitation on provisioning, add mailpit for local tests, review policies cli with clear
+  separation of activities (realm bootstrap, org setup, users sync)
+  ([`eda24cb`](https://github.com/celine-eu/celine-policies/commit/eda24cb67e2e31264efd3e935ecdc6da4673d739))
+
+- Allow ENV overrides on platform.yaml settings
+  ([`dd6aa7d`](https://github.com/celine-eu/celine-policies/commit/dd6aa7d81a56b276a6c9c31dc9d8e97ab3ae7c51))
+
+- Audit mqtt and provisioning refusals without claims, gate api docs, drop mqtt cors
+  ([`421c5af`](https://github.com/celine-eu/celine-policies/commit/421c5af7bbfab21f7b83f982804e2150a2275d8c))
+
+- Bind broker tokens to the mqtt scope (svc-mqtt audience)
+  ([`cceb491`](https://github.com/celine-eu/celine-policies/commit/cceb491a7bd96201eff3e3962a2236190aee96d0))
+
+- Declare hardcoded claim mappers on a client
+  ([`f0f39c2`](https://github.com/celine-eu/celine-policies/commit/f0f39c26881b68d30ab9e1532b5105385977cf96))
+
+- Divide setu phases per type
+  ([`1e35f20`](https://github.com/celine-eu/celine-policies/commit/1e35f20d29baa139d16c58f85d9bf568d6b0dfc8))
+
+- Drop google fonts dependency
+  ([`ef642d9`](https://github.com/celine-eu/celine-policies/commit/ef642d9163ab62a42e3066a19b9431a253132e55))
+
+- Extend scopes for onboarding, review sync
+  ([`c3a9fb3`](https://github.com/celine-eu/celine-policies/commit/c3a9fb3c286ed38fbf7e744e87a68f1c90fac824))
+
+- Force sync-users in dev only
+  ([`3a1d6ea`](https://github.com/celine-eu/celine-policies/commit/3a1d6eaacc9f0b6e21213c79a053e06814e23678))
+
+- Handle administration via participants
+  ([`68e7334`](https://github.com/celine-eu/celine-policies/commit/68e7334b72b042fef6042806e0797993d6ea21d2))
+
+- Review env mapping overrides
+  ([`77cb62f`](https://github.com/celine-eu/celine-policies/commit/77cb62f8d3e058bd774069019ecdfe7fab4da1b6))
+
+- Split the declaration, the dataspace is optional
+  ([`e6079b5`](https://github.com/celine-eu/celine-policies/commit/e6079b587379b07f48a761f58def5ed4b00f0985))
+
+- Test bootstrap, set safe defaults, import dev users
+  ([`5aaf56f`](https://github.com/celine-eu/celine-policies/commit/5aaf56fb5189eaad59be215a9935939ec0d1685e))
+
+- Upgrade keycloak 26.7.3
+  ([`dc2bdb8`](https://github.com/celine-eu/celine-policies/commit/dc2bdb879a62aa2ce589b99da3e01bbac4428336))
+
+- **keycloak**: Digital-twin.community.manage, the console's scope for a community's manager values
+  ([`3eb5a2b`](https://github.com/celine-eu/celine-policies/commit/3eb5a2b84652a3983e224ef33d1865b466015745))
+
+- **provisioning**: Move a released member's login out of the REC, re-enable it at the next join,
+  refuse a second REC, and declare onboarding.members.release
+  ([`60f5446`](https://github.com/celine-eu/celine-policies/commit/60f5446d57711563f2a8dc24c11c9619e4a2ea82))
+
+- **provisioning**: Update a participant's names and email; declare per-field registry scopes
+  ([`c4ad3e4`](https://github.com/celine-eu/celine-policies/commit/c4ad3e4c3f72a939b5f47786c3ddfbb08c229524))
+
+### Testing
+
+- Review output formatting
+  ([`35d3e98`](https://github.com/celine-eu/celine-policies/commit/35d3e98e6f45fe8050b21510067ec7f8a2410983))
+
+
 ## v1.6.0 (2026-08-13)
 
 ### Bug Fixes
