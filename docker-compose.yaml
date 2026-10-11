@@ -73,10 +73,11 @@ services:
       # hardened and refuses the SDK's local OIDC defaults and a missing
       # CELINE_OIDC_AUDIENCE. `CELINE_ENV=dev docker compose up` for local use.
       - CELINE_ENV=${CELINE_ENV:-}
-      # The audience a broker token carries (REQ-0017): `svc-mqtt` outside dev.
-      # Left empty locally until every MQTT client runs a celine-sdk that asks
-      # for the `mqtt` scope (2.0.0); set it for a prod-like run.
-      - CELINE_OIDC_AUDIENCE=${CELINE_OIDC_AUDIENCE:-}
+      # The audience a broker token carries (REQ-0017): `svc-mqtt`, as in every
+      # deployment. Every MQTT client runs a celine-sdk (>= 2.0.0) that asks for
+      # the `mqtt` scope adding it. Never pass it empty: the SDK verifier checks
+      # `aud` against "" and refuses every token.
+      - CELINE_OIDC_AUDIENCE=${CELINE_OIDC_AUDIENCE:-svc-mqtt}
     healthcheck:
       test:
         [
