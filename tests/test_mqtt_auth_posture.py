@@ -55,6 +55,16 @@ class TestAudienceSetting:
         """@verifies REQ-0009"""
         assert MqttAuthSettings().oidc.audience is None
 
+    def test_empty_it_is_none(self, monkeypatch):
+        """A compose `${CELINE_OIDC_AUDIENCE:-}` passes "", which once switched
+        verification on against an audience no token carries.
+
+        @verifies REQ-0009
+        """
+        monkeypatch.setenv("CELINE_OIDC_AUDIENCE", "")
+
+        assert MqttAuthSettings().oidc.audience is None
+
 
 class TestHardenedStartup:
     def test_a_complete_configuration_starts(self, hardened_env):
@@ -71,6 +81,13 @@ class TestHardenedStartup:
             hardened_env.delenv("CELINE_ENV")
         else:
             hardened_env.setenv("CELINE_ENV", env)
+
+        with pytest.raises(InsecureConfiguration, match="CELINE_OIDC_AUDIENCE"):
+            _create_app()
+
+    def test_an_empty_audience_refuses_to_start_outside_dev(self, hardened_env):
+        """@verifies REQ-0009"""
+        hardened_env.setenv("CELINE_OIDC_AUDIENCE", "")
 
         with pytest.raises(InsecureConfiguration, match="CELINE_OIDC_AUDIENCE"):
             _create_app()
@@ -116,6 +133,18 @@ class TestDevStartup:
 
         assert TestClient(app).get("/health").status_code == 200
         assert "CELINE_OIDC_AUDIENCE" in caplog.text
+
+    def test_dev_with_an_empty_audience_accepts_a_token(self, monkeypatch, bearer):
+        """Empty is unset: no audience check, not one against "".
+
+        @verifies REQ-0009
+        """
+        monkeypatch.setenv("CELINE_ENV", "dev")
+        monkeypatch.setenv("CELINE_POLICIES_DIR", POLICIES_DIR)
+        monkeypatch.setenv("CELINE_OIDC_AUDIENCE", "")
+        client = TestClient(_create_app())
+
+        assert client.post("/user", headers=bearer("svc-x", aud="svc-mqtt")).status_code == 200
 
 
 class TestAudienceEnforcement:
