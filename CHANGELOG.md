@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.8.0 (2026-10-11)
+
+### Bug Fixes
+
+- **compose**: Mqtt_auth validates the svc-mqtt audience by default
+  ([`2d3967a`](https://github.com/celine-eu/celine-policies/commit/2d3967a1eac429db6d43f94a34e8b4379c7e1610))
+
+- **deps**: Celine-sdk 2.0.1, where an empty audience is no audience
+  ([`93a9005`](https://github.com/celine-eu/celine-policies/commit/93a90054b931ef3c746011176c13e416f680e99c))
+
+### Features
+
+- **keycloak**: 26.7.3-1.2.0 with the rec theme's MFA, local fonts and email verification
+  ([`063e170`](https://github.com/celine-eu/celine-policies/commit/063e17012b8aaffe477e7dc52383ec73c36ce630))
+
+
 ## v1.7.0 (2026-10-08)
 
 ### Bug Fixes
