@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.8.1 (2026-10-13)
+
+### Bug Fixes
+
+- Update clients to allow logout redirect
+  ([`33cda15`](https://github.com/celine-eu/celine-policies/commit/33cda155f82597bbddaf90e54f95eae444c1c46c))
+
+
 ## v1.8.0 (2026-10-11)
 
 ### Bug Fixes
