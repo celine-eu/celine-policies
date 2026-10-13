@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.0 (2026-10-13)
+
+### Features
+
+- Handle oauth2_proxy redirect uris on sync
+  ([`eee64c0`](https://github.com/celine-eu/celine-policies/commit/eee64c04ecfe0e4d70d97921b3e7fab68bbde140))
+
+
 ## v1.8.1 (2026-10-13)
 
 ### Bug Fixes
