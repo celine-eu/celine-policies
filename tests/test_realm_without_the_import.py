@@ -114,6 +114,10 @@ class TestABrowserClientConverges:
         assert [a for a in plan.audience_mappers_to_remove if a.client_id == "oauth2_proxy"] == []
         assert [a for a in plan.audience_mappers_to_add if a.client_id == "oauth2_proxy"] == []
 
+    def test_a_service_client_is_never_given_a_sign_out_list(self):
+        assert "attributes" not in ClientConfig(client_id="svc-x").login_representation()
+
+
     @pytest.mark.asyncio
     async def test_an_update_merges_attributes_and_turns_the_flows_on(self):
         kc = KeycloakAdminClient(KeycloakSettings())
@@ -125,9 +129,60 @@ class TestABrowserClientConverges:
         await kc.update_client("u", "oauth2_proxy", login=PROXY.login_representation())
 
         payload = kc._put.await_args.kwargs["json"]
-        assert payload["attributes"] == {"keep.me": "1", "access.token.lifespan": "1800"}
+        assert payload["attributes"] == {
+            "keep.me": "1", "access.token.lifespan": "1800", "post.logout.redirect.uris": "+",
+        }
         assert payload["standardFlowEnabled"] is True
         assert payload["redirectUris"] == ["http://sso.x/*", "http://webapp.x/*"]
+
+
+class TestABrowserClientDeclaresWhereItSignsOutTo:
+    """`post.logout.redirect.uris` decides a logout's return address, not the redirect URIs.
+
+    A list set there by hand stopped onboarding's and community's sign-out on staging
+    (2026-10-13) after both were added to `redirect_uris`. The sync owns it now.
+    """
+
+    def test_by_default_it_signs_out_wherever_it_signs_in(self):
+        attributes = PROXY.login_representation()["attributes"]
+        assert attributes["post.logout.redirect.uris"] == "+"
+
+    def test_an_explicit_list_is_joined_as_keycloak_stores_it(self):
+        browser = BrowserLogin(
+            redirect_uris=["http://sso.x/*"],
+            post_logout_redirect_uris=["+", "http://portal.x/bye"],
+        )
+        assert browser.representation()["attributes"] == {
+            "post.logout.redirect.uris": "+##http://portal.x/bye",
+        }
+
+    def test_an_empty_list_is_refused(self):
+        """Empty would be stored as no entry, which Keycloak reads as `+` anyway."""
+        with pytest.raises(ValueError):
+            BrowserLogin(redirect_uris=["http://sso.x/*"], post_logout_redirect_uris=[])
+
+    @pytest.mark.parametrize(
+        "have",
+        [
+            None,  # an imported or hand-made client without the attribute
+            "http://sso.x/*##http://webapp.x/*",  # the hand list staging had
+        ],
+    )
+    def test_a_client_without_it_is_planned_for_update(self, have):
+        attributes = {} if have is None else {"post.logout.redirect.uris": have}
+        current = as_keycloak(PROXY, attributes={"access.token.lifespan": "1800", **attributes})
+        assert _client_needs_update(PROXY, current) is True
+
+    def test_the_same_entries_in_another_order_need_nothing(self):
+        """A second sync after the first writes nothing: the list is compared as a set."""
+        config = PROXY.model_copy(update={"browser": PROXY.browser.model_copy(
+            update={"post_logout_redirect_uris": ["+", "http://portal.x/bye"]}
+        )})
+        current = as_keycloak(config, attributes={
+            "access.token.lifespan": "1800",
+            "post.logout.redirect.uris": "http://portal.x/bye##+",
+        })
+        assert _client_needs_update(config, current) is False
 
 
 # ---------------------------------------------------------------------------

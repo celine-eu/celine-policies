@@ -519,12 +519,15 @@ class TestShippedClientsYaml:
         assert rep["standardFlowEnabled"] is True
         assert rep["directAccessGrantsEnabled"] is True
         hosts = {u.split("://")[1].split("/")[0].split(".")[0] for u in rep["redirectUris"]}
-        # Every frontend behind oauth2-proxy: Keycloak also checks a logout's
-        # post_logout_redirect_uri against this list.
+        # Every frontend behind oauth2-proxy: through "+", Keycloak checks a logout's
+        # post_logout_redirect_uri against this list too.
         assert hosts == {
             "sso", "superset", "webapp", "assistant", "onboarding", "community", "grid", "roi",
         }
-        assert rep["attributes"] == {"access.token.lifespan": "1800"}
+        assert rep["attributes"] == {
+            "access.token.lifespan": "1800",
+            "post.logout.redirect.uris": "+",
+        }
 
     def test_the_browser_token_carries_the_manager_dashboard_surface_scopes(
         self, config: KeycloakConfig

@@ -40,9 +40,12 @@ from celine.policies.cli.keycloak.client import (
 from celine.policies.cli.keycloak.models import (
     GROUP_MEMBER_ADMIN_SCOPES,
     NO_BROWSER_LOGIN,
+    POST_LOGOUT_REDIRECT_URIS,
     ClientConfig,
     KeycloakConfig,
     ScopeConfig,
+    join_post_logout_uris,
+    split_post_logout_uris,
 )
 from celine.policies.cli.keycloak.secrets_file import merge_secrets_file
 from celine.policies.cli.keycloak.settings import DEFAULT_ADMIN_CLIENT_ID
@@ -197,6 +200,9 @@ class HeldBack:
     # Login flows a client update would have switched off on a client that
     # declares no browser login, as (client_id, flags left on).
     login_flows: list[tuple[str, list[str]]] = field(default_factory=list)
+    # Sign-out addresses a browser client's update would have taken off its
+    # post.logout.redirect.uris, as (client_id, addresses kept).
+    post_logout_uris: list[tuple[str, list[str]]] = field(default_factory=list)
     # Realm claim scopes left on the realm default/optional lists. Filled by the
     # command, from `ensure_realm_claim_scopes(remove_realm_defaults=False)`.
     realm_claim_scopes: list[str] = field(default_factory=list)
@@ -224,6 +230,8 @@ class HeldBack:
             )
         for client_id, flags in self.login_flows:
             out.append(f"  = {client_id} keeps {', '.join(flags)} on")
+        for client_id, uris in self.post_logout_uris:
+            out.append(f"  = {client_id} still signs out to {', '.join(uris)}")
         for name in self.realm_claim_scopes:
             out.append(f"  = {name}")
         return out
@@ -1166,8 +1174,14 @@ def _scope_audience(current: dict[str, Any]) -> str | None:
     return None
 
 
-def _client_needs_update(config: ClientConfig, current: dict[str, Any]) -> bool:
-    """Check if a client needs to be updated."""
+def _client_needs_update(
+    config: ClientConfig, current: dict[str, Any], login: dict[str, Any] | None = None
+) -> bool:
+    """Check if a client needs to be updated.
+
+    `login` is what the update would write instead of `config.login_representation()`
+    (`hold_back_removals`); a client already holding it needs no update.
+    """
     if config.name and config.name != current.get("name", ""):
         return True
     if config.description != current.get("description", ""):
@@ -1178,11 +1192,19 @@ def _client_needs_update(config: ClientConfig, current: dict[str, Any]) -> bool:
         # Only a client that declares browser login has its flows compared: a service
         # client's were never compared, and comparing them now would plan an update of
         # every client a realm import or a hand edit ever touched.
-        for key, desired in config.login_representation().items():
+        desired_login = login if login is not None else config.login_representation()
+        for key, desired in desired_login.items():
             if key == "attributes":
                 have = current.get("attributes") or {}
-                if any(have.get(k) != v for k, v in desired.items()):
-                    return True
+                for name, value in desired.items():
+                    if name == POST_LOGOUT_REDIRECT_URIS:
+                        # A `##`-joined list: the same entries in another order match.
+                        if set(split_post_logout_uris(have.get(name))) != set(
+                            split_post_logout_uris(value)
+                        ):
+                            return True
+                    elif have.get(name) != value:
+                        return True
             elif key in ("redirectUris", "webOrigins"):
                 if sorted(current.get(key) or []) != sorted(desired):
                     return True
@@ -1196,6 +1218,34 @@ def _client_needs_update(config: ClientConfig, current: dict[str, Any]) -> bool:
 #: browser login (`KeycloakAdminClient.update_client`). `publicClient` is forced
 #: off too, and turning it off takes a public client's login away just the same.
 FORCED_OFF_LOGIN_FLAGS: tuple[str, ...] = (*NO_BROWSER_LOGIN, "publicClient")
+
+
+def _post_logout_uris_dropped(config: ClientConfig, current: dict[str, Any]) -> list[str]:
+    """The sign-out addresses `current` allows that writing `config` would refuse.
+
+    The declared list allows its own entries, and through `+` every redirect URI the
+    update writes. An address one of those already allows is not taken away, so a
+    hand list the redirect URIs cover is replaced by `+` and nothing is held.
+    """
+    assert config.browser is not None
+    declared = config.browser.post_logout_redirect_uris
+    allowed = [uri for uri in declared if uri != "+"]
+    if "+" in declared:
+        allowed += config.browser.redirect_uris
+    have = split_post_logout_uris((current.get("attributes") or {}).get(POST_LOGOUT_REDIRECT_URIS))
+    # The realm's own `+` (or an unset attribute) follows its redirect URIs, which the
+    # update writes as declared: a redirect URI is not held back either.
+    return [
+        uri for uri in have
+        if uri != "+" and not any(_uri_allows(a, uri) for a in allowed)
+    ]
+
+
+def _uri_allows(allowed: str, uri: str) -> bool:
+    """Whether a valid-redirect entry covers `uri`, an entry itself: equal, or under its `*`."""
+    if allowed == uri:
+        return True
+    return allowed.endswith("*") and uri.rstrip("*").startswith(allowed[:-1])
 
 
 def hold_back_removals(plan: SyncPlan) -> tuple[SyncPlan, HeldBack]:
@@ -1216,7 +1266,10 @@ def hold_back_removals(plan: SyncPlan) -> tuple[SyncPlan, HeldBack]:
       union of what it grants and what is declared, and not at all when the
       union is what it already grants;
     - a client update on a client that declares no browser login keeps each
-      login switch the realm has on, instead of forcing it off.
+      login switch the realm has on, instead of forcing it off;
+    - a client update on a browser client keeps each sign-out address the realm
+      allows and the declaration does not cover, and is not made at all when that
+      leaves nothing to change.
 
     The input plan is not modified.
     """
@@ -1265,6 +1318,18 @@ def hold_back_removals(plan: SyncPlan) -> tuple[SyncPlan, HeldBack]:
                     **action.client.login_representation(),
                     **{flag: True for flag in on},
                 }
+                action = replace(action, login=login)
+        else:
+            kept = _post_logout_uris_dropped(action.client, action.current or {})
+            if kept:
+                held.post_logout_uris.append((action.client.client_id, kept))
+                login = action.client.login_representation()
+                declared = action.client.browser.post_logout_redirect_uris
+                login["attributes"][POST_LOGOUT_REDIRECT_URIS] = join_post_logout_uris(
+                    [*declared, *kept]
+                )
+                if not _client_needs_update(action.client, action.current or {}, login):
+                    continue
                 action = replace(action, login=login)
         clients_to_update.append(action)
 

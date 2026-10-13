@@ -32,6 +32,7 @@ from celine.policies.cli.keycloak.client import (
 from celine.policies.cli.keycloak.models import (
     AdminGroupPermission,
     AdminPermissions,
+    BrowserLogin,
     ClientConfig,
     KeycloakConfig,
     ScopeConfig,
@@ -447,6 +448,88 @@ class TestAClientUpdateKeepsLoginFlowsOn:
         await run(kc, config, current, additive=False)
 
         assert kc.update_client.await_args.kwargs["login"]["standardFlowEnabled"] is False
+
+
+class TestABrowserClientKeepsWhereItSignsOutTo:
+    """A browser client's `post.logout.redirect.uris` is written as declared (`+` by
+    default). An address the realm allows there and the declaration does not cover is a
+    removal: under `--additive` it stays, and is reported. One the redirect URIs cover is
+    not, so the hand list staging had (2026-10-13) becomes `+` with nothing held.
+    """
+
+    PROXY = ClientConfig(
+        client_id="oauth2_proxy",
+        name="oauth2_proxy",
+        service_account_enabled=False,
+        default_scopes=["roles"],
+        browser=BrowserLogin(redirect_uris=["http://sso.x/*", "http://webapp.x/*"]),
+    )
+
+    def current(self, post_logout: str | None, **attributes) -> CurrentState:
+        if post_logout is not None:
+            attributes["post.logout.redirect.uris"] = post_logout
+        rep = {
+            "id": "uuid-proxy",
+            "clientId": "oauth2_proxy",
+            "name": "oauth2_proxy",
+            "description": "",
+            "serviceAccountsEnabled": False,
+            **{k: v for k, v in self.PROXY.login_representation().items() if k != "attributes"},
+            "attributes": {"client.secret.creation.time": "1", **attributes},
+        }
+        state = realm()
+        state.clients["oauth2_proxy"] = rep
+        return state
+
+    def config(self) -> KeycloakConfig:
+        return KeycloakConfig(scopes=SCOPES, clients=[svc(), self.PROXY])
+
+    def written(self, kc) -> str:
+        return kc.update_client.await_args.kwargs["login"]["attributes"]["post.logout.redirect.uris"]
+
+    async def test_a_hand_list_the_redirect_uris_cover_becomes_plus(self, kc):
+        """*Red:* treat every entry `+` replaces as a removal — staging keeps its hand list."""
+        _, held, result = await run(kc, self.config(), self.current("http://sso.x/*##http://webapp.x/*"))
+
+        assert self.written(kc) == "+"
+        assert held.post_logout_uris == []
+        assert result.held_back == []
+
+    async def test_an_address_nothing_declares_is_kept_and_reported(self, kc):
+        """*Red:* drop the branch in `hold_back_removals` — portal's sign-out is taken away."""
+        current = self.current("http://sso.x/*##http://portal.x/bye")
+
+        _, held, result = await run(kc, self.config(), current)
+
+        assert self.written(kc) == "+##http://portal.x/bye"
+        assert held.post_logout_uris == [("oauth2_proxy", ["http://portal.x/bye"])]
+        assert "  = oauth2_proxy still signs out to http://portal.x/bye" in result.held_back
+
+    async def test_once_kept_the_next_additive_run_writes_nothing(self, kc):
+        """*Red:* keep the update when the union is what the realm holds — every
+        additive run (every pod start) rewrites the client."""
+        current = self.current("+##http://portal.x/bye")
+
+        plan, held, _ = await run(kc, self.config(), current)
+
+        assert plan.clients_to_update == []
+        kc.update_client.assert_not_awaited()
+        assert held.post_logout_uris == [("oauth2_proxy", ["http://portal.x/bye"])]
+
+    async def test_a_full_run_writes_the_declaration(self, kc):
+        await run(kc, self.config(), self.current("http://sso.x/*##http://portal.x/bye"), additive=False)
+
+        assert self.written(kc) == "+"
+
+    async def test_a_service_client_updated_alongside_is_given_no_sign_out_list(self, kc):
+        """*Red:* add the attribute to `NO_BROWSER_LOGIN` — every service client gains one."""
+        config = KeycloakConfig(scopes=SCOPES, clients=[svc(description="changed"), self.PROXY])
+
+        await run(kc, config, self.current("+"))
+
+        (call,) = kc.update_client.await_args_list
+        assert call.kwargs["client_id"] == "svc-alpha"
+        assert "attributes" not in call.kwargs["login"]
 
 
 # ---------------------------------------------------------------------------

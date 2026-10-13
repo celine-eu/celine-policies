@@ -262,19 +262,44 @@ class BrowserLogin(BaseModel):
     access_token_lifespan: int | None = Field(
         default=None, description="access.token.lifespan, in seconds; None leaves it alone"
     )
+    # Keycloak checks a logout's post_logout_redirect_uri against this list, and against
+    # the redirect URIs only through '+'. A list set by hand used to decide which frontends
+    # could sign out, whatever `redirect_uris` said (staging, 2026-10-13).
+    post_logout_redirect_uris: list[str] = Field(
+        default_factory=lambda: ["+"],
+        min_length=1,
+        description="post.logout.redirect.uris; '+' means the redirect URIs",
+    )
 
     def representation(self) -> dict[str, Any]:
         """The client representation keys this block owns, as Keycloak spells them."""
-        rep: dict[str, Any] = {
+        attributes = {
+            POST_LOGOUT_REDIRECT_URIS: join_post_logout_uris(self.post_logout_redirect_uris)
+        }
+        if self.access_token_lifespan is not None:
+            attributes["access.token.lifespan"] = str(self.access_token_lifespan)
+        return {
             "standardFlowEnabled": True,
             "implicitFlowEnabled": self.implicit_flow,
             "directAccessGrantsEnabled": self.direct_access_grants,
             "redirectUris": list(self.redirect_uris),
             "webOrigins": list(self.web_origins),
+            "attributes": attributes,
         }
-        if self.access_token_lifespan is not None:
-            rep["attributes"] = {"access.token.lifespan": str(self.access_token_lifespan)}
-        return rep
+
+
+#: The client attribute holding where a client may return to after a logout. Keycloak
+#: stores the list as one string, joined with `##`.
+POST_LOGOUT_REDIRECT_URIS = "post.logout.redirect.uris"
+
+
+def join_post_logout_uris(uris: list[str]) -> str:
+    return "##".join(uris)
+
+
+def split_post_logout_uris(value: str | None) -> list[str]:
+    """The attribute as a list; unset or empty is no entry at all."""
+    return [uri for uri in (value or "").split("##") if uri]
 
 
 #: The login flows of a client that declares no `browser` block: a service account only.

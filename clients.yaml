@@ -312,9 +312,11 @@ clients:
   #
   # The redirect URIs are the union of both imports' hosts: sso and superset (infra),
   # webapp and assistant (the dev import, and the invitation's return address), and every
-  # other frontend behind oauth2-proxy: onboarding, community, grid and roi. Keycloak checks a
-  # logout's post_logout_redirect_uri against this same list, so a frontend missing here has
-  # a sign-out that stops at "invalid redirect URI".
+  # other frontend behind oauth2-proxy: onboarding, community, grid and roi. A frontend
+  # missing here has a sign-out that stops at "invalid redirect URI": Keycloak checks a
+  # logout's post_logout_redirect_uri against the client's `post.logout.redirect.uris`, and
+  # `browser.post_logout_redirect_uris` (default "+") sets it to "+", which is this list.
+  # A list set there by hand decided the sign-out until the sync owned it (staging, 2026-10-13).
   # CELINE_DOMAIN and CELINE_URL_SCHEME aim them per deployment; the defaults are the
   # local stack. The secret must equal the one oauth2-proxy is configured with.
   # ---------------------------------------------------------------------------

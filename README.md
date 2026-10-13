@@ -186,11 +186,20 @@ plan and in the result:
 | revoke an admin permission for a group no longer named | kept |
 | drop a scope from an admin permission | the scope is kept; scopes the file adds are still granted |
 | switch off a login flow (or `publicClient`) on a client that declares no `browser` block, while updating it | the flow is left on |
+| take a sign-out address off a browser client's `post.logout.redirect.uris` that neither its declared list nor, through `+`, its redirect URIs cover | the address is kept, after the declared list |
 | take `organization`, `groups`, `dataspace` off the realm default/optional scope lists | left on the lists; the scopes are still created and assigned to the oauth2-proxy client |
 
 A client's declared `browser` block is an update, not a removal: its `redirectUris` and
 `webOrigins` are written as declared, so a URI dropped from the file is dropped from the
 client under `--additive` too.
+
+`browser.post_logout_redirect_uris` (default `["+"]`) is written as the client attribute
+`post.logout.redirect.uris`, which is what Keycloak checks a logout's
+`post_logout_redirect_uri` against; `+` means the redirect URIs, so a frontend added to
+`redirect_uris` can sign out too. The list is compared as a set, so a converged client is
+not rewritten. A hand-set list the redirect URIs already cover becomes `+` under
+`--additive` with nothing held; an address beyond them is kept and listed, and once kept
+the next additive run writes nothing.
 
 `--additive --dry-run` lists the same held-back items without writing anything.
 `--additive` cannot be combined with `--prune`, and the pair exits 2 before connecting.
