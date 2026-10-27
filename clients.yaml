@@ -381,6 +381,12 @@ clients:
     name: Pipeline Orchestrator
     secret: ${SVC_PIPELINES_SECRET:-svc-pipelines}
     scopes_prefix: pipelines
+    # A warehouse on another site reads the two exports below through that site's
+    # API gateway (`api.<domain>`), whose oauth2-proxy accepts a bearer token only
+    # when its `aud` names oauth2-proxy's client, as `celine-cli`'s does. The
+    # services behind the gateway still check the scopes.
+    extra_audiences:
+      - oauth2_proxy
     default_scopes:
       # Own resources
       - pipelines.runs.read

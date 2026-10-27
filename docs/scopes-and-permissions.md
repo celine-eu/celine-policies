@@ -195,8 +195,14 @@ default_scopes:
 
 ### svc-pipelines
 
+A warehouse on another site reads the two exports through that site's API gateway, whose
+oauth2-proxy accepts a bearer token only when its `aud` names `oauth2_proxy`; hence the
+extra audience. The services behind the gateway still check the scopes.
+
 ```yaml
 scopes_prefix: pipelines
+extra_audiences:
+  - oauth2_proxy
 default_scopes:
   - pipelines.runs.read
   - pipelines.runs.write
