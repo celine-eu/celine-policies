@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.10.0 (2026-10-27)
+
+### Features
+
+- Svc-pipelines tokens name the gateway audience
+  ([`c31a437`](https://github.com/celine-eu/celine-policies/commit/c31a437061ea99bf8fd81694bff44e001bf5ecab))
+
+
 ## v1.9.0 (2026-10-13)
 
 ### Features
