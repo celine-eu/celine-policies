@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.13.0 (2026-11-02)
+
+### Features
+
+- **mirror-members**: Mirrors carry a placeholder profile
+  ([`a034138`](https://github.com/celine-eu/celine-policies/commit/a0341385776c542be73befc23e184679aa86c586))
+
+
 ## v1.12.0 (2026-11-02)
 
 ### Features
