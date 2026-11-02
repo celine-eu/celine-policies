@@ -66,6 +66,11 @@ IMPERSONATION_PERMISSION = "celine-member-mirror:impersonate"
 #: `view` finds the group, `view-members` lists the mirrors, `impersonate-members` enters
 #: one. Nothing that writes.
 IMPERSONATION_SCOPES = ("impersonate-members", "view", "view-members")
+#: The realm-management roles an impersonator also needs: the admin console refuses an
+#: account holding none, whatever its fine-grained permissions (staging, 2026-11-02).
+#: `query-users` and `query-groups` open it and let the searches run; what they return is
+#: still filtered by the permissions above. Added, never removed (as `bootstrap` does).
+IMPERSONATOR_CONSOLE_ROLES = ("query-users", "query-groups")
 
 #: Values of ENV the command refuses: the source itself.
 REFUSED_ENVS = frozenset({"prod", "production"})
@@ -90,6 +95,7 @@ COUNTS = (
     "impersonators_missing",
     "impersonators_refused",
     "impersonation_written",
+    "impersonator_roles_added",
 )
 #: The counts that mean a member could not be mirrored as the source has it.
 ATTENTION = frozenset(
@@ -516,6 +522,8 @@ async def _grant_impersonation(
     if not ids:
         return
 
+    await _grant_console_roles(kc, ids, dry_run, report)
+
     policy = await kc.find_admin_policy_by_name(ap_uuid, IMPERSONATORS_POLICY)
     policy_id = policy["id"] if policy else None
     if policy is None or kc.admin_policy_user_ids(policy) != ids:
@@ -547,10 +555,30 @@ async def _grant_impersonation(
     )
 
 
+async def _grant_console_roles(kc: Any, user_ids: set[str], dry_run: bool, report: MirrorReport) -> None:
+    """Make sure each impersonator holds `IMPERSONATOR_CONSOLE_ROLES`. Additive."""
+    rm_client = await kc.get_realm_management_client()
+    if not rm_client:
+        raise MirrorRefused("the target realm has no realm-management client")
+    available = {r["name"]: r for r in await kc.get_client_roles(rm_client["id"])}
+    missing_roles = [name for name in IMPERSONATOR_CONSOLE_ROLES if name not in available]
+    if missing_roles:
+        raise MirrorRefused(f"realm-management lacks {', '.join(missing_roles)}")
+    for user_id in sorted(user_ids):
+        held = {r["name"] for r in await kc.get_user_client_roles(user_id, rm_client["id"])}
+        to_add = [available[name] for name in IMPERSONATOR_CONSOLE_ROLES if name not in held]
+        if not to_add:
+            continue
+        report.add("impersonator_roles_added", len(to_add))
+        if not dry_run:
+            await kc.assign_client_roles_to_user(user_id, rm_client["id"], to_add)
+
+
 __all__ = [
     "IMPERSONATION_PERMISSION",
     "IMPERSONATION_SCOPES",
     "IMPERSONATORS_POLICY",
+    "IMPERSONATOR_CONSOLE_ROLES",
     "MIRROR_GROUP",
     "MIRROR_MARKER",
     "MirrorMember",

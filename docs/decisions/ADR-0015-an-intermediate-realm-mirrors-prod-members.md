@@ -57,7 +57,10 @@ added, never removed.
 `CELINE_MEMBER_MIRROR_IMPERSONATORS`), the command keeps a user policy naming those accounts
 and a `Groups` permission on `/member-mirrors` with `impersonate-members`, `view` and
 `view-members`, and nothing that writes. Their names are `celine-member-mirror:*`, outside the
-`celine-policies:` prefix `keycloak sync` reads and prunes. The list is the deployment's.
+`celine-policies:` prefix `keycloak sync` reads and prunes. The list is the deployment's. The
+named accounts also hold `query-users` and `query-groups` (realm-management), added and never
+removed: without any realm-management role the admin console refuses them (staging,
+2026-11-02), and those two open it without widening what the permission lets them see.
 
 **It writes with the target realm's admin client** (`celine-admin-cli`, the credential the
 policies shell already holds), not with a client of its own: partial import needs

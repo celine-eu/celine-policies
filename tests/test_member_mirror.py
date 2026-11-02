@@ -33,6 +33,7 @@ from celine.policies.cli.keycloak.client import (
 from celine.policies.cli.keycloak.member_mirror import (
     IMPERSONATION_PERMISSION,
     IMPERSONATION_SCOPES,
+    IMPERSONATOR_CONSOLE_ROLES,
     IMPERSONATORS_POLICY,
     MIRROR_GROUP,
     MIRROR_MARKER,
@@ -95,6 +96,8 @@ class FakeRealm:
             self.add_organization(alias)
         self.ap = "ap-uuid" if admin_permissions else None
         self.policies: dict[str, dict[str, Any]] = {}
+        #: realm-management client roles per user id
+        self.rm_roles: dict[str, set[str]] = {}
         self.writes: list[tuple] = []
         self.imported: list[dict[str, Any]] = []
 
@@ -236,6 +239,26 @@ class FakeRealm:
     async def get_admin_permission_resources(self, ap_uuid, permission_id):
         p = next(p for p in self.policies.values() if p["id"] == permission_id)
         return [{"_id": "res-x", "name": p["_group"]}]
+
+    # --- realm-management roles ---
+
+    RM_ROLES = ("query-users", "query-groups", "view-users", "manage-users", "impersonation")
+
+    async def get_realm_management_client(self):
+        return {"id": "rm-uuid", "clientId": "realm-management"}
+
+    async def get_client_roles(self, client_uuid):
+        assert client_uuid == "rm-uuid"
+        return [{"id": f"r-{n}", "name": n} for n in self.RM_ROLES]
+
+    async def get_user_client_roles(self, user_id, client_uuid):
+        assert client_uuid == "rm-uuid"
+        return [{"id": f"r-{n}", "name": n} for n in sorted(self.rm_roles.get(user_id, set()))]
+
+    async def assign_client_roles_to_user(self, user_id, client_uuid, roles):
+        assert client_uuid == "rm-uuid" and roles
+        self.writes.append(("rm-roles", user_id, tuple(sorted(r["name"] for r in roles))))
+        self.rm_roles.setdefault(user_id, set()).update(r["name"] for r in roles)
 
     async def get_admin_permission_policies(self, ap_uuid, permission_id):
         p = next(p for p in self.policies.values() if p["id"] == permission_id)
@@ -591,6 +614,58 @@ class TestImpersonation:
         await run(realm, export(member("ex-00001", SUB_A)))
 
         assert realm.policies == {}
+
+    async def test_impersonators_get_the_console_roles_and_nothing_more(self):
+        # Keycloak's admin console refuses an account with no realm-management role at all,
+        # whatever its fine-grained permissions (staging, 2026-11-02): query-users and
+        # query-groups open it and let the search run, filtered by those permissions.
+        realm = FakeRealm()
+        realm.add_user("team-1", "team-account-1")
+
+        report = await run(realm, export(member("ex-00001", SUB_A)), impersonators=["team-account-1"])
+
+        assert realm.rm_roles["team-1"] == set(IMPERSONATOR_CONSOLE_ROLES) == {"query-users", "query-groups"}
+        assert report.counts["impersonator_roles_added"] == 2
+        assert not report.needs_attention
+
+    async def test_a_role_already_held_is_not_assigned_again_and_others_stay(self):
+        realm = FakeRealm()
+        realm.add_user("team-1", "team-account-1")
+        realm.rm_roles["team-1"] = {"query-users", "view-users"}
+
+        report = await run(realm, export(), impersonators=["team-account-1"])
+
+        assert ("rm-roles", "team-1", ("query-groups",)) in realm.writes
+        assert realm.rm_roles["team-1"] == {"query-users", "query-groups", "view-users"}
+        assert report.counts["impersonator_roles_added"] == 1
+
+    async def test_the_roles_are_written_once(self):
+        realm = FakeRealm()
+        realm.add_user("team-1", "team-account-1")
+        await run(realm, export(), impersonators=["team-account-1"])
+        realm.writes.clear()
+
+        report = await run(realm, export(), impersonators=["team-account-1"])
+
+        assert realm.writes == []
+        assert report.counts["impersonator_roles_added"] == 0
+
+    async def test_a_dry_run_counts_the_roles_and_writes_none(self):
+        realm = FakeRealm()
+        realm.add_user("team-1", "team-account-1")
+
+        report = await run(realm, export(), impersonators=["team-account-1"], dry_run=True)
+
+        assert realm.rm_roles == {}
+        assert report.counts["impersonator_roles_added"] == 2
+
+    async def test_a_missing_or_refused_name_gets_no_role(self):
+        realm = FakeRealm()
+        await run(realm, export(member("ex-00001", SUB_A)))
+
+        await run(realm, export(member("ex-00001", SUB_A)), impersonators=["ex-00001", "nobody"])
+
+        assert realm.rm_roles == {}
 
     async def test_a_realm_without_admin_permissions_is_refused(self):
         realm = FakeRealm(admin_permissions=False)
