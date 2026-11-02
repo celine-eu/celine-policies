@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.11.1 (2026-11-02)
+
+### Bug Fixes
+
+- **clients**: Svc-pipelines reads the member export only
+  ([`654514d`](https://github.com/celine-eu/celine-policies/commit/654514d5946f06a57726b2f521c93472ae1e2b69))
+
+
 ## v1.11.0 (2026-11-02)
 
 ### Features
