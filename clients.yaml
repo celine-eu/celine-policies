@@ -124,6 +124,12 @@ scopes:
     description: Permission to import into the registry
   - name: rec-registry.export
     description: Permission to export from the registry
+  # `GET /admin/export/mirror` only: per member the key, community, area, role,
+  # type, status, sensor ids, POD hashes and account subject, no POD code or
+  # personal detail. What an intermediate environment mirrors prod's members
+  # from (REQ-0021).
+  - name: rec-registry.mirror
+    description: Read the member mirror export (no personal data)
   - name: rec-registry.lookup
     description: Permission to lookup data
 
@@ -670,6 +676,22 @@ clients:
       # *from* the registry and must never be able to write to it, least of all
       # to replacement-import over it.
       - rec-registry.export
+
+  # The member-mirror job of an intermediate environment (staging, preprod) reads
+  # prod's members with this client of prod's realm (REQ-0021, ADR-0015): the
+  # mirror export and nothing else, no realm administration. It reaches the
+  # registry through prod's API gateway, whose oauth2-proxy accepts a bearer
+  # token only when its `aud` names `oauth2_proxy`. The job writes its own
+  # realm with that realm's admin client, never with this one.
+  - client_id: svc-member-mirror
+    name: Member Mirror Reader
+    secret: ${SVC_MEMBER_MIRROR_SECRET:-svc-member-mirror}
+    # No scopes_prefix — it owns nothing, it only reads.
+    extra_audiences:
+      - svc-rec-registry
+      - oauth2_proxy
+    default_scopes:
+      - rec-registry.mirror
 
   - client_id: celine-cli
     name: CELINE Admin CLI

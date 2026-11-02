@@ -66,6 +66,7 @@ Examples:
 | `rec-registry.community.write` | Update community metadata, areas and topology |
 | `rec-registry.import` | Import into the registry |
 | `rec-registry.export` | Export from the registry |
+| `rec-registry.mirror` | Read the member mirror export (`GET /admin/export/mirror`): key, community, area, role, type, status, sensor ids and account subject, nothing personal (REQ-0021) |
 | `rec-registry.lookup` | Lookup data |
 
 ### REC Onboarding
@@ -433,6 +434,29 @@ this repository cannot enforce that.** A route added to this service by accident
 `manage-realm` into an internet-facing credential. The guard lives with the ingress
 configuration, not here. See
 [ADR-0007](decisions/ADR-0007-realm-wide-administration-is-declared-for-a-holder-with-no-public-route.md).
+
+### svc-member-mirror
+
+The member-mirror job of an intermediate environment reads prod's members with this client
+of prod's realm (REQ-0021, [ADR-0015](decisions/ADR-0015-an-intermediate-realm-mirrors-prod-members.md)).
+It reaches the registry through prod's API gateway, hence `oauth2_proxy`. It writes nothing
+anywhere; the job writes its own realm with that realm's admin client.
+
+```yaml
+# No scopes_prefix — it owns nothing, it only reads.
+extra_audiences:
+  - svc-rec-registry
+  - oauth2_proxy
+default_scopes:
+  - rec-registry.mirror
+```
+
+On the intermediate realm, `mirror-members --impersonator` grants named accounts
+`impersonate-members`, `view` and `view-members` on the realm group `/member-mirrors` (a user
+policy and a `Groups` permission named `celine-member-mirror:*`, which `sync` neither reads nor
+prunes). No `clients.yaml` declaration carries it: a client's `admin_permissions` is a service
+account's grant, the same in every environment, and this one is a person's, on non-prod realms
+only.
 
 ### celine-cli
 

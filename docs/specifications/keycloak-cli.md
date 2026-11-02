@@ -216,3 +216,49 @@ deployment's own inputs (`${SVC_…_SECRET}`), so nothing outside dev needs them
 one reader of `sync`'s entries is `sync-users --from-registry`'s last fallback for the registry
 client's secret, a dev-only command (REQ-0006).
 
+
+---
+
+### REQ-0021 — `mirror-members` keeps mirrors of prod's members on an intermediate realm, and never runs on prod
+
+`celine-policies keycloak mirror-members` reads the member mirror export of a source registry
+(`GET /admin/export/mirror`, scope `rec-registry.mirror`, client `svc-member-mirror` of the
+source realm, or the same JSON from `--from-file`) and converges the target realm on it
+([ADR-0015](../decisions/ADR-0015-an-intermediate-realm-mirrors-prod-members.md)):
+
+- **One mirror per member with an account subject:** id = the subject (lower-case UUID),
+  username = the member key (lower-cased by Keycloak), enabled exactly while the member's
+  status is `active`; created by partial import with `ifResourceExists: FAIL`. A subject in
+  two communities is one mirror in both.
+- **Nothing personal is written:** the representation carries `id`, `username`, `enabled` and
+  `groups` only — no e-mail, name, credential or attribute.
+- **A member without a subject gets no account**, and is counted.
+- **Membership:** the community's organization (alias = community key) and its `viewers`
+  group, and the realm group `/member-mirrors`, which carries the source issuer as attribute
+  `celine_mirror`. A `/member-mirrors` without that value is refused (exit 1).
+- **Only mirrors are written.** An account outside `/member-mirrors` is never written, even
+  when it holds the member's username or id; a username held by another mirror, a changed key,
+  a subject under two keys or a key under two subjects, and a community with no organization
+  (or no `viewers` group) are skipped and counted.
+- **Disable, never delete:** a mirror whose subject is gone from the export or no longer active
+  is disabled. No command deletes a user; organization memberships are not removed.
+- **Idempotent:** a second run with the same export writes nothing. `--dry-run` writes nothing
+  and reports the counts a run would.
+- **Impersonation:** with `--impersonator NAME` (repeatable) or
+  `CELINE_MEMBER_MIRROR_IMPERSONATORS` (space-separated), a user policy
+  `celine-member-mirror:impersonators` names exactly those accounts and a `Groups` permission
+  `celine-member-mirror:impersonate` on `/member-mirrors` grants them `impersonate-members`,
+  `view` and `view-members`, nothing else. A name with no account is counted; a mirror is
+  never an impersonator. No list: the permission is left as it is.
+- **Refusals, before the source is read or Keycloak is asked anything:** `ENV` (or
+  `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`) `prod` or `production`, or unset; a target Keycloak whose
+  host is the source issuer's; no `--source-issuer`; both or neither source; a registry source
+  without `CELINE_MEMBER_MIRROR_SOURCE_CLIENT_SECRET`.
+- **Output is counts** (and the community keys without an organization), never a member's key,
+  subject or anything else of a member.
+- **Exit codes:** `0` converged; `1` refused or failed; `2` ran, but a member could not be
+  mirrored (a skip above other than a missing subject, or an impersonator not found or refused).
+
+The source client holds `rec-registry.mirror` alone, and its token names `svc-rec-registry`
+and `oauth2_proxy` (the source's API gateway). The target is written with the target realm's
+admin client.

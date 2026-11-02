@@ -1814,6 +1814,112 @@ class KeycloakAdminClient:
 
         return set()
 
+    # A *user* policy ("the caller is one of these accounts") and a group
+    # permission bound to it: how named people, rather than a service account,
+    # are given a scope over one group's members. `keycloak mirror-members` is
+    # the one caller (REQ-0021), for `impersonate-members` on the mirror group.
+
+    @staticmethod
+    def admin_policy_user_ids(policy: dict[str, Any]) -> set[str]:
+        """The user ids a user policy names, in either shape Keycloak uses.
+
+        The same two shapes as `_policy_client_uuids`: `users` as a list when the
+        policy is fetched on its own, a JSON-encoded string inside `config` when
+        it comes from a listing or a search by name.
+        """
+        direct = policy.get("users")
+        if isinstance(direct, list):
+            return {str(u) for u in direct}
+        encoded = (policy.get("config") or {}).get("users")
+        if isinstance(encoded, str):
+            try:
+                decoded = jsonlib.loads(encoded)
+            except ValueError:
+                return set()
+            if isinstance(decoded, list):
+                return {str(u) for u in decoded}
+        return set()
+
+    async def create_admin_user_policy(
+        self, ap_uuid: str, name: str, user_ids: list[str]
+    ) -> str:
+        """Create a policy that matches exactly these accounts. Returns its id."""
+        created = await self._post(
+            f"/clients/{ap_uuid}/authz/resource-server/policy/user",
+            json={"name": name, "users": sorted(user_ids), "logic": "POSITIVE"},
+        )
+        logger.info("Created admin user policy %s", name)
+        return created["id"]
+
+    async def update_admin_user_policy(
+        self, ap_uuid: str, policy_id: str, name: str, user_ids: list[str]
+    ) -> None:
+        """Rewrite a user policy's account list. Built afresh, as a listing's
+        `config` block is not accepted back on a PUT."""
+        await self._put(
+            f"/clients/{ap_uuid}/authz/resource-server/policy/user/{policy_id}",
+            json={
+                "id": policy_id,
+                "name": name,
+                "type": "user",
+                "logic": "POSITIVE",
+                "decisionStrategy": "UNANIMOUS",
+                "users": sorted(user_ids),
+            },
+            expected_status=[200, 201, 204],
+        )
+        logger.info("Updated admin user policy %s", name)
+
+    async def get_admin_permission_policies(
+        self, ap_uuid: str, permission_id: str
+    ) -> list[dict[str, Any]]:
+        """The policies a permission applies."""
+        return (
+            await self._get(
+                f"/clients/{ap_uuid}/authz/resource-server/policy/{permission_id}/associatedPolicies"
+            )
+            or []
+        )
+
+    async def put_group_scope_permission(
+        self,
+        ap_uuid: str,
+        permission_id: str | None,
+        *,
+        name: str,
+        description: str,
+        group_id: str,
+        scopes: list[str],
+        policy_id: str,
+    ) -> str:
+        """Create (no id) or rewrite a `Groups` permission. Returns its id.
+
+        The general form of `create_group_admin_permission`, for a permission
+        whose name and policy are not a client's.
+        """
+        payload: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "type": "scope",
+            "resourceType": "Groups",
+            "resources": [group_id],
+            "scopes": sorted(scopes),
+            "policies": [policy_id],
+            "decisionStrategy": "UNANIMOUS",
+            "logic": "POSITIVE",
+        }
+        base = f"/clients/{ap_uuid}/authz/resource-server/permission/scope"
+        if permission_id is None:
+            created = await self._post(base, json=payload)
+            logger.info("Created admin permission %s", name)
+            return created["id"]
+        payload["id"] = permission_id
+        await self._put(
+            f"{base}/{permission_id}", json=payload, expected_status=[200, 201, 204]
+        )
+        logger.info("Updated admin permission %s", name)
+        return permission_id
+
     async def create_group_admin_permission(
         self,
         ap_uuid: str,
@@ -2325,6 +2431,59 @@ class KeycloakAdminClient:
         name = path.lstrip("/")
         group_id = await self.create_group(name)
         return group_id, True
+
+    async def get_group(self, group_id: str) -> dict[str, Any]:
+        """One realm group, with its `attributes` (a search leaves them out)."""
+        return await self._get(f"/groups/{group_id}")
+
+    async def create_group_with_attributes(
+        self, name: str, attributes: dict[str, list[str]]
+    ) -> str:
+        """Create a top-level realm group carrying `attributes`. Returns its id.
+
+        Group attributes are kept as given: the user profile that drops an
+        undeclared *user* attribute does not apply to groups.
+        """
+        await self._post("/groups", json={"name": name, "attributes": attributes})
+        group = await self.get_group_by_path(f"/{name}")
+        if not group:
+            raise KeycloakError(f"Failed to retrieve created group: /{name}")
+        logger.info("Created group: /%s (%s)", name, group["id"])
+        return group["id"]
+
+    async def get_group_members(
+        self, group_id: str, page_size: int = 100
+    ) -> list[dict[str, Any]]:
+        """Every direct member of a realm group, read page by page.
+
+        Keycloak pages `GET /groups/{id}/members`; a listing read one page short
+        would make a member past the end look absent.
+        """
+        members: list[dict[str, Any]] = []
+        while True:
+            page = (
+                await self._get(
+                    f"/groups/{group_id}/members",
+                    params={
+                        "first": len(members),
+                        "max": page_size,
+                        "briefRepresentation": "true",
+                    },
+                )
+                or []
+            )
+            members.extend(page)
+            if len(page) < page_size:
+                return members
+
+    async def partial_import(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """`POST …/partialImport`: the one Admin API call that keeps a given user id.
+
+        `POST /users` assigns its own id; a partial import creates the user with
+        the `id` the representation carries (measured on 26.7.3, 2026-10-30).
+        Keycloak requires `manage-realm` for it.
+        """
+        return await self._post("/partialImport", json=payload) or {}
 
     async def add_user_to_group(self, user_id: str, group_id: str) -> None:
         """Add a user to a group."""

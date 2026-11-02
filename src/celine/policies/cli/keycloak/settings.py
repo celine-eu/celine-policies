@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
 from pydantic import AliasChoices, Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 import secrets as _secrets
 
@@ -612,3 +612,57 @@ class SyncUsersSettings(BaseSettings):  # <<< NEW
             return self.temp_password
         alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$"
         return "".join(_secrets.choice(alphabet) for _ in range(16))
+
+
+class MemberMirrorSettings(BaseSettings):
+    """Settings for `keycloak mirror-members` (REQ-0021), under `CELINE_MEMBER_MIRROR_*`.
+
+    The source is the registry of the realm whose members are mirrored (prod), read
+    with a client of *that* realm; the target is the realm `CELINE_KEYCLOAK_*` names.
+
+    Environment variables:
+        CELINE_MEMBER_MIRROR_SOURCE_URL            the source registry's base URL;
+                                                   `GET <url>/admin/export/mirror`
+        CELINE_MEMBER_MIRROR_SOURCE_ISSUER         the source realm's issuer URL
+                                                   (`https://<keycloak>/realms/<realm>`).
+                                                   Required: it mints the token, names
+                                                   the subjects' realm on the mirror
+                                                   group, and is the host the target
+                                                   must not be.
+        CELINE_MEMBER_MIRROR_SOURCE_CLIENT_ID      default: svc-member-mirror
+        CELINE_MEMBER_MIRROR_SOURCE_CLIENT_SECRET  its secret, in the source realm
+        CELINE_MEMBER_MIRROR_FILE                  read the export from this JSON file
+                                                   instead of the registry
+        CELINE_MEMBER_MIRROR_IMPERSONATORS         space-separated usernames of the
+                                                   target realm that may impersonate
+                                                   the mirrors. Unset: the permission
+                                                   is left as it is.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="CELINE_MEMBER_MIRROR_", extra="ignore")
+
+    source_url: str | None = Field(default=None, description="Source registry base URL")
+    source_issuer: str | None = Field(default=None, description="Source realm issuer URL")
+    source_client_id: str = Field(
+        default="svc-member-mirror", description="Source realm client to read the export as"
+    )
+    source_client_secret: SecretStr | None = Field(
+        default=None, description="Secret of the source realm client"
+    )
+    file: Path | None = Field(default=None, description="Read the export from this file")
+    # NoDecode: the variable is a space-separated list, not JSON.
+    impersonators: Annotated[list[str] | None, NoDecode] = Field(
+        default=None, description="Target realm usernames that may impersonate the mirrors"
+    )
+
+    @field_validator("source_url", "source_issuer", "file", mode="before")
+    @classmethod
+    def _empty_is_unset(cls, value: Any) -> Any:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("impersonators", mode="before")
+    @classmethod
+    def _split_names(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.split()
+        return value

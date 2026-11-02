@@ -392,6 +392,36 @@ The registry client needs `rec-registry.export`. The default, `celine-cli`, hold
 [ADR-0006](decisions/ADR-0006-the-registry-is-the-source-of-members.md) for why,
 and what to change to narrow it.
 
+### Member mirror
+
+`keycloak mirror-members` (REQ-0021,
+[ADR-0015](decisions/ADR-0015-an-intermediate-realm-mirrors-prod-members.md)) runs on an
+intermediate environment (staging, preprod) as a scheduled job, pulling from prod. It
+**refuses `ENV` `prod`, `production` or unset**, and a target Keycloak (`CELINE_KEYCLOAK_BASE_URL`)
+whose host is the source issuer's. It writes the target with the target realm's admin client
+(`CELINE_KEYCLOAK_ADMIN_CLIENT_ID` / `_SECRET`, as `sync`).
+
+| Variable | Flag | Default | Description |
+|----------|------|---------|-------------|
+| `CELINE_MEMBER_MIRROR_SOURCE_URL` | `--source-url` | — | Prod's registry base URL; the job calls `<url>/admin/export/mirror` |
+| `CELINE_MEMBER_MIRROR_SOURCE_ISSUER` | `--source-issuer` | — | **Required.** Prod's realm issuer URL: mints the token, is stored on `/member-mirrors`, and is the host the target must not be |
+| `CELINE_MEMBER_MIRROR_SOURCE_CLIENT_ID` | `--source-client-id` | `svc-member-mirror` | Prod realm client holding `rec-registry.mirror` |
+| `CELINE_MEMBER_MIRROR_SOURCE_CLIENT_SECRET` | — | — | Its secret in prod's realm; required with a registry source |
+| `CELINE_MEMBER_MIRROR_FILE` | `--from-file` | — | Read the export from a JSON file instead (tests, offline). Exclusive with the URL |
+| `CELINE_MEMBER_MIRROR_IMPERSONATORS` | `--impersonator` (repeatable) | — | Space-separated usernames of the target realm that may impersonate the mirrors. Unset: the permission is left as it is |
+| — | `--dry-run` | off | Count what would change, write nothing |
+
+Exit codes: `0` converged; `1` refused or failed (nothing written when refused); `2` ran, but
+a member could not be mirrored (collision with an account the mirror did not make, a username
+held by another mirror, a changed key, a contradiction in the export, a community without an
+organization, an impersonator not found). The output is counts only.
+
+```bash
+ENV=staging celine-policies keycloak mirror-members --dry-run \
+  --source-url https://api.prod.example.org/rec-registry \
+  --source-issuer https://keycloak.prod.example.org/realms/celine
+```
+
 ### Keycloak
 
 The Keycloak service uses the custom image from `keycloak/Dockerfile` (KC 26.7.3 + rec theme). Key environment variables:

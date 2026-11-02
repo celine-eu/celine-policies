@@ -49,6 +49,7 @@ COMMANDS = [
     "set-password",
     "set-user-organization",
     "seed-dev-users",
+    "mirror-members",
 ]
 
 
