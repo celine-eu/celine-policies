@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.15.0 (2026-11-02)
+
+### Features
+
+- **keycloak**: Image on Keycloak 26.8.1
+  ([`4a855b8`](https://github.com/celine-eu/celine-policies/commit/4a855b8722946b05ec83333254172a01bf2a6d01))
+
+
 ## v1.14.0 (2026-11-02)
 
 ### Features
