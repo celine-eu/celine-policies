@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.12.0 (2026-11-02)
+
+### Features
+
+- **mirror-members**: Impersonators get query-users and query-groups
+  ([`190550f`](https://github.com/celine-eu/celine-policies/commit/190550fd00385f1eeb41a347848a7b1932c03ba1))
+
+
 ## v1.11.1 (2026-11-02)
 
 ### Bug Fixes
