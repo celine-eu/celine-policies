@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json as jsonlib
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -246,6 +247,15 @@ class GroupAdminGrantState:
     #: The group this permission resolves to, or None when the permission names
     #: a group that has since been deleted.
     group_id: str | None = None
+
+
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _call_without_ids(request: httpx.Request) -> str:
+    """`METHOD /path` of a call, every UUID in the path as `<id>`: an error names the
+    call without naming an account (a mirror's id is a prod member's subject)."""
+    return f"{request.method} {_UUID_RE.sub('<id>', request.url.path)}"
 
 
 class KeycloakAdminClient:
@@ -609,7 +619,8 @@ class KeycloakAdminClient:
 
         if response.status_code not in expected:
             raise KeycloakError(
-                f"Unexpected response {response.status_code}: {response.text}",
+                f"Unexpected response {response.status_code}: {response.text} "
+                f"({_call_without_ids(response.request)})",
                 status_code=response.status_code,
             )
 

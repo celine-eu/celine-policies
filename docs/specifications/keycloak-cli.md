@@ -254,11 +254,13 @@ source realm, or the same JSON from `--from-file`) and converges the target real
   `CELINE_MEMBER_MIRROR_IMPERSONATORS` (space-separated), a user policy
   `celine-member-mirror:impersonators` names exactly those accounts and a `Groups` permission
   `celine-member-mirror:impersonate` on `/member-mirrors` grants them `impersonate-members`,
-  `view` and `view-members`, nothing else. Each named account also gets the realm-management
-  roles `query-users` and `query-groups`, added and never removed: the admin console refuses an
-  account with no realm-management role, and searches run filtered by the permission above. A
-  name with no account is counted; a mirror is never an impersonator. No list: the permission
-  is left as it is.
+  `view` and `view-members`, nothing else. Each named account also needs the realm-management
+  roles `query-users` and `query-groups` (the admin console refuses an account with no
+  realm-management role; searches run filtered by the permission above). The command **checks
+  them and never grants them**: an account missing either is counted as
+  `impersonators_without_console_roles`, and a master admin assigns them once. A name with no
+  account is counted; a mirror is never an impersonator. No list: the permission is left as it
+  is.
 - **Refusals, before the source is read or Keycloak is asked anything:** `ENV` (or
   `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`) `prod` or `production`, or unset; a target Keycloak whose
   host is the source issuer's; no `--source-issuer`; both or neither source; a registry source
@@ -266,7 +268,8 @@ source realm, or the same JSON from `--from-file`) and converges the target real
 - **Output is counts** (and the community keys without an organization), never a member's key,
   subject or anything else of a member.
 - **Exit codes:** `0` converged; `1` refused or failed; `2` ran, but a member could not be
-  mirrored (a skip above other than a missing subject, or an impersonator not found or refused).
+  mirrored (a skip above other than a missing subject, or an impersonator not found, refused
+  or without the console roles).
 
 The source client holds `rec-registry.mirror` alone, and its token names `svc-rec-registry`
 and `oauth2_proxy` (the source's API gateway). The target is written with the target realm's

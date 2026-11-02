@@ -32,6 +32,7 @@ from celine.policies.cli.keycloak import member_mirror
 from celine.policies.cli.keycloak.client import (
     KeycloakAdminClient,
     KeycloakConflictError,
+    KeycloakError,
     KeycloakNotFoundError,
 )
 from celine.policies.cli.keycloak.member_mirror import (
@@ -282,9 +283,7 @@ class FakeRealm:
         return [{"id": f"r-{n}", "name": n} for n in sorted(self.rm_roles.get(user_id, set()))]
 
     async def assign_client_roles_to_user(self, user_id, client_uuid, roles):
-        assert client_uuid == "rm-uuid" and roles
-        self.writes.append(("rm-roles", user_id, tuple(sorted(r["name"] for r in roles))))
-        self.rm_roles.setdefault(user_id, set()).update(r["name"] for r in roles)
+        raise AssertionError("the mirror never grants a realm-management role")
 
     async def get_admin_permission_policies(self, ap_uuid, permission_id):
         p = next(p for p in self.policies.values() if p["id"] == permission_id)
@@ -727,57 +726,58 @@ class TestImpersonation:
 
         assert realm.policies == {}
 
-    async def test_impersonators_get_the_console_roles_and_nothing_more(self):
-        # Keycloak's admin console refuses an account with no realm-management role at all,
-        # whatever its fine-grained permissions (staging, 2026-11-02): query-users and
-        # query-groups open it and let the search run, filtered by those permissions.
+    async def test_an_impersonator_without_the_console_roles_is_reported_not_granted(self):
+        """Keycloak's admin console refuses an account with no realm-management role
+        (staging, 2026-11-02), and Keycloak refused celine-admin-cli's grant of them (403)
+        although it holds both. Admin roles for people are not a scheduled job's to grant:
+        the run reports the account and exits 2, the registry half still runs."""
         realm = FakeRealm()
         realm.add_user("team-1", "team-account-1")
 
         report = await run(realm, export(member("ex-00001", SUB_A)), impersonators=["team-account-1"])
 
-        assert realm.rm_roles["team-1"] == set(IMPERSONATOR_CONSOLE_ROLES) == {"query-users", "query-groups"}
-        assert report.counts["impersonator_roles_added"] == 2
-        assert not report.needs_attention
+        assert realm.rm_roles == {}
+        assert not [w for w in realm.writes if w[0] == "rm-roles"]
+        assert report.counts["impersonators_without_console_roles"] == 1
+        assert report.needs_attention
+        assert set(IMPERSONATOR_CONSOLE_ROLES) == {"query-users", "query-groups"}
 
-    async def test_a_role_already_held_is_not_assigned_again_and_others_stay(self):
+    async def test_one_role_missing_is_reported_too(self):
         realm = FakeRealm()
         realm.add_user("team-1", "team-account-1")
         realm.rm_roles["team-1"] = {"query-users", "view-users"}
 
         report = await run(realm, export(), impersonators=["team-account-1"])
 
-        assert ("rm-roles", "team-1", ("query-groups",)) in realm.writes
-        assert realm.rm_roles["team-1"] == {"query-users", "query-groups", "view-users"}
-        assert report.counts["impersonator_roles_added"] == 1
+        assert realm.rm_roles["team-1"] == {"query-users", "view-users"}
+        assert report.counts["impersonators_without_console_roles"] == 1
 
-    async def test_the_roles_are_written_once(self):
+    async def test_an_impersonator_holding_both_roles_is_not_reported(self):
         realm = FakeRealm()
         realm.add_user("team-1", "team-account-1")
-        await run(realm, export(), impersonators=["team-account-1"])
-        realm.writes.clear()
+        realm.rm_roles["team-1"] = set(IMPERSONATOR_CONSOLE_ROLES)
 
         report = await run(realm, export(), impersonators=["team-account-1"])
 
-        assert realm.writes == []
-        assert report.counts["impersonator_roles_added"] == 0
+        assert report.counts["impersonators_without_console_roles"] == 0
+        assert not report.needs_attention
 
-    async def test_a_dry_run_counts_the_roles_and_writes_none(self):
+    async def test_the_impersonation_permission_is_still_written_for_them(self):
         realm = FakeRealm()
         realm.add_user("team-1", "team-account-1")
 
-        report = await run(realm, export(), impersonators=["team-account-1"], dry_run=True)
+        report = await run(realm, export(member("ex-00001", SUB_A)), impersonators=["team-account-1"])
 
-        assert realm.rm_roles == {}
-        assert report.counts["impersonator_roles_added"] == 2
+        assert report.counts["impersonation_written"] >= 1
+        assert IMPERSONATORS_POLICY in {p["name"] for p in realm.policies.values()}
 
-    async def test_a_missing_or_refused_name_gets_no_role(self):
+    async def test_a_missing_or_refused_name_is_not_counted_as_without_roles(self):
         realm = FakeRealm()
         await run(realm, export(member("ex-00001", SUB_A)))
 
-        await run(realm, export(member("ex-00001", SUB_A)), impersonators=["ex-00001", "nobody"])
+        report = await run(realm, export(member("ex-00001", SUB_A)), impersonators=["ex-00001", "nobody"])
 
-        assert realm.rm_roles == {}
+        assert report.counts["impersonators_without_console_roles"] == 0
 
     async def test_a_realm_without_admin_permissions_is_refused(self):
         realm = FakeRealm(admin_permissions=False)
@@ -925,6 +925,8 @@ class TestTheCommand:
     def test_impersonators_come_from_the_environment(self, export_file, fake_keycloak):
         fake_keycloak.add_user("team-1", "team-account-1")
         fake_keycloak.add_user("team-2", "team-account-2")
+        for uid in ("team-1", "team-2"):
+            fake_keycloak.rm_roles[uid] = set(IMPERSONATOR_CONSOLE_ROLES)
 
         result = invoke("--from-file", str(export_file), "--source-issuer", SOURCE,
                         env={"ENV": "staging", "CELINE_MEMBER_MIRROR_IMPERSONATORS": "team-account-1 team-account-2"})
@@ -932,6 +934,16 @@ class TestTheCommand:
         assert result.exit_code == 0, result.output
         policy = fake_keycloak.policies[IMPERSONATORS_POLICY]
         assert KeycloakAdminClient.admin_policy_user_ids(policy) == {"team-1", "team-2"}
+
+    def test_an_impersonator_without_the_console_roles_exits_2(self, export_file, fake_keycloak):
+        fake_keycloak.add_user("team-1", "team-account-1")
+
+        result = invoke("--from-file", str(export_file), "--source-issuer", SOURCE,
+                        env={"ENV": "staging", "CELINE_MEMBER_MIRROR_IMPERSONATORS": "team-account-1"})
+
+        assert result.exit_code == 2, result.output
+        assert "impersonators_without_console_roles: 1" in result.output
+        assert "team-account-1" not in result.output
 
     def test_a_malformed_file_exits_1(self, tmp_path, fake_keycloak):
         path = tmp_path / "bad.json"
@@ -1052,6 +1064,21 @@ class TestClientCalls:
         members = await _client(handler).get_group_members("g-1")
 
         assert len(members) == 150
+
+    async def test_an_unexpected_status_names_the_call_without_ids(self):
+        """A 403 that names no call cost a one-off traced job to find (2026-11-02). The ids
+        in the path are masked: a mirror's id is a prod member's subject."""
+        def handler(request):
+            return httpx.Response(403, json={"error": "HTTP 403 Forbidden"})
+
+        with pytest.raises(KeycloakError) as e:
+            await _client(handler).assign_client_roles_to_user(SUB_A, SUB_B, [{"id": "r", "name": "query-users"}])
+
+        msg = str(e.value)
+        assert msg.startswith("Unexpected response 403: ")
+        assert "POST /admin/realms/celine/users/<id>/role-mappings/clients/<id>" in msg
+        assert SUB_A not in msg and SUB_B not in msg
+        assert e.value.status_code == 403
 
     def test_a_user_policy_names_its_users_in_either_shape(self):
         assert KeycloakAdminClient.admin_policy_user_ids({"users": ["a", "b"]}) == {"a", "b"}

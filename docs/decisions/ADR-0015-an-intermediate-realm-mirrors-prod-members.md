@@ -59,9 +59,10 @@ added, never removed.
 and a `Groups` permission on `/member-mirrors` with `impersonate-members`, `view` and
 `view-members`, and nothing that writes. Their names are `celine-member-mirror:*`, outside the
 `celine-policies:` prefix `keycloak sync` reads and prunes. The list is the deployment's. The
-named accounts also hold `query-users` and `query-groups` (realm-management), added and never
-removed: without any realm-management role the admin console refuses them (staging,
-2026-11-02), and those two open it without widening what the permission lets them see.
+named accounts also need `query-users` and `query-groups` (realm-management): without any
+realm-management role the admin console refuses them (staging, 2026-11-02), and those two
+open it without widening what the permission lets them see. The command checks them and
+does not grant them (amended 2026-11-02, below).
 
 **It writes with the target realm's admin client** (`celine-admin-cli`, the credential the
 policies shell already holds), not with a client of its own: partial import needs
@@ -115,3 +116,15 @@ Mirrors made earlier get the placeholders on the next run.
 Rejected: relaxing the realm's user profile (or `VERIFY_PROFILE`) on the intermediate realm.
 It changes the invitation path of the realm's own accounts and moves the intermediate realm
 away from prod's.
+
+## Amendment 2026-11-02 — the console roles are checked, not granted
+
+celine-policies 1.12.0 had `mirror-members` assign `query-users` and `query-groups` to each
+impersonator. On staging Keycloak answered 403 to that grant (`POST
+…/users/<id>/role-mappings/clients/<realm-management>`) although `celine-admin-cli` holds
+`manage-users` and both roles, in its token and on its service account; the job failed
+every run and its registry half stopped. Admin roles for people are not a scheduled job's
+to give anyway. The command now only checks them: an impersonator missing either is
+counted as `impersonators_without_console_roles` and the run exits 2 (the CronJob's
+registry half still runs). A master admin assigns them once, from the console. Which
+Keycloak check refused the grant was not investigated.

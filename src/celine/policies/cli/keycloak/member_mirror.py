@@ -81,7 +81,10 @@ IMPERSONATION_SCOPES = ("impersonate-members", "view", "view-members")
 #: The realm-management roles an impersonator also needs: the admin console refuses an
 #: account holding none, whatever its fine-grained permissions (staging, 2026-11-02).
 #: `query-users` and `query-groups` open it and let the searches run; what they return is
-#: still filtered by the permissions above. Added, never removed (as `bootstrap` does).
+#: still filtered by the permissions above. **Checked, never granted:** admin roles for
+#: people are not a scheduled job's to give, and Keycloak refused this client's grant
+#: (403, staging, 2026-11-02) although it holds both. A master admin assigns them once;
+#: an impersonator without them is counted and the run exits 2.
 IMPERSONATOR_CONSOLE_ROLES = ("query-users", "query-groups")
 
 #: The placeholder profile (see "The placeholder profile" above).
@@ -115,7 +118,7 @@ COUNTS = (
     "impersonators_missing",
     "impersonators_refused",
     "impersonation_written",
-    "impersonator_roles_added",
+    "impersonators_without_console_roles",
 )
 #: The counts that mean a member could not be mirrored as the source has it.
 ATTENTION = frozenset(
@@ -128,6 +131,7 @@ ATTENTION = frozenset(
         "organization_missing",
         "impersonators_missing",
         "impersonators_refused",
+        "impersonators_without_console_roles",
     }
 )
 
@@ -572,7 +576,7 @@ async def _grant_impersonation(
     if not ids:
         return
 
-    await _grant_console_roles(kc, ids, dry_run, report)
+    await _check_console_roles(kc, ids, report)
 
     policy = await kc.find_admin_policy_by_name(ap_uuid, IMPERSONATORS_POLICY)
     policy_id = policy["id"] if policy else None
@@ -605,23 +609,15 @@ async def _grant_impersonation(
     )
 
 
-async def _grant_console_roles(kc: Any, user_ids: set[str], dry_run: bool, report: MirrorReport) -> None:
-    """Make sure each impersonator holds `IMPERSONATOR_CONSOLE_ROLES`. Additive."""
+async def _check_console_roles(kc: Any, user_ids: set[str], report: MirrorReport) -> None:
+    """Count the impersonators missing any of `IMPERSONATOR_CONSOLE_ROLES`. Writes nothing."""
     rm_client = await kc.get_realm_management_client()
     if not rm_client:
         raise MirrorRefused("the target realm has no realm-management client")
-    available = {r["name"]: r for r in await kc.get_client_roles(rm_client["id"])}
-    missing_roles = [name for name in IMPERSONATOR_CONSOLE_ROLES if name not in available]
-    if missing_roles:
-        raise MirrorRefused(f"realm-management lacks {', '.join(missing_roles)}")
     for user_id in sorted(user_ids):
         held = {r["name"] for r in await kc.get_user_client_roles(user_id, rm_client["id"])}
-        to_add = [available[name] for name in IMPERSONATOR_CONSOLE_ROLES if name not in held]
-        if not to_add:
-            continue
-        report.add("impersonator_roles_added", len(to_add))
-        if not dry_run:
-            await kc.assign_client_roles_to_user(user_id, rm_client["id"], to_add)
+        if not set(IMPERSONATOR_CONSOLE_ROLES) <= held:
+            report.add("impersonators_without_console_roles")
 
 
 __all__ = [
