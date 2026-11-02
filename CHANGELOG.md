@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.14.0 (2026-11-02)
+
+### Features
+
+- **mirror-members**: Check the impersonators' console roles, never grant them
+  ([`fb90417`](https://github.com/celine-eu/celine-policies/commit/fb90417784dceb091626bbae156596ac1c24040e))
+
+
 ## v1.13.0 (2026-11-02)
 
 ### Features
