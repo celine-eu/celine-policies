@@ -8,8 +8,19 @@ without a translation. A mirror is an account whose
 - **username** is the member's key in the source registry,
 - **enabled** flag is the member's status (`active` or not),
 
-and that carries no e-mail, name, credential or attribute. Nobody signs in as a mirror:
-the team enters one by impersonation.
+and that carries no personal e-mail or name, no credential and no attribute. Nobody signs
+in as a mirror: the team enters one by impersonation.
+
+## The placeholder profile
+
+The realm's user profile requires an e-mail, a first and a last name. A mirror without
+them stops every impersonation at Keycloak's "Update Account Information" form
+(`VERIFY_PROFILE`, staging, 2026-11-02). So a mirror carries placeholders made from its
+own key, nothing of the person: first name = the key, last name = `mirror`, e-mail =
+`<key>@mirror.invalid`, verified (`.invalid` is reserved and never delivers, RFC 2606;
+verified so that no `VERIFY_EMAIL` follows). A key unfit for an address or a name uses the
+subject instead: one import carries every new mirror, and a value the realm refuses would
+fail them all. A mirror made before the placeholders, or edited by hand, is put back to them.
 
 ## Why a partial import
 
@@ -38,6 +49,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -72,6 +84,13 @@ IMPERSONATION_SCOPES = ("impersonate-members", "view", "view-members")
 #: still filtered by the permissions above. Added, never removed (as `bootstrap` does).
 IMPERSONATOR_CONSOLE_ROLES = ("query-users", "query-groups")
 
+#: The placeholder profile (see "The placeholder profile" above).
+MIRROR_LAST_NAME = "mirror"
+MIRROR_EMAIL_DOMAIN = "mirror.invalid"
+#: A key used as is in the placeholders: what both an e-mail local part and Keycloak's
+#: person-name validator accept. Anything else falls back to the subject.
+_PLACEHOLDER_SAFE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
+
 #: Values of ENV the command refuses: the source itself.
 REFUSED_ENVS = frozenset({"prod", "production"})
 
@@ -87,6 +106,7 @@ COUNTS = (
     "enabled",
     "disabled",
     "memberships_added",
+    "profile_written",
     "unchanged",
     "unmanaged_collisions",
     "username_taken",
@@ -292,6 +312,18 @@ class _Wanted:
     communities: set[str]
 
 
+def placeholder_profile(username: str, subject: str) -> dict[str, Any]:
+    """The non-personal profile a mirror carries: from its key, or its subject when the
+    key is unfit for an address or a name."""
+    base = username if _PLACEHOLDER_SAFE.match(username) and ".." not in username else subject
+    return {
+        "firstName": base,
+        "lastName": MIRROR_LAST_NAME,
+        "email": f"{base}@{MIRROR_EMAIL_DOMAIN}",
+        "emailVerified": True,
+    }
+
+
 def _wanted(members: list[MirrorMember], report: MirrorReport) -> tuple[dict[str, _Wanted], set[str]]:
     """One wanted mirror per subject, and the subjects the export contradicts itself on.
 
@@ -433,6 +465,18 @@ async def mirror_members(
                 report.add("enabled" if w.active else "disabled")
                 if not dry_run:
                     await kc.set_user_enabled(subject, w.active)
+            profile = placeholder_profile(w.username, subject)
+            if any(account.get(k) != v for k, v in profile.items()):
+                changed = True
+                report.add("profile_written")
+                if not dry_run:
+                    await kc.update_user_profile(
+                        subject,
+                        first_name=profile["firstName"],
+                        last_name=profile["lastName"],
+                        email=profile["email"],
+                        email_verified=profile["emailVerified"],
+                    )
             if resolved is not None:
                 added = await _join(kc, resolved, subject, dry_run)
                 report.add("memberships_added", added)
@@ -452,7 +496,13 @@ async def mirror_members(
         if resolved is None:
             continue
         to_create.append(
-            {"id": subject, "username": w.username, "enabled": w.active, "groups": [MIRROR_GROUP]}
+            {
+                "id": subject,
+                "username": w.username,
+                "enabled": w.active,
+                "groups": [MIRROR_GROUP],
+                **placeholder_profile(w.username, subject),
+            }
         )
         joins.append((subject, resolved))
 
@@ -579,7 +629,9 @@ __all__ = [
     "IMPERSONATION_SCOPES",
     "IMPERSONATORS_POLICY",
     "IMPERSONATOR_CONSOLE_ROLES",
+    "MIRROR_EMAIL_DOMAIN",
     "MIRROR_GROUP",
+    "MIRROR_LAST_NAME",
     "MIRROR_MARKER",
     "MirrorMember",
     "MirrorRefused",
@@ -588,6 +640,7 @@ __all__ = [
     "fetch_mirror_export",
     "mirror_members",
     "parse_mirror_export",
+    "placeholder_profile",
     "read_mirror_file",
     "refusal",
 ]

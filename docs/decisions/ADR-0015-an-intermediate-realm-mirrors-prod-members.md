@@ -38,7 +38,8 @@ an intermediate realm.** It reads prod's registry (`GET /admin/export/mirror`, s
 file, and for every member with an account subject converges one account:
 
 - id = the subject, username = the member key, enabled while the member is active;
-- no e-mail, name, credential or attribute;
+- no personal e-mail or name, no credential or attribute; a placeholder profile instead
+  (amended 2026-11-02, below);
 - in the community's organization (alias = community key) and its `viewers` group, as
   provisioning files a participant;
 - in the realm group `/member-mirrors`, which marks it as a mirror and carries the source
@@ -99,3 +100,18 @@ happened, not a substitute for one. On prod nothing changes and the command refu
   Keycloak drops it without a word unless the user profile declares it, and a later admin `PUT`
   of the user can lose it; a group membership is kept and is also what the impersonation grant
   is scoped to.
+
+## Amendment 2026-11-02 — a placeholder profile
+
+The realm's user profile requires an e-mail, a first and a last name. On staging, an
+impersonation of a mirror carrying none of them stopped at Keycloak's "Update Account
+Information" form (`VERIFY_PROFILE`), before the webapp. A mirror now carries placeholders
+made from its own key: first name = the key, last name = `mirror`, e-mail =
+`<key>@mirror.invalid` (`.invalid` is reserved, RFC 2606, and never delivers), verified so
+that no `VERIFY_EMAIL` follows. A key unfit for an address or a name uses the subject. The
+decision reads "no **personal** e-mail or name": nothing of the person is written, as before.
+Mirrors made earlier get the placeholders on the next run.
+
+Rejected: relaxing the realm's user profile (or `VERIFY_PROFILE`) on the intermediate realm.
+It changes the invitation path of the realm's own accounts and moves the intermediate realm
+away from prod's.

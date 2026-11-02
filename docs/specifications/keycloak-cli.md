@@ -230,8 +230,14 @@ source realm, or the same JSON from `--from-file`) and converges the target real
   username = the member key (lower-cased by Keycloak), enabled exactly while the member's
   status is `active`; created by partial import with `ifResourceExists: FAIL`. A subject in
   two communities is one mirror in both.
-- **Nothing personal is written:** the representation carries `id`, `username`, `enabled` and
-  `groups` only — no e-mail, name, credential or attribute.
+- **Nothing personal is written:** the representation carries `id`, `username`, `enabled`,
+  `groups` and a placeholder profile only — no credential, no attribute, nothing of the
+  person. The placeholder profile satisfies the realm's user profile (e-mail, first and last
+  name required): first name = the username, last name = `mirror`, e-mail =
+  `<username>@mirror.invalid`, `emailVerified` true; a username unfit for an address or a
+  name uses the subject instead. Without it an impersonation stops at `VERIFY_PROFILE`.
+  A mirror whose profile differs (made earlier, or edited by hand) is put back to it, and
+  counted as `profile_written`.
 - **A member without a subject gets no account**, and is counted.
 - **Membership:** the community's organization (alias = community key) and its `viewers`
   group, and the realm group `/member-mirrors`, which carries the source issuer as attribute

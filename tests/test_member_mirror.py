@@ -1,12 +1,16 @@
 """`keycloak mirror-members`: an intermediate realm holds mirrors of the source's members.
 
 A mirror is an account whose id is the member's account subject in the source realm and
-whose username is the member's key there, with no e-mail, name or credential. The source is
+whose username is the member's key there, with no personal e-mail or name and no credential:
+the realm's user profile requires an e-mail and both names, so a mirror carries placeholders
+made from its key (a reserved `.invalid` address, verified). The source is
 prod's registry (`GET /admin/export/mirror`); the target is a non-prod realm. What is pinned:
 
 - every member with a subject gets one mirror, in its community's organization and that
   organization's `viewers` group, enabled exactly when the member is active;
-- nothing personal is ever written, and a member without a subject gets no account;
+- nothing personal is ever written, only the placeholder profile; a member without a
+  subject gets no account;
+- a mirror made before the placeholders gets them on the next run;
 - an account the mirror did not make is never touched, whatever it collides with;
 - a mirror whose member left or went inactive is disabled, never deleted;
 - a second run writes nothing;
@@ -35,7 +39,9 @@ from celine.policies.cli.keycloak.member_mirror import (
     IMPERSONATION_SCOPES,
     IMPERSONATOR_CONSOLE_ROLES,
     IMPERSONATORS_POLICY,
+    MIRROR_EMAIL_DOMAIN,
     MIRROR_GROUP,
+    MIRROR_LAST_NAME,
     MIRROR_MARKER,
     MirrorRefused,
     MirrorSourceError,
@@ -54,9 +60,19 @@ SUB_B = "0b6f3c1e-7f0a-4c3e-9a51-0d6c2a1f0002"
 SUB_C = "0b6f3c1e-7f0a-4c3e-9a51-0d6c2a1f0003"
 SUB_D = "0b6f3c1e-7f0a-4c3e-9a51-0d6c2a1f0004"
 
-#: Every key a mirror's representation may carry. Nothing personal is among them.
-MIRROR_KEYS = {"id", "username", "enabled", "groups"}
-PERSONAL_KEYS = {"email", "firstName", "lastName", "credentials", "attributes", "federatedIdentities"}
+#: Every key a mirror's representation may carry. The profile keys hold placeholders only.
+PROFILE_KEYS = {"firstName", "lastName", "email", "emailVerified"}
+MIRROR_KEYS = {"id", "username", "enabled", "groups"} | PROFILE_KEYS
+PERSONAL_KEYS = {"credentials", "attributes", "federatedIdentities"}
+
+
+def placeholder(key: str) -> dict[str, Any]:
+    return {
+        "firstName": key,
+        "lastName": MIRROR_LAST_NAME,
+        "email": f"{key}@{MIRROR_EMAIL_DOMAIN}",
+        "emailVerified": True,
+    }
 
 
 def member(key: str, subject: str | None, status: str = "active", **extra: Any) -> dict[str, Any]:
@@ -135,6 +151,15 @@ class FakeRealm:
         self.users[user_id]["enabled"] = enabled
         return True
 
+    async def update_user_profile(self, user_id, *, first_name=None, last_name=None, email=None,
+                                  email_verified=None):
+        changes = {"firstName": first_name, "lastName": last_name, "email": email,
+                   "emailVerified": email_verified}
+        changes = {k: v for k, v in changes.items() if v is not None}
+        self.writes.append(("profile", user_id, tuple(sorted(changes))))
+        self.users[user_id].update(changes)
+        return dict(self.users[user_id])
+
     async def partial_import(self, payload):
         assert payload["ifResourceExists"] == "FAIL"
         for rep in payload["users"]:
@@ -143,7 +168,8 @@ class FakeRealm:
         self.writes.append(("import", len(payload["users"])))
         for rep in payload["users"]:
             self.imported.append(rep)
-            self.add_user(rep["id"], rep["username"].lower(), enabled=rep["enabled"])
+            profile = {k: rep[k] for k in PROFILE_KEYS if k in rep}
+            self.add_user(rep["id"], rep["username"].lower(), enabled=rep["enabled"], **profile)
             for path in rep.get("groups", []):
                 gid = next(g["id"] for g in self.groups.values() if g["path"] == path)
                 self.group_members[gid].add(rep["id"])
@@ -311,6 +337,30 @@ class TestAMirror:
         assert set(rep) <= MIRROR_KEYS
         assert not set(rep) & PERSONAL_KEYS
         assert "a.person@example.org" not in json.dumps(rep)
+        assert "A Person" not in json.dumps(rep)
+
+    async def test_it_carries_the_placeholder_profile_the_realm_requires(self):
+        """The realm's user profile requires e-mail, first and last name: without them an
+        impersonation stops at "Update Account Information" (staging, 2026-11-02)."""
+        realm = FakeRealm()
+
+        await run(realm, export(member("EX-00001", SUB_A)))
+
+        (rep,) = realm.imported
+        assert {k: rep[k] for k in PROFILE_KEYS} == placeholder("ex-00001")
+        assert MIRROR_EMAIL_DOMAIN.endswith(".invalid")
+
+    @pytest.mark.parametrize("key", ["ex 00001", "ex@00001", "ex<00001>"])
+    async def test_a_key_unfit_for_an_address_uses_the_subject(self, key):
+        """One import carries every new mirror: a value the realm refuses would fail all."""
+        realm = FakeRealm()
+
+        await run(realm, export(member(key, SUB_A)))
+
+        (rep,) = realm.imported
+        assert rep["email"] == f"{SUB_A}@{MIRROR_EMAIL_DOMAIN}"
+        assert rep["firstName"] == SUB_A
+        assert rep["username"] == key.lower()
 
     async def test_an_inactive_member_is_mirrored_disabled(self):
         realm = FakeRealm()
@@ -338,6 +388,68 @@ class TestAMirror:
 
         assert realm.users[SUB_A]["username"] == "ex-00001"
         assert report.counts["unchanged"] == 1
+
+
+class TestAMirrorMadeBeforeThePlaceholders:
+    def _old_mirror(self, realm: FakeRealm, **profile: Any) -> None:
+        gid = realm.add_group(MIRROR_GROUP.lstrip("/"), {MIRROR_MARKER: [SOURCE]})
+        realm.add_user(SUB_A, "ex-00001", **profile)
+        realm.group_members[gid].add(SUB_A)
+        realm.orgs["example-rec"]["members"].add(SUB_A)
+        realm.orgs["example-rec"]["groups"]["viewers"]["members"].add(SUB_A)
+
+    async def test_it_gets_the_placeholder_profile(self):
+        realm = FakeRealm()
+        self._old_mirror(realm)
+
+        report = await run(realm, export(member("ex-00001", SUB_A)))
+
+        assert {k: realm.users[SUB_A].get(k) for k in PROFILE_KEYS} == placeholder("ex-00001")
+        assert report.counts["profile_written"] == 1
+        assert report.counts["unchanged"] == 0
+        assert not report.needs_attention
+
+    async def test_a_profile_set_by_hand_is_put_back_to_the_placeholder(self):
+        realm = FakeRealm()
+        self._old_mirror(realm, firstName="Typed", lastName="By Hand", email="x@example.org",
+                         emailVerified=False)
+
+        await run(realm, export(member("ex-00001", SUB_A)))
+
+        assert {k: realm.users[SUB_A].get(k) for k in PROFILE_KEYS} == placeholder("ex-00001")
+
+    async def test_the_next_run_writes_nothing(self):
+        realm = FakeRealm()
+        self._old_mirror(realm)
+        await run(realm, export(member("ex-00001", SUB_A)))
+        realm.writes.clear()
+
+        report = await run(realm, export(member("ex-00001", SUB_A)))
+
+        assert realm.writes == []
+        assert report.counts["profile_written"] == 0
+        assert report.counts["unchanged"] == 1
+
+    async def test_a_dry_run_counts_it_and_writes_nothing(self):
+        realm = FakeRealm()
+        self._old_mirror(realm)
+
+        report = await run(realm, export(member("ex-00001", SUB_A)), dry_run=True)
+
+        assert report.counts["profile_written"] == 1
+        assert realm.writes == []
+        assert "email" not in realm.users[SUB_A]
+
+    async def test_a_mirror_whose_key_changed_keeps_its_profile(self):
+        """A changed key is reported and not touched, profile included."""
+        realm = FakeRealm()
+        self._old_mirror(realm)
+
+        report = await run(realm, export(member("ex-00009", SUB_A)))
+
+        assert report.counts["key_changed"] == 1
+        assert "email" not in realm.users[SUB_A]
+        assert realm.writes == []
 
 
 class TestIdempotence:
