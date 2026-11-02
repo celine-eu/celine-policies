@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.11.0 (2026-11-02)
+
+### Features
+
+- **keycloak**: Mirror prod's members into an intermediate realm
+  ([`876bdd3`](https://github.com/celine-eu/celine-policies/commit/876bdd3d76127ab07e79c8959d3df6a5ca75fd08))
+
+
 ## v1.10.0 (2026-10-27)
 
 ### Features
