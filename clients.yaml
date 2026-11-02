@@ -124,6 +124,11 @@ scopes:
     description: Permission to import into the registry
   - name: rec-registry.export
     description: Permission to export from the registry
+  # `GET /admin/export/members` only: membership, sensor ids and POD hashes,
+  # no raw POD, e-mail, name or subject (rec-registry REQ-0100, REQ-0105).
+  # What the pipelines hold instead of `rec-registry.export`.
+  - name: rec-registry.export.members
+    description: Read the member export (no personal data)
   # `GET /admin/export/mirror` only: per member the key, community, area, role,
   # type, status, sensor ids, POD hashes and account subject, no POD code or
   # personal detail. What an intermediate environment mirrors prod's members
@@ -397,7 +402,9 @@ clients:
       # Own resources
       - pipelines.runs.read
       - pipelines.runs.write
-      - rec-registry.export
+      # The member export only: `rec-registry.export` would also reach the full
+      # export, with raw PODs, e-mails and names (rec-registry REQ-0105).
+      - rec-registry.export.members
       - flexibility.commitments.export
 
   - client_id: svc-dataset-api

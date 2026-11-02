@@ -66,7 +66,8 @@ Examples:
 | `rec-registry.community.write` | Update community metadata, areas and topology |
 | `rec-registry.import` | Import into the registry |
 | `rec-registry.export` | Export from the registry |
-| `rec-registry.mirror` | Read the member mirror export (`GET /admin/export/mirror`): key, community, area, role, type, status, sensor ids and account subject, nothing personal (REQ-0021) |
+| `rec-registry.export.members` | Read the member export only (`GET /admin/export/members`): membership, sensor ids and POD hashes, no raw POD, e-mail, name or subject; what `svc-pipelines` holds |
+| `rec-registry.mirror` | Read the member mirror export (`GET /admin/export/mirror`): key, community, area, role, type, status, sensor ids, POD hashes and account subject, no raw POD or personal detail (REQ-0021) |
 | `rec-registry.lookup` | Lookup data |
 
 ### REC Onboarding
@@ -207,7 +208,7 @@ extra_audiences:
 default_scopes:
   - pipelines.runs.read
   - pipelines.runs.write
-  - rec-registry.export
+  - rec-registry.export.members   # not .export: the full export carries raw PODs
   - flexibility.commitments.export
 ```
 

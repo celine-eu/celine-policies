@@ -1,6 +1,6 @@
 """`svc-pipelines` reads two exports, and its token passes the API gateway.
 
-The warehouse pipelines mirror the registry (`GET /admin/export`) and the
+The warehouse pipelines mirror the registry (`GET /admin/export/members`) and the
 flexibility commitments (`GET /api/commitments/export`) with this client's
 client-credentials token. In a deployment whose warehouse runs on another site,
 that token is minted by the site that owns the data and reaches its services
@@ -29,7 +29,7 @@ DS_HOST_YAML = ROOT / "clients.ds-host.yaml"
 
 PIPELINES = "svc-pipelines"
 GATEWAY_AUDIENCE = "oauth2_proxy"
-EXPORTS = {"rec-registry.export", "flexibility.commitments.export"}
+EXPORTS = {"rec-registry.export.members", "flexibility.commitments.export"}
 
 
 def _base() -> KeycloakConfig:
@@ -56,6 +56,17 @@ def test_svc_pipelines_holds_both_exports(load):
     client = _client(load(), PIPELINES)
 
     assert EXPORTS <= set(client.default_scopes)
+
+
+@CONFIGS
+def test_svc_pipelines_cannot_read_the_full_registry_export(load):
+    """The full export carries raw PODs, e-mails and names (rec-registry
+    REQ-0105): the pipelines hold the member export's grant, not that one.
+    """
+    client = _client(load(), PIPELINES)
+
+    assert "rec-registry.export" not in _scopes(client)
+    assert "rec-registry.admin" not in _scopes(client)
 
 
 @CONFIGS
