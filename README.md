@@ -230,6 +230,7 @@ removal.
 |---|---|---|
 | `clients.yaml` | celine's own services | always — it is a whole realm on its own |
 | `clients.ds-host.yaml` | the grants celine adds to the dataspace's clients | only where a dataspace is deployed, and only with ds's file |
+| `clients.warehouse.yaml` | the pipeline operators' realm: the browser login (`oauth2_proxy`) for the operator UIs, nothing else | instead of `clients.yaml`, in the realm of the environment that runs the pipelines |
 
 **The dataspace is optional, so the base file does not require it.** `clients.yaml`
 declares nothing about ds — no client, no scope family — and syncing it alone produces a

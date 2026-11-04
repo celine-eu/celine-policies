@@ -39,6 +39,8 @@ COPY --from=builder --chown=app:app /app/src       /app/src
 COPY --from=builder --chown=app:app /app/policies  /app/policies
 
 COPY ./clients.yaml /app
+# The pipeline operators' realm (clients.warehouse.yaml): a second base declaration.
+COPY ./clients.warehouse.yaml /app
 # The platform declaration `keycloak bootstrap` reads by default (./platform.yaml).
 # The image tag is therefore the version of the realm's platform settings.
 COPY ./platform.yaml /app
