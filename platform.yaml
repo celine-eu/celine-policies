@@ -74,7 +74,9 @@ realm_settings:
 # level and are valid only inside their organization.
 #
 # `users` is empty in the image, which names no account. A deployment lists its own platform
-# administrators in its overlay; a user the list names who does not exist yet is reported.
+# administrators in its overlay. A username that does not exist yet is reported. An account,
+# `{username, email, first_name, last_name}`, is created when missing, with a temporary
+# password from CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME> or _TEMPLATE (REQ-0022).
 platform_admin:
   role: platform-admin
   users: []

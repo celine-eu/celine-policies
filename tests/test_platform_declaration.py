@@ -427,6 +427,7 @@ class FakeRealm:
         org_groups: dict[str, tuple[str, set[str]]] | None = None,
         composites: dict[str, set[str]] | None = None,
         users: dict[str, set[str]] | None = None,
+        user_attrs: dict[str, dict[str, Any]] | None = None,
         themes: dict[str, list[str]] | None = None,
         sticky: bool = True,
         console_scopes: set[str] | None = None,
@@ -451,6 +452,8 @@ class FakeRealm:
         self.roles |= set(self.composites)
         # username -> realm roles held directly
         self.users = {name: set(r) for name, r in (users or {}).items()}
+        # username -> representation fields (email, enabled, …) beyond id and username
+        self.user_attrs = {name: dict(a) for name, a in (user_attrs or {}).items()}
         self.created_with: dict[str, dict] = {}
         self.themes = themes or {"login": ["keycloak", "rec"], "email": ["keycloak", "rec"]}
         self.sticky = sticky
@@ -547,7 +550,10 @@ class FakeRealm:
     # --- users ---
 
     async def get_user_by_username(self, username):
-        return {"id": f"uid-{username}", "username": username} if username in self.users else None
+        if username not in self.users:
+            return None
+        return {"id": f"uid-{username}", "username": username, "enabled": True,
+                **self.user_attrs.get(username, {})}
 
     async def get_user_realm_role_names(self, user_id):
         return set(self.users[user_id.removeprefix("uid-")])

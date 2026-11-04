@@ -274,3 +274,23 @@ source realm, or the same JSON from `--from-file`) and converges the target real
 The source client holds `rec-registry.mirror` alone, and its token names `svc-rec-registry`
 and `oauth2_proxy` (the source's API gateway). The target is written with the target realm's
 admin client.
+
+### REQ-0022 — `bootstrap` creates a declared platform-admin account once, and never rewrites it
+
+A `platform_admin.users` entry is a username (REQ-0011: granted once the account exists,
+reported until then) or an **account**, `{username, email, first_name, last_name}`, in
+`platform.yaml` or a deployment's overlay. For an account, `celine-policies keycloak bootstrap`:
+
+- **creates it when the realm has no such user**, enabled, with the email marked verified, the
+  declared names, and a **temporary** password the user must change at first sign-in; then
+  grants `platform-admin` directly. The admin second factor follows from the role (REQ-0015).
+- takes the temporary password from the environment, never from a file:
+  `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME>` (upper-cased, non-alphanumerics as `_`),
+  else `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE` with `{username}` replaced. A template
+  without `{username}` is refused. With neither, the run is refused before any write.
+- **never rewrites an existing account**: no password is sent, the email is not changed, and a
+  disabled account is not enabled again. A disabled account and an email that differs from the
+  declaration are reported.
+
+A declaration names no password; an account with a `password` key is refused.
+

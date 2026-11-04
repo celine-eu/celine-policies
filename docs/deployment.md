@@ -101,6 +101,10 @@ The realm imports used to create both. They now come from declarations, so a rea
 - **Platform administrators** are the realm admin plus the usernames a deployment lists in its
   overlay, `platform_admin: {users: [...]}`. `bootstrap` grants the role to each one that exists,
   reports one that does not exist yet, and reports (never revokes) a holder nobody declared.
+  An entry may instead be an account, `{username, email, first_name, last_name}`: `bootstrap`
+  creates it when missing, with a temporary password from
+  `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME>` or `…_TEMPLATE` (`{username}` replaced),
+  and never rewrites or re-enables an existing one (REQ-0022).
   It deletes the retired realm groups `/admins`, `/managers`, `/editors`, `/viewers` and realm
   roles `admin`, `manager`, `editor`, `viewer` on its first run, without `--allow-destructive`:
   every reader must already read `platform-admin` from `realm_access.roles` (REQ-0011, REQ-0012).

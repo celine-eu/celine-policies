@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 import yaml
@@ -666,3 +667,35 @@ class MemberMirrorSettings(BaseSettings):
         if isinstance(value, str):
             return value.split()
         return value
+
+
+#: Temporary passwords of declared platform-admin accounts (REQ-0022): one per account, or a
+#: template with `{username}` for all. Never in a declaration file.
+PLATFORM_ADMIN_PASSWORD_PREFIX = "CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_"
+PLATFORM_ADMIN_PASSWORD_TEMPLATE = PLATFORM_ADMIN_PASSWORD_PREFIX + "TEMPLATE"
+
+
+def platform_admin_password(username: str, *, environ: "Mapping[str, str] | None" = None) -> str | None:
+    """The temporary password `bootstrap` creates a declared platform-admin account with.
+
+    `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME>` (upper-cased, every character that
+    is not a letter or a digit as `_`) wins over `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE`,
+    whose `{username}` is replaced. A template without `{username}` is refused: it would give
+    every account the same password. None when neither is set.
+    """
+    import os
+    import re
+
+    env = os.environ if environ is None else environ
+    own = env.get(PLATFORM_ADMIN_PASSWORD_PREFIX + re.sub(r"[^A-Za-z0-9]", "_", username).upper(), "")
+    if own:
+        return own
+    template = env.get(PLATFORM_ADMIN_PASSWORD_TEMPLATE, "")
+    if not template:
+        return None
+    if "{username}" not in template:
+        raise ValueError(
+            f"{PLATFORM_ADMIN_PASSWORD_TEMPLATE} must contain {{username}}: without it every "
+            "account would get the same password"
+        )
+    return template.replace("{username}", username)

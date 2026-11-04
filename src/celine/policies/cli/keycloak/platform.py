@@ -65,7 +65,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -211,6 +211,9 @@ class PlatformDeclaration:
     platform_admin_role: str = PLATFORM_ADMIN_ROLE
     #: Usernames that hold it directly, beside the operator realm admin.
     platform_admins: list[str] = field(default_factory=list)
+    #: Those declared as accounts (REQ-0022): username -> email, first_name, last_name.
+    #: `bootstrap` creates a missing one; a bare username is only granted.
+    platform_admin_accounts: dict[str, dict[str, str]] = field(default_factory=dict)
     #: Top-level realm group paths and realm role names bootstrap deletes when present.
     retired_groups: list[str] = field(default_factory=list)
     retired_roles: list[str] = field(default_factory=list)
@@ -297,7 +300,58 @@ def _names(path: "Path | str", key: str, raw: Any) -> list[str]:
     return [v.strip() for v in raw]
 
 
-def _platform_admin(path: Path, data: dict[str, Any]) -> tuple[str, list[str]]:
+#: The fields of a declared platform-admin account besides its username (REQ-0022). The
+#: realm's user profile requires the names; a password is never declared.
+ACCOUNT_FIELDS = ("email", "first_name", "last_name")
+
+
+def _admin_entries(
+    path: "Path | str", key: str, raw: Any
+) -> tuple[list[str], dict[str, dict[str, str]]]:
+    """`platform_admin.users`: usernames, and the accounts declared with their profile.
+
+    An entry is a username, or `{username, email, first_name, last_name}`. Usernames are
+    distinct across both forms.
+    """
+    if raw is None:
+        return [], {}
+    if not isinstance(raw, list):
+        raise PlatformDeclarationError(f"{path}: {key} must be a list, got {raw!r}")
+    names: list[str] = []
+    accounts: dict[str, dict[str, str]] = {}
+    for entry in raw:
+        if isinstance(entry, dict):
+            extra = set(entry) - {"username", *ACCOUNT_FIELDS}
+            if extra:
+                raise PlatformDeclarationError(
+                    f"{path}: {key}: an account takes username, {', '.join(ACCOUNT_FIELDS)} "
+                    f"only, got {sorted(extra)} (a password is never declared: "
+                    f"CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_*)"
+                )
+            username = str(entry.get("username") or "").strip()
+            missing = [f for f in ACCOUNT_FIELDS if not str(entry.get(f) or "").strip()]
+            if not username or missing:
+                raise PlatformDeclarationError(
+                    f"{path}: {key}: the account {username or entry!r} needs "
+                    f"{', '.join(missing or ['username'])}: the realm's user profile requires "
+                    f"them, and Keycloak refuses the sign-in without them"
+                )
+            accounts[username] = {f: str(entry[f]).strip() for f in ACCOUNT_FIELDS}
+        elif isinstance(entry, str) and entry.strip():
+            username = entry.strip()
+        else:
+            raise PlatformDeclarationError(
+                f"{path}: {key} must list usernames or accounts, got {entry!r}"
+            )
+        names.append(username)
+    if len(set(names)) != len(names):
+        raise PlatformDeclarationError(f"{path}: {key} must name distinct users, got {names!r}")
+    return names, accounts
+
+
+def _platform_admin(
+    path: Path, data: dict[str, Any]
+) -> tuple[str, list[str], dict[str, dict[str, str]]]:
     """`platform_admin`: the role, which must be the SDK's, and the users who hold it."""
     raw = data.get("platform_admin")
     if raw is None:
@@ -315,7 +369,7 @@ def _platform_admin(path: Path, data: dict[str, Any]) -> tuple[str, list[str]]:
             f"{path}: platform_admin.role must be {PLATFORM_ADMIN_ROLE!r}, the name every "
             f"service reads from realm_access.roles; got {role!r}"
         )
-    return role, _names(path, "platform_admin.users", raw.get("users"))
+    return (role, *_admin_entries(path, "platform_admin.users", raw.get("users")))
 
 
 def _retired(path: Path, data: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -427,12 +481,13 @@ def load_platform(
     """
     data = _read_mapping(path)
     settings = _realm_settings(path, data)
-    role, admins = _platform_admin(path, data)
+    role, admins, accounts = _platform_admin(path, data)
     retired_groups, retired_roles = _retired(path, data)
     declaration = PlatformDeclaration(
         realm_settings=settings,
         platform_admin_role=role,
         platform_admins=admins,
+        platform_admin_accounts=accounts,
         retired_groups=retired_groups,
         retired_roles=retired_roles,
         sources={key: str(path) for key in settings},
@@ -454,7 +509,9 @@ def load_platform(
                     f"{overlay}: an overlay may change {PLATFORM_ADMINS_KEY} only, "
                     f"never the role's name"
                 )
-            declaration.platform_admins = _names(overlay, PLATFORM_ADMINS_KEY, padmin["users"])
+            declaration.platform_admins, declaration.platform_admin_accounts = _admin_entries(
+                overlay, PLATFORM_ADMINS_KEY, padmin["users"]
+            )
             declaration.sources[PLATFORM_ADMINS_KEY] = str(overlay)
         osettings = _realm_settings(overlay, odata)
         refused = sorted(set(osettings) - OVERLAY_REALM_SETTINGS)
@@ -671,6 +728,12 @@ class PlatformResult:
     #: direct holders of the role nobody declared (kept: bootstrap does not revoke).
     platform_admins_missing: list[str] = field(default_factory=list)
     platform_admins_undeclared: list[str] = field(default_factory=list)
+    #: Declared accounts (REQ-0022) created, with a temporary password, before their grant.
+    platform_admins_created: list[str] = field(default_factory=list)
+    #: Reported, never a change: declared accounts that are disabled (not enabled again)
+    #: and whose email differs from the declaration (not rewritten).
+    platform_admins_disabled: list[str] = field(default_factory=list)
+    platform_admins_email_differs: list[str] = field(default_factory=list)
 
     #: Default client scopes added to the built-in `account-console` client.
     account_console_scopes_added: list[str] = field(default_factory=list)
@@ -693,6 +756,7 @@ class PlatformResult:
         return bool(
             self.realm_created
             or self.realm_admin_created
+            or self.platform_admins_created
             or self.settings
             or self.smtp
             or self.platform_admin_role_created
@@ -729,8 +793,10 @@ class _RolePlan:
     shared_groups: dict[str, str] = field(default_factory=dict)
     #: composite role id -> its name
     composites: dict[str, str] = field(default_factory=dict)
-    #: username -> user id, for the grants; None for a realm admin still to be created
+    #: username -> user id, for the grants; None for an account still to be created
     grants: dict[str, str | None] = field(default_factory=dict)
+    #: declared accounts to create (REQ-0022): username -> temporary password
+    passwords: dict[str, str] = field(default_factory=dict)
 
 
 def _is_realm_group(group: dict[str, Any] | None) -> bool:
@@ -743,6 +809,7 @@ async def _plan_platform_role(
     declaration: PlatformDeclaration,
     result: PlatformResult,
     realm_admin: "RealmAdminSettings | None",
+    admin_password: "Callable[[str], str | None]",
 ) -> _RolePlan:
     """Read everything the role and the retired objects need. Writes nothing."""
     plan = _RolePlan()
@@ -788,9 +855,27 @@ async def _plan_platform_role(
             continue
         declared.append(username)
         user = await kc.get_user_by_username(username)
-        if user is None:
+        account = declaration.platform_admin_accounts.get(username)
+        if user is None and account is None:
             result.platform_admins_missing.append(username)
             continue
+        if user is None:
+            password = admin_password(username)
+            if not password:
+                raise PlatformDeclarationError(
+                    f"platform admin {username!r} is declared as an account and does not exist; "
+                    f"creating it needs a temporary password: CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME> "
+                    f"or CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE"
+                )
+            plan.passwords[username] = password
+            result.platform_admins_created.append(username)
+            plan.grants[username] = None
+            continue
+        if account is not None:
+            if user.get("enabled") is False:
+                result.platform_admins_disabled.append(username)
+            if (user.get("email") or "").lower() != account["email"].lower():
+                result.platform_admins_email_differs.append(username)
         if role is None or role_name not in await kc.get_user_realm_role_names(user["id"]):
             plan.grants[username] = user["id"]
     result.platform_admins_granted = list(plan.grants)
@@ -809,6 +894,7 @@ async def converge_platform(
     dry_run: bool,
     smtp: "SmtpSettings | None" = None,
     realm_admin: "RealmAdminSettings | None" = None,
+    admin_password: "Callable[[str], str | None] | None" = None,
 ) -> PlatformResult:
     """Make the realm match the declaration, touching nothing it does not declare.
 
@@ -828,7 +914,9 @@ async def converge_platform(
         result.smtp = plan_smtp(smtp_rep, realm.get("smtpServer"))
         result.smtp_password_applied = "password" in smtp_rep
 
-    role_plan = await _plan_platform_role(kc, declaration, result, realm_admin)
+    if admin_password is None:
+        from celine.policies.cli.keycloak.settings import platform_admin_password as admin_password
+    role_plan = await _plan_platform_role(kc, declaration, result, realm_admin, admin_password)
 
     console_id, console_missing = await _plan_account_console(kc)
     result.account_console_scopes_added = list(console_missing)
@@ -880,6 +968,18 @@ async def converge_platform(
     if result.realm_admin_created:
         admin_id = await _apply_realm_admin(kc, realm_admin)
         role_plan.grants[realm_admin.username.strip()] = admin_id
+    for username, password in role_plan.passwords.items():
+        profile = declaration.platform_admin_accounts[username]
+        user_id, _ = await kc.ensure_user(
+            username,
+            email=profile["email"],
+            first_name=profile["first_name"],
+            last_name=profile["last_name"],
+            temporary_password=password,
+            temporary=True,
+            email_verified=True,
+        )
+        role_plan.grants[username] = user_id
     for username, user_id in role_plan.grants.items():
         if user_id is None:
             raise PlatformDeclarationError(f"user {username!r} not found after converging")

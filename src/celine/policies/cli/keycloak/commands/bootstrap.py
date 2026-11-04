@@ -367,6 +367,11 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
         typer.secho(f"  + account-console default scope {scope}", fg=typer.colors.GREEN)
     if result.realm_admin_created:
         typer.secho(f"  + realm admin {result.realm_admin_created}", fg=typer.colors.GREEN)
+    for username in result.platform_admins_created:
+        typer.secho(
+            f"  + platform admin {username} (temporary password, changed at first sign-in)",
+            fg=typer.colors.GREEN,
+        )
     for username in result.platform_admins_granted:
         typer.secho(f"  + {username} -> realm role {PLATFORM_ADMIN_ROLE}", fg=typer.colors.GREEN)
     _report_changes(result.admin_mfa)
@@ -406,6 +411,18 @@ def _report_platform_admins(result: PlatformResult) -> None:
         typer.secho(
             f"  ? {username}: listed in platform_admin.users but not in the realm yet; "
             f"granted on the first run after it exists",
+            fg=typer.colors.YELLOW,
+        )
+    for username in result.platform_admins_disabled:
+        typer.secho(
+            f"  ! {username}: declared platform admin, disabled in the realm "
+            f"(kept disabled; bootstrap never enables an account again)",
+            fg=typer.colors.YELLOW,
+        )
+    for username in result.platform_admins_email_differs:
+        typer.secho(
+            f"  ! {username}: the realm's email differs from the declaration "
+            f"(kept; bootstrap never rewrites an existing account)",
             fg=typer.colors.YELLOW,
         )
     for username in result.platform_admins_undeclared:
