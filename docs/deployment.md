@@ -103,7 +103,7 @@ The realm imports used to create both. They now come from declarations, so a rea
   reports one that does not exist yet, and reports (never revokes) a holder nobody declared.
   An entry may instead be an account, `{username, email, first_name, last_name}`: `bootstrap`
   creates it when missing, with a temporary password from
-  `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME>` or `…_TEMPLATE` (`{username}` replaced),
+  `CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE` (`{username}` replaced),
   and never rewrites or re-enables an existing one (REQ-0022).
   It deletes the retired realm groups `/admins`, `/managers`, `/editors`, `/viewers` and realm
   roles `admin`, `manager`, `editor`, `viewer` on its first run, without `--allow-destructive`:

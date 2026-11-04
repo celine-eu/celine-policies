@@ -326,7 +326,7 @@ def _admin_entries(
                 raise PlatformDeclarationError(
                     f"{path}: {key}: an account takes username, {', '.join(ACCOUNT_FIELDS)} "
                     f"only, got {sorted(extra)} (a password is never declared: "
-                    f"CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_*)"
+                    f"CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE)"
                 )
             username = str(entry.get("username") or "").strip()
             missing = [f for f in ACCOUNT_FIELDS if not str(entry.get(f) or "").strip()]
@@ -864,8 +864,7 @@ async def _plan_platform_role(
             if not password:
                 raise PlatformDeclarationError(
                     f"platform admin {username!r} is declared as an account and does not exist; "
-                    f"creating it needs a temporary password: CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME> "
-                    f"or CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE"
+                    f"creating it needs a temporary password: CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE"
                 )
             plan.passwords[username] = password
             result.platform_admins_created.append(username)

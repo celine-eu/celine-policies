@@ -7,8 +7,8 @@ change at first sign-in, then granted `platform-admin`; the admin second factor 
 the role (REQ-0015). An existing account is never rewritten: not its password, not its email,
 and a disabled one is not enabled again. Each of those is reported.
 
-The temporary password is never in the declaration: `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME>`
-for one account, or `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE` with `{username}` for all.
+The temporary password is never in the declaration: `CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE`
+with `{username}`, outside the CELINE_KEYCLOAK_PLATFORM_ prefix of realm-setting overrides.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import pytest
 
 from celine.policies.cli.keycloak.platform import (
     PlatformDeclarationError,
+    apply_env_overrides,
     load_platform,
 )
 from celine.policies.cli.keycloak.settings import platform_admin_password
@@ -111,7 +112,7 @@ class TestAMissingAccount:
     async def test_without_a_password_the_run_is_refused_before_any_write(self, tmp_path):
         """@verifies REQ-0022"""
         kc = realm()
-        with pytest.raises(PlatformDeclarationError, match="CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD"):
+        with pytest.raises(PlatformDeclarationError, match="CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE"):
             await converge(kc, declared(tmp_path, ALICE_YAML))
         assert kc.writes == []
 
@@ -172,24 +173,25 @@ class TestAnExistingAccount:
 
 
 class TestTheTemporaryPassword:
-    def test_per_account(self):
-        env = {"CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_ALICE_DOE": "p"}
-        assert platform_admin_password("alice.doe", environ=env) == "p"
+    T = "CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE"
 
     def test_from_the_template(self):
-        env = {"CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE": "{username}.x+1"}
-        assert platform_admin_password("alice", environ=env) == "alice.x+1"
+        assert platform_admin_password("alice", environ={self.T: "{username}.x+1"}) == "alice.x+1"
 
-    def test_the_account_wins_over_the_template(self):
-        env = {"CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE": "{username}.x",
-               "CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_ALICE": "own"}
-        assert platform_admin_password("alice", environ=env) == "own"
-
-    def test_neither_is_none(self):
+    def test_unset_is_none(self):
         assert platform_admin_password("alice", environ={}) is None
 
     def test_a_template_without_the_username_is_refused(self):
         """One password for every account is not a temporary password, it is a shared one."""
-        env = {"CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE": "same-for-all"}
         with pytest.raises(ValueError, match="{username}"):
-            platform_admin_password("alice", environ=env)
+            platform_admin_password("alice", environ={self.T: "same-for-all"})
+
+    def test_it_is_not_taken_for_a_platform_setting_override(self, tmp_path):
+        """@verifies REQ-0022
+
+        Regression (1.16.0): the variable was CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE,
+        inside the realm-setting override prefix, and bootstrap refused to run with it set.
+        """
+        d = declared(tmp_path, ALICE_YAML)
+        apply_env_overrides(d, {self.T: "{username}.x+1"})
+        assert d.platform_admin_accounts["alice"]["email"] == "alice@example.org"

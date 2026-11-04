@@ -285,9 +285,9 @@ reported until then) or an **account**, `{username, email, first_name, last_name
   declared names, and a **temporary** password the user must change at first sign-in; then
   grants `platform-admin` directly. The admin second factor follows from the role (REQ-0015).
 - takes the temporary password from the environment, never from a file:
-  `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_<USERNAME>` (upper-cased, non-alphanumerics as `_`),
-  else `CELINE_KEYCLOAK_PLATFORM_ADMIN_PASSWORD_TEMPLATE` with `{username}` replaced. A template
-  without `{username}` is refused. With neither, the run is refused before any write.
+  `CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE` with `{username}` replaced. A template without
+  `{username}` is refused; unset, the run is refused before any write. The variable is outside
+  the `CELINE_KEYCLOAK_PLATFORM_` prefix, which holds realm-setting overrides only.
 - **never rewrites an existing account**: no password is sent, the email is not changed, and a
   disabled account is not enabled again. A disabled account and an email that differs from the
   declaration are reported.
