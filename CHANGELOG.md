@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.16.1 (2026-11-04)
+
+### Bug Fixes
+
+- **keycloak**: Platform-admin temporary password is one template,
+  CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE, outside the realm-setting override prefix
+  ([`21df31e`](https://github.com/celine-eu/celine-policies/commit/21df31e27b4c0e2124ddd24cb3a26aac594df52c))
+
+
 ## v1.16.0 (2026-11-04)
 
 ### Features
