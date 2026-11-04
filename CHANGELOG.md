@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.16.0 (2026-11-04)
+
+### Features
+
+- **keycloak**: Bootstrap creates declared platform-admin accounts
+  ([`8383f74`](https://github.com/celine-eu/celine-policies/commit/8383f74854568bae02f7fc64318358f7529428bb))
+
+- **keycloak**: Clients.warehouse.yaml, the pipeline operators' realm
+  ([`a640384`](https://github.com/celine-eu/celine-policies/commit/a640384c25fcc83f1fcf205233198b01f4f850c8))
+
+
 ## v1.15.0 (2026-11-02)
 
 ### Features
