@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.17.0 (2026-11-05)
+
+### Features
+
+- **clients**: Svc-sync-tables-sink, publishes pipeline run events only
+  ([`963a7ff`](https://github.com/celine-eu/celine-policies/commit/963a7ff458e0bc2aafcd4c10d20f004e4919374a))
+
+
 ## v1.16.1 (2026-11-04)
 
 ### Bug Fixes

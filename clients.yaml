@@ -700,6 +700,18 @@ clients:
     default_scopes:
       - rec-registry.mirror
 
+  # A sync_tables sink (`receive --events`) publishes the pipeline run events a
+  # push carries on this environment's broker, on celine/pipelines/runs/<ns>,
+  # after the push's tables are committed. The sink is internet-facing (mTLS and
+  # a token at its ingress), so this client publishes run events and nothing
+  # else; its broker token comes from the optional `mqtt` scope.
+  - client_id: svc-sync-tables-sink
+    name: sync_tables Sink (run events)
+    secret: ${SVC_SYNC_TABLES_SINK_SECRET:-svc-sync-tables-sink}
+    # No scopes_prefix — it owns nothing, it only publishes.
+    default_scopes:
+      - pipelines.runs.write
+
   - client_id: celine-cli
     name: CELINE Admin CLI
     secret: ${CELINE_ADMIN_CLI_SECRET:-celine-cli}
