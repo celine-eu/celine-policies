@@ -2358,6 +2358,7 @@ class KeycloakAdminClient:
         temporary: bool = True,
         email_verified: bool = False,
         locale: str | None = None,
+        groups: list[str] | None = None,
     ) -> None:
         """Create a Keycloak user, letting Keycloak assign the UUID.
 
@@ -2373,11 +2374,17 @@ class KeycloakAdminClient:
         picks an email's language from. **It survives only on a realm with
         ``internationalizationEnabled``**: elsewhere the create still answers
         ``201`` and the value is silently dropped (measured on 26.7.3).
+
+        ``groups`` names realm group paths the account is created in, in the same
+        request: an account is never left outside a marker group because a second
+        call failed.
         """
         payload: dict[str, Any] = {
             "username": username,
             "enabled": enabled,
         }
+        if groups:
+            payload["groups"] = list(groups)
         if email:
             payload["email"] = email
             payload["emailVerified"] = email_verified
@@ -2524,6 +2531,13 @@ class KeycloakAdminClient:
     async def get_user_credentials(self, user_id: str) -> list[dict[str, Any]]:
         """The credentials an account holds (type and metadata, never a secret)."""
         return await self._get(f"/users/{user_id}/credentials") or []
+
+    async def set_credential_label(self, user_id: str, credential_id: str, label: str) -> None:
+        """Write a credential's `userLabel`. The endpoint takes `text/plain`, not JSON."""
+        url = f"{self._settings.admin_url}/users/{user_id}/credentials/{credential_id}/userLabel"
+        headers = {**await self._headers(), "Content-Type": "text/plain"}
+        response = await self._client.put(url, headers=headers, content=label)
+        self._handle_response(response, expected_status=[200, 204])
 
     async def set_user_locale(self, user_id: str, locale: str) -> bool:
         """Write the ``locale`` attribute on an existing account.
@@ -2801,6 +2815,16 @@ class KeycloakAdminClient:
             json=[{"id": role["id"], "name": role["name"]}],
         )
         logger.info("Mapped realm role %s onto user %s", role_name, user_id)
+
+    async def remove_user_realm_role(self, user_id: str, role_name: str) -> None:
+        """Unmap a realm role mapped onto a user directly."""
+        role = await self.get_realm_role(role_name)
+        if role is None:
+            raise KeycloakNotFoundError(f"Realm role not found: {role_name}")
+        await self._delete_with_body(
+            f"/users/{user_id}/role-mappings/realm", [{"id": role["id"], "name": role["name"]}]
+        )
+        logger.info("Unmapped realm role %s from user %s", role_name, user_id)
 
     # -------------------------------------------------------------------------
     # Authentication flows and required actions (the admin second factor, ADR-0013).

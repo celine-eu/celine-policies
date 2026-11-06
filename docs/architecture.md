@@ -99,6 +99,14 @@ run instead of writing them:
 - `set-user-organization` — assign a user to organizations and org-level groups; group names
   are plural (`admins`, `managers`, `editors`, `viewers`) and a group the organization does not
   have is refused, so it runs after the reconcile has created the organization
+- `sync-test-accounts <file>` — keep the declared test accounts of a non-prod realm
+  ([ADR-0016](decisions/ADR-0016-a-non-prod-realm-holds-declared-test-accounts.md), REQ-0023):
+  accounts in the realm group `/test-accounts` with a placeholder profile, exactly the declared
+  `platform-admin` role and organization groups (added and removed), a `temporary` or `fixed`
+  password from `CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE`. It runs only where `ENV` is
+  `dev`, `staging` or `preprod` (unset refused), never touches an account outside the group,
+  and disables a test account no longer declared, never deletes it. Example:
+  `config/keycloak/test-accounts.example.yaml`
 - `status` — show current scopes, clients, and assignments
 
 Authentication to Keycloak uses either admin user credentials (`--admin-user`) or a service account client (`celine-admin-cli`) whose secret is stored in `.client.secrets.yaml` after bootstrap. Both `bootstrap` and `sync` write that file through one merging writer, so a sync cannot delete the credential a bootstrap put there; it holds one realm at a time, and is mode `0600`. Outside dev neither command writes it unless given `--secrets-file` or `CELINE_KEYCLOAK_SECRETS_FILE` (REQ-0020); a run there that was not asked authenticates with `CELINE_KEYCLOAK_ADMIN_CLIENT_SECRET` or the bootstrap client instead.

@@ -295,41 +295,55 @@ reported until then) or an **account**, `{username, email, first_name, last_name
 A declaration names no password; an account with a `password` key is refused.
 
 
-### REQ-0023 — `sync-test-accounts` keeps declared test accounts on an intermediate realm, and never runs on prod
-
-> **Proposed** ([ADR-0016](../decisions/ADR-0016-an-intermediate-realm-holds-declared-test-accounts.md)).
-> Not implemented; nothing verifies it yet.
+### REQ-0023 — `sync-test-accounts` keeps declared test accounts on a non-prod realm, and never runs on prod
 
 `celine-policies keycloak sync-test-accounts <file>` converges the target realm's test
-accounts on the declaration in `<file>`:
+accounts on the declaration in `<file>`
+([ADR-0016](../decisions/ADR-0016-a-non-prod-realm-holds-declared-test-accounts.md)):
 
+- **The environment, checked first:** `ENV` (or `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`, which
+  outrank it) is exactly `dev`, `staging` or `preprod`, case-insensitive. Any other value —
+  `prod`, `production`, a typo, unset or empty — exits `1` naming the allowed values, before
+  the file is read or Keycloak is asked anything, `--dry-run` included.
 - **The declaration:** `users:`, a list (empty allowed) of `{username, realm_roles?,
-  organizations?, enabled?}`. `username` starts with `test-`; `realm_roles` may name only
-  `platform-admin`; `organizations` maps an organization alias to one of its groups (`admins`,
-  `managers`, `editors`, `viewers`). A `password`, an e-mail, a name or any other key is
-  refused, as is a username declared twice. The whole file is checked before anything is
-  written.
+  organizations?, password?, enabled?}`. `realm_roles` may name only `platform-admin`;
+  `organizations` maps an organization alias to one of its groups (`admins`, `managers`,
+  `editors`, `viewers`); `password` is `temporary` (default) or `fixed`, and any other value
+  — a password included — is refused. An e-mail, a name, any other key, or a username
+  declared twice is refused, as is a username that cannot be the placeholder e-mail's local
+  part (lower-case letters, digits, `.`, `_`, `-`). The whole file is checked before anything
+  is written. A `test-` prefix is the convention, not checked.
 - **One account per declared user,** created when the realm has none: enabled (unless
   `enabled: false`), in the realm group `/test-accounts`, with the placeholder profile first
   name = the username, last name = `test`, e-mail = `<username>@test.invalid`,
-  `emailVerified` true, and a **temporary** password from
-  `CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE` with `{username}` replaced. A template
-  without `{username}` is refused; unset, a run that would create an account is refused
-  before any write. An existing test account's password is never sent.
+  `emailVerified` true, and the password
+  `CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE` with `{username}` replaced — temporary
+  (`UPDATE_PASSWORD`) or fixed (no required action) as declared. A template without
+  `{username}` is refused; unset, a run that would create an account (or `--rotate`) is
+  refused before any write.
+- **A password is sent only at creation,** and with `--rotate` to every enabled **fixed**
+  test account. A temporary account's password is never sent again. A fixed account's
+  password credential carries the label `celine-test-account:fixed`, which is how its mode
+  is read back; a declared mode that differs from an existing account's is reported, not
+  applied. A password the realm's policy refuses is reported for that account.
 - **Exactly the declared authority:** a test account holds `platform-admin` exactly when
   declared, and in each organization exactly the declared group; a membership or group not
-  declared is removed. A profile that differs from the placeholder is put back.
+  declared is removed. A profile that differs from the placeholder is put back. The admin
+  second factor follows from `platform-admin` (REQ-0015) whatever the password mode.
 - **Only test accounts are written.** An account outside `/test-accounts` is never written,
-  even when it holds a declared username; it is counted. A declared organization the realm
-  does not have (or one without the declared group) is skipped and counted.
+  even when it holds a declared username; it is counted. A `/test-accounts` group without the
+  attribute `celine_test_accounts=sync-test-accounts` is refused, not adopted. An account
+  declared into an organization the realm does not have (or one without the declared group)
+  is skipped and counted; no organization or group is created.
 - **Disable, never delete:** a test account the file does not name, or names with
-  `enabled: false`, is disabled. No user is deleted.
-- **Idempotent:** a second run with the same file writes nothing. `--dry-run` writes nothing
-  and reports what a run would.
-- **Refusals, before the file is read or Keycloak is asked anything:** `ENV` (or
-  `CELINE_KEYCLOAK_ENV`, `CELINE_ENV`) `prod` or `production`, or unset.
+  `enabled: false`, is disabled. No user is deleted, and a `MANAGED` organization membership
+  (whose removal would delete the account) is kept and counted.
+- **Idempotent:** a second run with the same file and without `--rotate` writes nothing.
+  `--dry-run` writes nothing and reports what a run would.
 - **Output is usernames and counts**, never a password.
 - **Exit codes:** `0` converged; `1` refused or failed; `2` ran, but a declared account could
-  not be converged (a collision, a missing organization or group).
+  not be converged (a collision, a missing organization or group, a refused password, a
+  password mode that differs from the declaration, a `MANAGED` membership).
 
-The target is written with the target realm's admin client.
+The target is written with the target realm's admin client. Registry members are not
+written: mock members are the REC registry's own import.

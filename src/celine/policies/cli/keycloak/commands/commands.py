@@ -9,6 +9,7 @@ Commands:
     celine-policies keycloak set-user-organization <username> -o <org> [-g <group>]
     celine-policies keycloak seed-dev-users [dev-users.yaml]   (development realms only)
     celine-policies keycloak mirror-members --source-issuer <url> (--source-url <url> | --from-file <json>)   (never prod)
+    celine-policies keycloak sync-test-accounts <test-accounts.yaml> [--rotate]   (ENV dev, staging or preprod only)
 """
 
 import typer
@@ -22,6 +23,7 @@ from celine.policies.cli.keycloak.commands.set_password import set_password
 from celine.policies.cli.keycloak.commands.seed_dev_users import seed_dev_users
 from celine.policies.cli.keycloak.commands.set_user_organization import set_user_organization
 from celine.policies.cli.keycloak.commands.mirror_members import mirror_members_command
+from celine.policies.cli.keycloak.commands.sync_test_accounts import sync_test_accounts_command
 
 keycloak_app = typer.Typer(
     name="keycloak",
@@ -38,3 +40,4 @@ keycloak_app.command("set-password")(set_password)
 keycloak_app.command("seed-dev-users")(seed_dev_users)
 keycloak_app.command("set-user-organization")(set_user_organization)
 keycloak_app.command("mirror-members")(mirror_members_command)
+keycloak_app.command("sync-test-accounts")(sync_test_accounts_command)

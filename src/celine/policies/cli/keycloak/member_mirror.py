@@ -316,14 +316,29 @@ class _Wanted:
     communities: set[str]
 
 
-def placeholder_profile(username: str, subject: str) -> dict[str, Any]:
+def placeholder_safe(username: str) -> bool:
+    """Whether `username` can be both an e-mail local part and a person name as is."""
+    return bool(_PLACEHOLDER_SAFE.match(username)) and ".." not in username
+
+
+def placeholder_profile(
+    username: str,
+    subject: str,
+    *,
+    last_name: str = MIRROR_LAST_NAME,
+    email_domain: str = MIRROR_EMAIL_DOMAIN,
+) -> dict[str, Any]:
     """The non-personal profile a mirror carries: from its key, or its subject when the
-    key is unfit for an address or a name."""
-    base = username if _PLACEHOLDER_SAFE.match(username) and ".." not in username else subject
+    key is unfit for an address or a name.
+
+    `last_name` and `email_domain` let another kind of account that stands for no person
+    (a test account, REQ-0023) carry the same shape under its own marker.
+    """
+    base = username if placeholder_safe(username) else subject
     return {
         "firstName": base,
-        "lastName": MIRROR_LAST_NAME,
-        "email": f"{base}@{MIRROR_EMAIL_DOMAIN}",
+        "lastName": last_name,
+        "email": f"{base}@{email_domain}",
         "emailVerified": True,
     }
 
@@ -637,6 +652,7 @@ __all__ = [
     "mirror_members",
     "parse_mirror_export",
     "placeholder_profile",
+    "placeholder_safe",
     "read_mirror_file",
     "refusal",
 ]

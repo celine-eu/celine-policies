@@ -426,6 +426,64 @@ ENV=staging celine-policies keycloak mirror-members --dry-run \
   --source-issuer https://keycloak.prod.example.org/realms/celine
 ```
 
+### Test accounts
+
+`keycloak sync-test-accounts <file>` (REQ-0023,
+[ADR-0016](decisions/ADR-0016-a-non-prod-realm-holds-declared-test-accounts.md)) keeps the
+accounts a non-prod environment declares for platform tests and security assessments: each
+holds a chosen level of authority — `platform-admin`, and one group in each declared
+organization — and stands for no person. It **runs only where `ENV` (or `CELINE_KEYCLOAK_ENV`,
+`CELINE_ENV`, which outrank it) is exactly `dev`, `staging` or `preprod`**; prod, a typo, unset
+and empty are refused before the file is read, `--dry-run` included. A deployed policies shell
+sets `CELINE_KEYCLOAK_ENV`, so that is the variable to set there. It writes with the target
+realm's admin client (`CELINE_KEYCLOAK_ADMIN_CLIENT_ID` / `_SECRET`, as `sync`).
+
+The declaration (`config/keycloak/test-accounts.example.yaml`) names usernames, `realm_roles`
+(`platform-admin` only), `organizations` (alias → `admins`, `managers`, `editors` or
+`viewers`), `password: temporary` (default; people set their own at first sign-in) or
+`password: fixed` (automation), and `enabled`. Never a password, an e-mail or a name.
+
+| Variable | Flag | Default | Description |
+|----------|------|---------|-------------|
+| `CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE` | — | — | Password of a new account, and of a fixed one on `--rotate`: the template with `{username}` replaced. Must contain `{username}`. Required when the run creates an account or rotates; from the deployment's secrets, distinct from `CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE` |
+| — | `--rotate` | off | Reset every enabled fixed test account's password from the current template (a changed or leaked template). Temporary accounts are never reset |
+| — | `--dry-run` | off | Report what would change, write nothing |
+
+What it does to the realm:
+
+- creates a declared account the realm lacks, in `/test-accounts` (a group carrying
+  `celine_test_accounts=sync-test-accounts`; a hand-made group of that name is refused), with
+  first name = the username, last name `test`, e-mail `<username>@test.invalid` (verified);
+- sets each test account's `platform-admin` role and organization groups to exactly what is
+  declared, removing what is not — so a downgrade test gets its downgrade. A test
+  `platform-admin` meets the admin second factor (REQ-0015) whatever its password mode;
+- disables a test account the file no longer names, or names `enabled: false`. **`users: []`
+  disables them all**: that is how an assessment ends. Nothing is deleted;
+- never writes an account outside `/test-accounts` (a person, a mirror) and never creates an
+  organization or a group: either is reported for the account concerned.
+
+A password is sent when the account is made and with `--rotate`, never otherwise; a fixed
+account's credential carries the label `celine-test-account:fixed`. A declared mode that
+differs from the account's (`temporary` declared, `fixed` made, or the reverse) is reported,
+not applied: `--rotate` makes a declared-fixed account fixed; a declared-temporary one keeps
+what it has.
+
+A test account in **two organizations** tests exactly that case: Keycloak then puts an empty
+`organization` claim in a token requested without `organization:*`. Declare one organization
+per account to test a normal member.
+
+Exit codes: `0` converged; `1` refused or failed (nothing written when refused); `2` ran, but a
+declared account could not be converged (a collision with an account outside the group, a
+missing organization or group, a password the realm's policy refused, a password mode that
+differs from the declaration, a `MANAGED` membership). The output is usernames and counts,
+never a password.
+
+```bash
+ENV=staging celine-policies keycloak sync-test-accounts test-accounts.yaml --dry-run
+ENV=staging CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE='…{username}…' \
+  celine-policies keycloak sync-test-accounts test-accounts.yaml
+```
+
 ### Keycloak
 
 The Keycloak service uses the custom image from `keycloak/Dockerfile` (KC 26.7.3 + rec theme). Key environment variables:

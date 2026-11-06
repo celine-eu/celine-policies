@@ -1,0 +1,28 @@
+# Test accounts for a non-prod realm: `celine-policies keycloak sync-test-accounts <file>`
+# (REQ-0023, ADR-0016). It runs only where ENV is dev, staging or preprod, and refuses
+# anything else, unset included.
+#
+# Each account stands for no person: it is in the realm group /test-accounts, carries a
+# placeholder profile (<username>@test.invalid), and holds exactly what is declared here —
+# the realm role platform-admin, and one group (admins, managers, editors, viewers) in each
+# named organization. Removing an entry, or `enabled: false`, disables the account; `users: []`
+# disables them all. Nothing is deleted. An organization must already exist.
+#
+# No password here, ever. `password` is a mode:
+#   temporary (default)  CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE, changed at first sign-in
+#   fixed                the same template, kept: for automation (`--rotate` resets it)
+#
+# The aliases below are the local stack's example organizations; a deployment names its own.
+users:
+  - username: test-platform-admin
+    realm_roles: [platform-admin]
+  - username: test-rec-admin
+    organizations: { example_rec: admins }
+  - username: test-rec-viewer
+    organizations: { example_rec: viewers }
+  - username: test-dso-admin
+    organizations: { example_dso: admins }
+  - username: test-scanner
+    organizations: { example_rec: editors }
+    password: fixed
+  - username: test-outsider          # in no organization: the negative case

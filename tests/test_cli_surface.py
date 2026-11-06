@@ -50,6 +50,7 @@ COMMANDS = [
     "set-user-organization",
     "seed-dev-users",
     "mirror-members",
+    "sync-test-accounts",
 ]
 
 

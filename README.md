@@ -15,7 +15,7 @@ not how often it changes:
 |---|---|---|
 | **platform**: realm features (Organizations, fine-grained admin permissions), sign-in settings, languages, themes, token lifespans, brute force, `smtpServer`, the realm role `platform-admin` and its holders, the retired realm groups and roles (ADR-0012) | `keycloak bootstrap` | [`platform.yaml`](platform.yaml), `CELINE_KEYCLOAK_PLATFORM_*` overrides, `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED`, `CELINE_KEYCLOAK_SMTP_*`; the master realm through `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` (ADR-0014) |
 | **clients**: clients, scopes, scope bindings, audience mappers, realm claim scopes, service-account grants | `keycloak sync` | `clients.yaml` |
-| **organizations and users**: REC organizations, org groups, participants, memberships | the provisioning service (`POST /reconcile/{community}` creates a REC's organization, org roles and groups, even with no members; `PUT /participants` files a participant, `PATCH /participants` corrects their names or address), `keycloak set-user-organization` (a manager's `managers` or `admins` group, run by a platform admin), `keycloak sync-orgs`; `keycloak sync-users` in local development only — see [ADR-0010](docs/decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md); on an intermediate (non-prod) realm, mirrors of prod's members by `keycloak mirror-members` — see [ADR-0015](docs/decisions/ADR-0015-an-intermediate-realm-mirrors-prod-members.md) | the registry, owners and REC YAML |
+| **organizations and users**: REC organizations, org groups, participants, memberships | the provisioning service (`POST /reconcile/{community}` creates a REC's organization, org roles and groups, even with no members; `PUT /participants` files a participant, `PATCH /participants` corrects their names or address), `keycloak set-user-organization` (a manager's `managers` or `admins` group, run by a platform admin), `keycloak sync-orgs`; `keycloak sync-users` in local development only — see [ADR-0010](docs/decisions/ADR-0010-on-a-deployed-realm-members-arrive-through-onboarding.md); on an intermediate (non-prod) realm, mirrors of prod's members by `keycloak mirror-members` — see [ADR-0015](docs/decisions/ADR-0015-an-intermediate-realm-mirrors-prod-members.md); on a non-prod realm (`ENV` dev, staging or preprod), declared test accounts by `keycloak sync-test-accounts` — see [ADR-0016](docs/decisions/ADR-0016-a-non-prod-realm-holds-declared-test-accounts.md) | the registry, owners and REC YAML |
 
 A command never writes a level it does not own. It checks the levels it depends on and
 refuses, naming the command to run. So the order is `bootstrap`, then `sync`, then the
@@ -107,6 +107,7 @@ celine-policies keycloak set-password    # Set a user's password (development re
 celine-policies keycloak seed-dev-users  # Create admin, manager, editor, viewer (development realms only)
 celine-policies keycloak set-user-organization  # Assign user to org + groups
 celine-policies keycloak mirror-members  # Mirror prod's members into an intermediate realm (never prod; ADR-0015)
+celine-policies keycloak sync-test-accounts <file>  # Declared test accounts (ENV dev, staging or preprod only; ADR-0016)
 celine-policies keycloak status          # Show current Keycloak state
 ```
 

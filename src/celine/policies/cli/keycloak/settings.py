@@ -675,22 +675,46 @@ class MemberMirrorSettings(BaseSettings):
 ADMIN_TEMP_PASSWORD_TEMPLATE = "CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE"
 
 
-def platform_admin_password(username: str, *, environ: "Mapping[str, str] | None" = None) -> str | None:
-    """The temporary password `bootstrap` creates a declared platform-admin account with.
+#: The password of every test account `sync-test-accounts` creates or rotates (REQ-0023):
+#: a template with `{username}`, distinct from the platform admins'. Never in a declaration.
+TEST_ACCOUNT_PASSWORD_TEMPLATE = "CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE"
 
-    `CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE` with `{username}` replaced. A template
-    without `{username}` is refused: it would give every account the same password. None
-    when it is not set. The account changes it at first sign-in.
+
+def password_from_template(
+    variable: str, username: str, *, environ: "Mapping[str, str] | None" = None
+) -> str | None:
+    """The environment variable `variable`, a template, with `{username}` replaced.
+
+    A template without `{username}` is refused: it would give every account the same
+    password. None when it is not set (or empty).
     """
     import os
 
     env = os.environ if environ is None else environ
-    template = env.get(ADMIN_TEMP_PASSWORD_TEMPLATE, "")
+    template = env.get(variable, "")
     if not template:
         return None
     if "{username}" not in template:
         raise ValueError(
-            f"{ADMIN_TEMP_PASSWORD_TEMPLATE} must contain {{username}}: without it every "
+            f"{variable} must contain {{username}}: without it every "
             "account would get the same password"
         )
     return template.replace("{username}", username)
+
+
+def platform_admin_password(username: str, *, environ: "Mapping[str, str] | None" = None) -> str | None:
+    """The temporary password `bootstrap` creates a declared platform-admin account with.
+
+    `CELINE_KEYCLOAK_ADMIN_TEMP_PASSWORD_TEMPLATE` with `{username}` replaced
+    (`password_from_template`). The account changes it at first sign-in.
+    """
+    return password_from_template(ADMIN_TEMP_PASSWORD_TEMPLATE, username, environ=environ)
+
+
+def password_for_test_account(username: str, *, environ: "Mapping[str, str] | None" = None) -> str | None:
+    """The password `sync-test-accounts` gives a test account (REQ-0023).
+
+    `CELINE_KEYCLOAK_TEST_ACCOUNT_PASSWORD_TEMPLATE` with `{username}` replaced
+    (`password_from_template`).
+    """
+    return password_from_template(TEST_ACCOUNT_PASSWORD_TEMPLATE, username, environ=environ)
