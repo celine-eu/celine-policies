@@ -41,7 +41,8 @@ This does two things, in order:
    and roles it deletes (ADR-0012). Only the keys the file names are written.
    Brute-force protection comes from `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` (on by default,
    off under `ENV=dev`), the platform admin's second factor from
-   `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED` (the same default), and `smtpServer` from
+   `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED` (the same default), the realm's user and admin events
+   from `CELINE_KEYCLOAK_EVENTS_ENABLED` (the same default), and `smtpServer` from
    `CELINE_KEYCLOAK_SMTP_*` when `CELINE_KEYCLOAK_SMTP_HOST` is set. `--dry-run` shows what
    would change. Outside dev it also hardens the master realm, and needs
    `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` for that ([deployment](deployment.md#the-admin-second-factor-and-the-master-realm));

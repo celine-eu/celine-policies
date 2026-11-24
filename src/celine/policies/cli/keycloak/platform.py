@@ -66,7 +66,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -78,6 +78,7 @@ from celine.policies.cli.keycloak.client import KeycloakError
 
 if TYPE_CHECKING:
     from celine.policies.cli.keycloak.client import KeycloakAdminClient
+    from celine.policies.cli.keycloak.events import EventsDeclaration
     from celine.policies.cli.keycloak.settings import RealmAdminSettings, SmtpSettings
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,7 @@ THEME_LOCALES = frozenset({"it", "en", "es"})
 #: Realm keys whose value names a theme of the given type in `serverinfo.themes`.
 THEME_SETTINGS = {"loginTheme": "login", "emailTheme": "email"}
 
-_TOP_LEVEL_KEYS = frozenset({"realm_settings", "platform_admin", "retired"})
+_TOP_LEVEL_KEYS = frozenset({"realm_settings", "platform_admin", "retired", "events"})
 
 #: Realm roles Keycloak owns. `retired` may not name one: deleting it breaks every login.
 BUILTIN_REALM_ROLES = frozenset({"offline_access", "uma_authorization"})
@@ -220,6 +221,8 @@ class PlatformDeclaration:
     #: realm key -> the file that set it last; `platform_admin.users` too
     sources: dict[str, str] = field(default_factory=dict)
     platform_file: str = ""
+    #: The realm's event recording (REQ-0024, `keycloak/events.py`); the loader always sets it.
+    events: EventsDeclaration | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -446,10 +449,16 @@ def apply_env_overrides(declaration: PlatformDeclaration, environ: Mapping[str, 
     A locale list is comma-separated. A set variable of this prefix naming any other key
     is refused, so an override that would not apply never looks as if it did.
     """
+    from celine.policies.cli.keycloak.events import (
+        EVENTS_EXPIRATION_OVERRIDE,
+        expiration_from_env,
+    )
+
     names = {env_override_name(key): key for key in ENV_OVERRIDABLE_SETTINGS}
     unknown = sorted(
         name for name, raw in environ.items()
-        if name.startswith(ENV_OVERRIDE_PREFIX) and name not in names and raw.strip()
+        if name.startswith(ENV_OVERRIDE_PREFIX) and name not in names
+        and name != EVENTS_EXPIRATION_OVERRIDE and raw.strip()
     )
     if unknown:
         raise PlatformDeclarationError(
@@ -466,6 +475,11 @@ def apply_env_overrides(declaration: PlatformDeclaration, environ: Mapping[str, 
         declaration.realm_settings[key] = _parse_env_value(name, key, raw)
         declaration.sources[key] = name
 
+    raw = environ.get(EVENTS_EXPIRATION_OVERRIDE, "")
+    if raw.strip() and declaration.events is not None:
+        declaration.events = replace(declaration.events, expiration=expiration_from_env(raw))
+        declaration.sources["events.expiration"] = EVENTS_EXPIRATION_OVERRIDE
+
 
 def load_platform(
     path: Path,
@@ -479,6 +493,8 @@ def load_platform(
     (`apply_env_overrides`) wins over both. Every check runs on the merged result,
     before `bootstrap` reads anything from Keycloak.
     """
+    from celine.policies.cli.keycloak.events import events_from_yaml
+
     data = _read_mapping(path)
     settings = _realm_settings(path, data)
     role, admins, accounts = _platform_admin(path, data)
@@ -492,14 +508,18 @@ def load_platform(
         retired_roles=retired_roles,
         sources={key: str(path) for key in settings},
         platform_file=str(path),
+        events=events_from_yaml(path, data.get("events")),
     )
     declaration.sources[PLATFORM_ADMINS_KEY] = str(path)
+    declaration.sources["events"] = declaration.sources["events.expiration"] = str(path)
 
     for overlay in overlays:
         odata = _read_mapping(overlay)
-        if "retired" in odata:
+        for refused_key in ("retired", "events"):
+            if refused_key not in odata:
+                continue
             raise PlatformDeclarationError(
-                f"{overlay}: an overlay may not change retired; it may change only "
+                f"{overlay}: an overlay may not change {refused_key}; it may change only "
                 f"{sorted(OVERLAY_REALM_SETTINGS)} and {PLATFORM_ADMINS_KEY}"
             )
         if "platform_admin" in odata:
@@ -746,10 +766,15 @@ class PlatformResult:
     #: Who this run signed in to master as, and why master was not hardened, for the report.
     master_session: str | None = None
     master_skipped: str | None = None
+    #: The realm's event recording (REQ-0024), and why it was not managed on this run.
+    events: list[SettingChange] = field(default_factory=list)
+    events_skipped: str | None = None
 
     @property
     def destructive(self) -> list[SettingChange]:
-        return [c for c in [*self.settings, *self.admin_mfa, *self.master] if destructive(c)]
+        return [
+            c for c in [*self.settings, *self.admin_mfa, *self.events, *self.master] if destructive(c)
+        ]
 
     @property
     def changed(self) -> bool:
@@ -767,6 +792,7 @@ class PlatformResult:
             or self.roles_removed
             or self.account_console_scopes_added
             or self.admin_mfa
+            or self.events
             or self.master_client
             or self.master
         )

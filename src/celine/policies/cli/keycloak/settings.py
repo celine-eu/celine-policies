@@ -170,6 +170,13 @@ class KeycloakSettings(BaseSettings):
         description="Platform admins sign in with a second factor: on unless ENV=dev",
     )
 
+    # The realm's event recording (REQ-0024). Unset means the environment decides;
+    # see `events_recorded`.
+    events_enabled: bool | None = Field(
+        default=None,
+        description="bootstrap turns on the realm's user and admin events: on unless ENV=dev",
+    )
+
     # `keycloak sync --additive` from the environment, for a run that cannot be
     # handed an argument (an init container). Unset means off. The flag wins
     # over it either way: `--additive` / `--no-additive`.
@@ -178,7 +185,9 @@ class KeycloakSettings(BaseSettings):
         description="keycloak sync adds and updates only: true or false; unset is false",
     )
 
-    @field_validator("sync_additive", "admin_mfa_required", "bootstrap_client_secret", mode="before")
+    @field_validator(
+        "sync_additive", "admin_mfa_required", "events_enabled", "bootstrap_client_secret", mode="before"
+    )
     @classmethod
     def _empty_is_unset(cls, value: Any) -> Any:
         """An empty value is unset, not an error.
@@ -213,6 +222,18 @@ class KeycloakSettings(BaseSettings):
         """
         if self.admin_mfa_required is not None:
             return self.admin_mfa_required
+        return self.is_production
+
+    @property
+    def events_recorded(self) -> bool:
+        """Whether `bootstrap` turns on the realm's user and admin events (REQ-0024).
+
+        On by default and off in dev, like `admin_mfa`: the record of who impersonated whom
+        and of every sign-in is kept wherever real people sign in.
+        `CELINE_KEYCLOAK_EVENTS_ENABLED` overrides either way; off leaves them alone.
+        """
+        if self.events_enabled is not None:
+            return self.events_enabled
         return self.is_production
 
     @property
@@ -314,6 +335,7 @@ class KeycloakSettings(BaseSettings):
             env=self.env,
             brute_force_enabled=self.brute_force_enabled,
             admin_mfa_required=self.admin_mfa_required,
+            events_enabled=self.events_enabled,
             bootstrap_client_id=self.bootstrap_client_id,
             bootstrap_client_secret=self.bootstrap_client_secret,
             sync_additive=self.sync_additive,

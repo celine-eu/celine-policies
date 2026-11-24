@@ -66,6 +66,26 @@ realm_settings:
   minimumQuickLoginWaitSeconds: 60
   maxFailureWaitSeconds: 900
 
+# The realm's event recording (REQ-0024). Whether bootstrap records events at all is
+# CELINE_KEYCLOAK_EVENTS_ENABLED: on, and left alone when ENV is dev. On, bootstrap turns on
+# user events and admin events in the realm it administers (never master), keeps the realm's
+# listeners (jboss-logging), and converges:
+#   user_event_types  types the realm must record AT LEAST. Keycloak records its own default
+#                     set when no list is stored (sign-in, sign-out, impersonation, credential
+#                     changes; not token refresh, introspection or userinfo), and these are in
+#                     it, so on such a realm no list is written. A stored list missing one gets
+#                     it added; nothing is removed. IMPERSONATE, IMPERSONATE_ERROR, LOGIN and
+#                     LOGIN_ERROR are required: the record of who acted as a mirrored member.
+#   expiration        seconds a user event is kept: one year, the access audit's retention.
+#                     CELINE_KEYCLOAK_PLATFORM_EVENTS_EXPIRATION overrides it; `null` keeps the
+#                     realm's own value.
+#   admin_details     the request representation in each admin event: off, because on a user
+#                     it carries personal data. Turning it off where it is on is destructive.
+events:
+  user_event_types: [IMPERSONATE, IMPERSONATE_ERROR, LOGIN, LOGIN_ERROR]
+  expiration: 31536000
+  admin_details: false
+
 # The platform-wide grant: exactly one, a realm role (ADR-0012, REQ-0011). Every service reads
 # it from `realm_access.roles` under this name (celine-sdk PLATFORM_ADMIN_ROLE), so the name is
 # fixed: bootstrap refuses any other. It is held directly by the operator realm admin

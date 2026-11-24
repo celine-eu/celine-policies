@@ -68,6 +68,7 @@ infra's `IGNORE_EXISTING` skip a realm that already exists).
 | token and session lifespans, `organizationsEnabled`, `adminPermissionsEnabled`, the `platform-admin` role and its declared holders, the retired realm groups and roles, brute-force tuning | `platform.yaml` | `sync-orgs` and `sync-users` refuse a realm without Organizations; `sync` refuses to grant `admin_permissions` without fine-grained admin permissions |
 | `bruteForceProtected` | `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` | Unset: on, and off when `ENV` is exactly `dev` |
 | the browser flow `browser-admin-second-factor`: a `platform-admin` signs in with a second factor (REQ-0015) | `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED` | Unset: on, and off when `ENV` is exactly `dev`. Below |
+| the realm's user and admin events: at least `IMPERSONATE`, `IMPERSONATE_ERROR`, `LOGIN`, `LOGIN_ERROR`, an expiry, admin event details off (REQ-0024) | `CELINE_KEYCLOAK_EVENTS_ENABLED`; the types, the expiry and the details in `platform.yaml` (`events`), the expiry overridden by `CELINE_KEYCLOAK_PLATFORM_EVENTS_EXPIRATION` (`null`: the realm's own) | Unset: on, and left alone when `ENV` is exactly `dev`; never turned off. Master's events are not touched. Needs `manage-events`, which the bootstrap client has and the admin CLI client does not |
 | the master realm: `bootstrap`'s own client, brute force, a second factor for master admins (REQ-0016) | `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET`, and the two switches above | Outside dev the secret is required. Below |
 | `smtpServer` | `CELINE_KEYCLOAK_SMTP_*`, fed from the deployment's secret | Below. Unset `CELINE_KEYCLOAK_SMTP_HOST`: left alone |
 | the built-in `account-console` client's default client scopes (`web-origins acr profile roles basic email`) | `bootstrap` itself (`ACCOUNT_CONSOLE_DEFAULT_SCOPES`) | What Keycloak gives a realm it creates. A realm imported from `config/keycloak/import/realm-celine.json` gets none, and the account console answers `403`. Missing ones are added, none removed; no other client is touched |
@@ -325,6 +326,8 @@ Environment variables with `CELINE_KEYCLOAK_` prefix:
 | `CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET` | — | Its secret, from the deployment's secrets; required unless `ENV=dev`, at least 32 characters |
 | `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED` | on unless `ENV=dev` | Brute-force detection, platform realm and master |
 | `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED` | on unless `ENV=dev` | The admin second factor, platform realm (`platform-admin`) and master (`admin`) |
+| `CELINE_KEYCLOAK_EVENTS_ENABLED` | on unless `ENV=dev` | User and admin events of the platform realm (REQ-0024); off leaves them as they are. Not master |
+| `CELINE_KEYCLOAK_PLATFORM_EVENTS_EXPIRATION` | `31536000` (`platform.yaml`) | Seconds a user event is kept; `null` keeps the realm's own |
 
 ### Sync Users
 

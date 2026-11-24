@@ -347,3 +347,36 @@ accounts on the declaration in `<file>`
 
 The target is written with the target realm's admin client. Registry members are not
 written: mock members are the REC registry's own import.
+
+---
+
+### REQ-0024 — outside dev, `bootstrap` turns on the realm's user and admin events, with an expiry
+
+A team member who impersonates a mirrored member (REQ-0021) acts in that member's name, and
+Keycloak's `IMPERSONATE` event is the only record of who did; sign-ins and admin changes are
+the platform's access audit. A realm records none of them until told to (requester,
+2026-11-24; [ADR-0017](../decisions/ADR-0017-bootstrap-turns-on-the-realms-events.md)).
+`CELINE_KEYCLOAK_EVENTS_ENABLED` decides; **unset, it is on unless the environment is exactly
+`dev`** (the guard REQ-0015 uses).
+
+When it is on, on every run, `bootstrap` converges the events configuration of the realm it
+administers (`/admin/realms/{realm}/events/config`), never master's:
+
+- **user events and admin events recorded** (`eventsEnabled`, `adminEventsEnabled`);
+- **at least the declared user event types** (`events.user_event_types` in `platform.yaml`),
+  which must name `IMPERSONATE`, `IMPERSONATE_ERROR`, `LOGIN` and `LOGIN_ERROR`. A realm that
+  stores no list records Keycloak's default set, which holds them, and is left on it; a stored
+  list missing one gets it added. A type is never removed;
+- **an expiry for user events** (`events.expiration`, seconds; one year in the image),
+  overridden by `CELINE_KEYCLOAK_PLATFORM_EVENTS_EXPIRATION`, whose value `null` keeps the
+  realm's own;
+- **admin event details as declared** (`events.admin_details`, off in the image: the request
+  representation of a change to a user carries personal data). Turning them off where they are
+  on is destructive and needs `--allow-destructive` outside dev;
+- **the realm's event listeners unchanged** (`jboss-logging` stays).
+
+A realm already so configured is not written to. A write that Keycloak accepts but does not
+apply is an error. When the switch is off, the realm's events are left exactly as they are:
+`bootstrap` never turns recording off. `--check` fails while anything above would change. The
+report has one line for the events on every run: the changes, "no change", or why they were
+left alone.

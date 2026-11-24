@@ -68,7 +68,8 @@ run instead of writing them:
   a deployment overlay may narrow `supportedLocales` and nothing else), brute force from
   `CELINE_KEYCLOAK_BRUTE_FORCE_ENABLED`, `smtpServer` from `CELINE_KEYCLOAK_SMTP_*`, the
   built-in `account-console` client's missing default client scopes, the platform admin's
-  second factor (the browser flow, `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED`, ADR-0013); then
+  second factor (the browser flow, `CELINE_KEYCLOAK_ADMIN_MFA_REQUIRED`, ADR-0013), the
+  realm's user and admin events (`CELINE_KEYCLOAK_EVENTS_ENABLED`, ADR-0017); then
   create or refresh the `celine-admin-cli` service account with realm-management roles.
   It reaches master through its own client `svc-celine-policies-bootstrap`
   (`CELINE_KEYCLOAK_BOOTSTRAP_CLIENT_SECRET`), the admin user only to create it, and outside

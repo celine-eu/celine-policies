@@ -15,7 +15,8 @@ The platform level of the realm, and nothing else (plan each-cli-command-owns-on
    Also the built-in `account-console` client's default client scopes, added when missing
    (an imported realm has none, and the account console answers 403).
    And the realm's browser flow: the platform admin's second factor (REQ-0015, ADR-0013),
-   on unless `ENV=dev`.
+   on unless `ENV=dev`. And the realm's event recording: user and admin events, with an
+   expiry (REQ-0024, `keycloak/events.py`), on unless `ENV=dev`.
 2. **The admin CLI client** — the service account every other command authenticates as.
    Created or refreshed only through master, because a service account cannot create the
    client it is.
@@ -48,6 +49,7 @@ from typing import Annotated, Optional
 import typer
 
 from celine.policies.cli.keycloak.admin_mfa import apply_admin_mfa, plan_admin_mfa
+from celine.policies.cli.keycloak.events import apply_events, plan_events
 from celine.policies.cli.keycloak.client import (
     KeycloakAdminClient,
     KeycloakAuthError,
@@ -246,6 +248,7 @@ def bootstrap(
                 allow_destructive=allow_destructive or not settings.is_production,
                 admin_mfa=settings.admin_mfa,
                 harden_master=settings.master_hardened,
+                events=settings.events_recorded,
             )
         )
     except KeycloakAuthError as e:
@@ -343,6 +346,7 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
         typer.echo(f"  = smtpServer.password: write-only, {state} on every run (not compared)")
     if not result.changed:
         typer.echo("  ✓ no change")
+        _report_events(result)
         _report_platform_admins(result)
         _report_master(result, dry_run=dry_run)
         return
@@ -375,6 +379,7 @@ def _report_platform(result: PlatformResult, *, dry_run: bool) -> None:
     for username in result.platform_admins_granted:
         typer.secho(f"  + {username} -> realm role {PLATFORM_ADMIN_ROLE}", fg=typer.colors.GREEN)
     _report_changes(result.admin_mfa)
+    _report_events(result)
     _report_platform_admins(result)
     _report_master(result, dry_run=dry_run)
 
@@ -387,6 +392,16 @@ def _report_changes(changes) -> None:
             f"  {mark} {change.key}: {change.current!r} -> {change.desired!r}  ({change.source}){note}",
             fg=typer.colors.YELLOW,
         )
+
+
+def _report_events(result: PlatformResult) -> None:
+    """The realm's event recording (REQ-0024): its changes, or one line saying why none."""
+    if result.events_skipped:
+        typer.echo(f"  = events: left alone ({result.events_skipped})")
+    elif result.events:
+        _report_changes(result.events)
+    else:
+        typer.echo("  ✓ events: no change")
 
 
 def _report_master(result: PlatformResult, *, dry_run: bool) -> None:
@@ -469,6 +484,7 @@ async def _async_bootstrap(
     allow_destructive: bool = True,
     admin_mfa: bool = False,
     harden_master: bool = False,
+    events: bool = False,
 ) -> tuple[PlatformResult, tuple[str, bool]]:
     """Sign in, create the realm if absent, converge the platform, master, then the admin
     CLI client.
@@ -570,6 +586,11 @@ async def _async_bootstrap(
             browser_flow=(await client.get_realm_settings()).get("browserFlow"),
         )
         platform.admin_mfa = mfa_plan.changes
+        events_plan = await plan_events(
+            client, declaration.events, enabled=events, sources=declaration.sources
+        )
+        platform.events = events_plan.changes
+        platform.events_skipped = events_plan.skipped
         finish(platform)
         if not dry_run:
             if platform.destructive and not allow_destructive:
@@ -582,6 +603,9 @@ async def _async_bootstrap(
             if mfa_plan.changes:
                 await apply_admin_mfa(client, mfa_plan)
             platform.admin_mfa = mfa_plan.changes
+            await apply_events(client, events_plan)
+            platform.events = events_plan.changes
+            platform.events_skipped = events_plan.skipped
             if master_plan is not None:
                 # Refuses any token but the bootstrap client's own, checked in this run.
                 require_bootstrap_client(master, settings.bootstrap_client_id)

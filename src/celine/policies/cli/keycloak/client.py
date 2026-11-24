@@ -2897,6 +2897,22 @@ class KeycloakAdminClient:
         providers = await self._get("/authentication/authenticator-providers") or []
         return {p["id"] for p in providers if p.get("id")}
 
+    async def get_events_config(self) -> dict[str, Any]:
+        """The realm's events configuration (`RealmEventsConfigRepresentation`).
+
+        With no event types stored, Keycloak reports its default set (every type it saves
+        by default). Needs `view-events`.
+        """
+        return await self._get("/events/config") or {}
+
+    async def update_events_config(self, config: dict[str, Any]) -> None:
+        """Write the realm's events configuration. Needs `manage-events`.
+
+        Not a partial update: Keycloak sets `eventsEnabled` from the body whatever it says,
+        and `eventsExpiration` to 0 when the body leaves it out (REQ-0024, `events.py`).
+        """
+        await self._put("/events/config", json=config)
+
     async def list_required_actions(self) -> list[dict[str, Any]]:
         """The realm's registered required actions, with `enabled`."""
         return await self._get("/authentication/required-actions") or []
