@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.19.0 (2026-11-24)
+
+### Features
+
+- **keycloak**: Bootstrap turns on the realm's user and admin events
+  ([`66781a1`](https://github.com/celine-eu/celine-policies/commit/66781a1bacd50feeb5ff5997331dcef45d96903a))
+
+
 ## v1.18.0 (2026-11-06)
 
 
